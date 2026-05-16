@@ -1,0 +1,62 @@
+#!/usr/bin/env bash
+# Bring up Mantle dev infra (postgres + minio) and then run the dev servers.
+# Idempotent — safe to run on a clean machine or against an already-running stack.
+
+set -euo pipefail
+
+cd "$(dirname "$0")/.."
+
+# ── 1. Docker daemon -------------------------------------------------------
+if ! docker info >/dev/null 2>&1; then
+  cat <<EOF >&2
+Docker isn't running. Start Docker Desktop (or your engine) and re-run.
+On macOS:  open -a Docker
+EOF
+  exit 1
+fi
+
+# ── 2. .env.local check ----------------------------------------------------
+if [[ ! -f .env.local ]]; then
+  cat <<EOF >&2
+.env.local is missing. Copy .env.example to .env.local and fill it in:
+
+  cp .env.example .env.local
+  \$EDITOR .env.local
+
+Required vars:
+  DATABASE_URL=postgres://postgres:postgres@127.0.0.1:54323/postgres
+  MANTLE_MASTER_KEY=\$(openssl rand -base64 32)
+EOF
+  exit 1
+fi
+
+# ── 3. Bring up infra ------------------------------------------------------
+echo "→ Bringing up postgres + minio (docker-compose.dev.yml)…"
+docker compose -f docker-compose.dev.yml up -d --wait
+
+# ── 4. Ensure MinIO bucket --------------------------------------------------
+# Read S3 creds from .env.local so the bucket gets created with the same
+# credentials the app uses. Defaults match docker-compose.dev.yml.
+S3_ACCESS_KEY_VAL=$(grep -E '^S3_ACCESS_KEY=' apps/web/.env.local | head -1 | cut -d= -f2- || echo minio)
+S3_SECRET_KEY_VAL=$(grep -E '^S3_SECRET_KEY=' apps/web/.env.local | head -1 | cut -d= -f2- || echo minio12345)
+: "${S3_ACCESS_KEY_VAL:=minio}"
+: "${S3_SECRET_KEY_VAL:=minio12345}"
+
+echo "→ Ensuring MinIO bucket 'mantle' exists…"
+docker run --rm --network mantle_default \
+  -e ACCESS_KEY="$S3_ACCESS_KEY_VAL" \
+  -e SECRET_KEY="$S3_SECRET_KEY_VAL" \
+  --entrypoint sh \
+  minio/mc -c '
+    mc alias set local http://minio:9000 "$ACCESS_KEY" "$SECRET_KEY" >/dev/null
+    mc mb -p local/mantle 2>/dev/null || true
+    mc anonymous set none local/mantle >/dev/null
+  ' || echo "  (bucket setup failed — proceeding, the app may auto-create)"
+
+# ── 5. Migrations ----------------------------------------------------------
+echo "→ Running Drizzle migrations…"
+pnpm -C packages/db migrate
+
+# ── 6. Dev servers ---------------------------------------------------------
+echo "→ Starting dev servers…"
+exec pnpm dev

@@ -1,48 +1,82 @@
-import { createServerClient, type CookieOptions } from '@supabase/ssr';
 import { NextResponse, type NextRequest } from 'next/server';
-
-type CookieToSet = { name: string; value: string; options: CookieOptions };
-
-const PUBLIC_PATHS = ['/login', '/setup', '/forbidden', '/auth/callback', '/api/oauth'];
+import { PUBLIC_PATHS, SESSION_COOKIE_NAME } from '@/lib/auth-constants';
 
 /**
- * Keeps the Supabase session cookie fresh and gates everything behind login.
- * The per-page `requireOwner()` does the stricter "is this the right user?"
- * check — this middleware just keeps the session alive.
+ * Lightweight session-cookie check in the Edge runtime. Uses Web Crypto
+ * (available in both edge and node runtimes) so we avoid pulling node:crypto.
+ *
+ * Per-page `requireOwner()` does the DB lookup; this just gates non-public
+ * paths on a syntactically-valid, signed, unexpired cookie.
  */
-export async function middleware(req: NextRequest) {
-  const res = NextResponse.next();
-  const sb = createServerClient(
-    process.env.NEXT_PUBLIC_SUPABASE_URL!,
-    process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
-    {
-      cookies: {
-        getAll() {
-          return req.cookies.getAll();
-        },
-        setAll(toSet: CookieToSet[]) {
-          for (const { name, value, options } of toSet) {
-            res.cookies.set(name, value, options);
-          }
-        },
-      },
-    },
-  );
-  const { data } = await sb.auth.getUser();
 
+function b64urlDecode(s: string): Uint8Array {
+  s = s.replace(/-/g, '+').replace(/_/g, '/');
+  while (s.length % 4) s += '=';
+  const bin = atob(s);
+  const out = new Uint8Array(bin.length);
+  for (let i = 0; i < bin.length; i++) out[i] = bin.charCodeAt(i);
+  return out;
+}
+
+function eqConstantTime(a: Uint8Array, b: Uint8Array): boolean {
+  if (a.length !== b.length) return false;
+  let diff = 0;
+  for (let i = 0; i < a.length; i++) diff |= a[i]! ^ b[i]!;
+  return diff === 0;
+}
+
+async function verify(token: string, secret: string): Promise<boolean> {
+  const dot = token.lastIndexOf('.');
+  if (dot < 0) return false;
+  const payload = token.slice(0, dot);
+  const sigPart = token.slice(dot + 1);
+
+  const key = await crypto.subtle.importKey(
+    'raw',
+    new TextEncoder().encode(secret),
+    { name: 'HMAC', hash: 'SHA-256' },
+    false,
+    ['sign'],
+  );
+  const expected = new Uint8Array(
+    await crypto.subtle.sign('HMAC', key, new TextEncoder().encode(payload)),
+  );
+  const got = b64urlDecode(sigPart);
+  if (!eqConstantTime(got, expected)) return false;
+
+  try {
+    const json = new TextDecoder().decode(b64urlDecode(payload));
+    const data = JSON.parse(json);
+    if (typeof data.exp !== 'number') return false;
+    if (Date.now() / 1000 > data.exp) return false;
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+export async function middleware(req: NextRequest) {
   const path = req.nextUrl.pathname;
   const isPublic = PUBLIC_PATHS.some((p) => path === p || path.startsWith(p + '/'));
+  if (isPublic) return NextResponse.next();
 
-  if (!data.user && !isPublic) {
-    const loginUrl = new URL('/login', req.url);
-    loginUrl.searchParams.set('next', path);
-    return NextResponse.redirect(loginUrl);
+  const secret = process.env.SESSION_SECRET;
+  if (!secret || secret.length < 32) {
+    const url = new URL('/login', req.url);
+    url.searchParams.set('error', 'Server is missing SESSION_SECRET.');
+    return NextResponse.redirect(url);
   }
 
-  return res;
+  const token = req.cookies.get(SESSION_COOKIE_NAME)?.value;
+  if (!token || !(await verify(token, secret))) {
+    const url = new URL('/login', req.url);
+    url.searchParams.set('next', path);
+    return NextResponse.redirect(url);
+  }
+
+  return NextResponse.next();
 }
 
 export const config = {
-  // Run on everything except static assets and Next internals.
   matcher: ['/((?!_next/static|_next/image|favicon.ico|.*\\.(?:svg|png|jpg|jpeg|gif|webp)$).*)'],
 };

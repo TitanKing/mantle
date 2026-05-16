@@ -9,15 +9,19 @@
     "start": "next start",
     "lint": "next lint",
     "typecheck": "tsc --noEmit",
-    "worker:dev": "tsx --watch --env-file-if-exists=./.env.local workers/email-sync.ts"
+    "worker:dev": "tsx --watch --env-file-if-exists=./.env.local workers/email-sync.ts",
+    "worker:telegram:dev": "tsx --watch --env-file-if-exists=./.env.local workers/telegram-poll.ts",
+    "seed:telegram": "tsx --env-file-if-exists=./.env.local scripts/seed-telegram.ts"
   },
   "dependencies": {
+    "@mantle/api-keys": "workspace:*",
     "@mantle/crypto": "workspace:*",
     "@mantle/db": "workspace:*",
     "@mantle/email": "workspace:*",
     "@mantle/rules": "workspace:*",
     "@mantle/search": "workspace:*",
     "@mantle/storage": "workspace:*",
+    "@mantle/telegram": "workspace:*",
     "@radix-ui/react-dialog": "^1.1.4",
     "@radix-ui/react-dropdown-menu": "^2.1.4",
     "@radix-ui/react-label": "^2.1.1",
@@ -25,8 +29,7 @@
     "@radix-ui/react-separator": "^1.1.1",
     "@radix-ui/react-slot": "^1.1.1",
     "@radix-ui/react-tooltip": "^1.1.6",
-    "@supabase/ssr": "^0.5.2",
-    "@supabase/supabase-js": "^2.47.10",
+    "bcryptjs": "^2.4.3",
     "class-variance-authority": "^0.7.1",
     "clsx": "^2.1.1",
     "drizzle-orm": "^0.38.3",
@@ -40,6 +43,7 @@
     "zod": "^3.24.1"
   },
   "devDependencies": {
+    "@types/bcryptjs": "^2.4.6",
     "@types/node": "^22.10.5",
     "@types/react": "^19.0.5",
     "@types/react-dom": "^19.0.3",

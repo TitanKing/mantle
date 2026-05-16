@@ -1,5 +1,7 @@
--- Mantle app schema. Extensions, the storage bucket, and the auth schema are
--- owned by Supabase platform migrations (see supabase/migrations/).
+-- Mantle app schema. Postgres extensions are loaded by
+-- infra/postgres/init/01-extensions.sql at first cluster init; the auth.users
+-- table is created by infra/postgres/init/02-auth-schema.sql. Object storage
+-- runs in the `mantle` MinIO bucket (no DB-side state).
 
 -- ─── enums ─────────────────────────────────────────────────────────────────
 do $$ begin

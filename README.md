@@ -1,54 +1,89 @@
 # Mantle
 
-Jason's AI-queryable life tree. Single Postgres-backed system that knows about emails, files, notes, sermons, secrets, and printer projects — and exposes all of it to Claude over MCP.
+Jason's AI-queryable life tree. Single Postgres-backed system that knows about emails, Telegram messages, files, notes, sermons, secrets, and printer projects — and exposes all of it to Claude over MCP. Replies to Telegram DMs automatically via OpenRouter.
 
 ## Layout
 
 ```
 mantle/
-├── supabase/          # local Supabase config (CLI) + platform migrations
+├── infra/
+│   └── postgres/init/   # extensions + auth.users baked in at first container boot
 ├── apps/
-│   ├── web/           # Next.js 15 (App Router) + shadcn UI + Supabase clients
-│   └── mcp/           # MCP server (stdio + HTTP)
+│   ├── web/             # Next.js 15 (App Router) + shadcn UI
+│   ├── mcp/             # MCP server (stdio) — Claude's tools
+│   └── agent/           # OpenRouter-powered Telegram responder
 ├── packages/
-│   ├── db/            # Drizzle schema + migrations
-│   ├── email/         # Gmail / Graph / IMAP adapters + sync engine
-│   ├── storage/       # Supabase Storage wrapper
-│   ├── crypto/        # AES-256-GCM helpers for secrets at rest
-│   ├── search/        # full-text + vector search helpers
-│   └── rules/         # ingest rules engine
-└── scripts/           # dev convenience
+│   ├── db/              # Drizzle schema + migrations
+│   ├── email/           # Gmail / Graph / IMAP adapters + sync engine
+│   ├── telegram/        # Telegram bot ingest + outbound
+│   ├── storage/         # S3-compatible (MinIO) wrapper
+│   ├── api-keys/        # Encrypted API key vault (OpenRouter, OpenAI, …)
+│   ├── crypto/          # AES-256-GCM helpers for secrets at rest
+│   ├── search/          # full-text + vector search helpers
+│   └── rules/           # ingest rules engine
+├── scripts/             # dev convenience (just `up.sh`)
+├── docker-compose.dev.yml   # Postgres + MinIO for local dev
+└── docker-compose.yml       # full prod-shaped stack (web + workers WIP)
 ```
 
 ## First-time setup
 
 ```bash
-# 1. Install pnpm if you don't have it
+# 1. Install pnpm
 corepack enable && corepack prepare pnpm@10 --activate
 
-# 2. Install the Supabase CLI (one-time)
-brew install supabase/tap/supabase
-
-# 3. Install deps
+# 2. Install deps
 pnpm install
 
-# 4. Copy env (single file — Next.js, worker, MCP, and Drizzle all read from here)
+# 3. Copy env (single file — Next.js, worker, MCP, agent, and Drizzle all read it)
 cp .env.example apps/web/.env.local
-openssl rand -base64 32  # paste into MANTLE_MASTER_KEY
+$EDITOR apps/web/.env.local
+#  - MANTLE_MASTER_KEY  → openssl rand -base64 32
+#  - SESSION_SECRET     → openssl rand -base64 48
+#  - ALLOWED_USER_ID    → uuid of the user row in auth.users (see below)
 
-# 5. Start the platform
-supabase start          # brings up Postgres, Auth, Storage, Studio
-# Supabase prints the anon/service-role keys — paste them into .env.local
-
-# 6. Apply Mantle's app schema
-pnpm db:migrate
-
-# 7. Run everything
-pnpm dev                # web (3000) + mcp + email worker
+# 4. Bring up the stack (Docker must be running)
+pnpm up
 ```
 
-Studio: http://localhost:54323
+> **Note:** Only `pnpm up` (which uses `docker-compose.dev.yml`) is fully wired.
+> `docker-compose.yml` is a prod-shaped stub — `web` and `workers` containers
+> still need Dockerfiles.
+
+`pnpm up` runs `scripts/up.sh`, which:
+
+1. Brings up Postgres + MinIO via `docker-compose.dev.yml`
+2. Ensures the `mantle` MinIO bucket exists
+3. Runs Drizzle migrations against the fresh DB
+4. Starts the dev servers (web + mcp + email worker + telegram worker + agent)
+
+On a fresh DB you'll also need one row in `auth.users` — there's no signup UI:
+
+```bash
+# Insert your user (replace email; generate a bcrypt hash externally with cost 10+)
+pnpm infra:psql
+> INSERT INTO auth.users (id, email, password_hash)
+  VALUES (gen_random_uuid(), 'you@example.com', '$2a$10$...');
+> SELECT id FROM auth.users;   # paste this into ALLOWED_USER_ID
+```
+
+Other handy scripts:
+
+| Command           | What it does |
+|-------------------|--------------|
+| `pnpm up`         | Full stack (infra + dev servers) |
+| `pnpm dev`        | Dev servers only (assumes infra already up) |
+| `pnpm down`       | Stop infra |
+| `pnpm infra:up`   | Bring infra up without dev servers |
+| `pnpm infra:logs` | Tail postgres + minio logs |
+| `pnpm infra:psql` | Open psql in the postgres container |
+| `pnpm db:migrate` | Apply Drizzle migrations |
+| `pnpm db:studio`  | Drizzle Studio (browse the DB) |
+| `pnpm dev:web`    | Just the web (helpful when iterating on UI) |
+| `pnpm dev:agent`  | Just the OpenRouter agent |
+
 App: http://localhost:3000
+MinIO console: http://localhost:9001 (user `minio` / pass `minio12345`)
 
 ## Connecting an email account
 
@@ -86,6 +121,76 @@ disabled by admin policy. If you can't get IMAP working from a paid
 M365 mailbox, the easiest workaround is to ask your admin to enable
 it for your mailbox — Mantle does not implement Microsoft OAuth.
 
-## Plan
+## Connecting a Telegram bot
 
-See [`/Users/jasonschoeman/.claude/plans/this-is-a-brand-generic-beacon.md`](../../.claude/plans/this-is-a-brand-generic-beacon.md) for the architectural plan this implements.
+The bot worker (`apps/web/workers/telegram-poll.ts`) long-polls
+Telegram for DMs and stores them as `nodes` of type `telegram_message`.
+The MCP server exposes `telegram_pending` / `telegram_send` /
+`telegram_react` / `telegram_edit` / `telegram_pair` tools so Claude
+can read and reply.
+
+1. **Create a bot.** DM [@BotFather](https://t.me/BotFather), `/newbot`,
+   write down the token.
+2. **Seed it.** For now the bot lives in `~/.claude/channels/telegram/`
+   (legacy). Drop a `.env` with `TELEGRAM_BOT_TOKEN=…` and an
+   `access.json` listing allowed Telegram user IDs (`{"allowFrom": ["431…"]}`).
+   Then `pnpm -C apps/web seed:telegram` upserts the bot + allowlist
+   into Postgres with the token AES-encrypted at rest.
+3. **Pair.** DM your bot from your phone. Within ~25s the worker
+   gates the message, generates a 6-char pairing code, and DMs it back.
+   In Claude (with the MCP server connected), call
+   `mcp__mantle__telegram_pair` with the code to allowlist the chat.
+4. **You're paired.** Subsequent DMs land in `telegram_messages` and
+   trigger `pg_notify('telegram_message_inserted')`, which the agent
+   listens for.
+
+See [`docs/telegram.md`](./docs/telegram.md) for the original handoff
+detail.
+
+## Saving API keys
+
+`/settings/keys` is the UI for storing keys for external services
+(OpenRouter, OpenAI, Anthropic, …). Keys are AES-256-GCM encrypted at
+rest using `MANTLE_MASTER_KEY` — your backups contain ciphertext only.
+
+- **Service** is the slug your code looks up by (e.g. `openrouter`).
+- **Label** disambiguates multiple keys for the same service
+  (e.g. `personal`, `agent`).
+- The plaintext is shown **exactly once** at creation time (and again
+  at rotation). After that the list only shows a masked view.
+
+The agent reads its OpenRouter key as `getApiKey(userId, 'openrouter')`.
+Storage is per-user, and the unique constraint is `(user_id, service,
+label)` so you can swap a key without affecting another label.
+
+## Auto-responding to Telegram
+
+`apps/agent` is a tiny Node process that listens on
+`pg_notify('telegram_message_inserted')` and replies via OpenRouter:
+
+```
+inbound DM → telegram-poll worker → INSERT into telegram_messages
+          → pg_notify('telegram_message_inserted', new.id::text)
+          → apps/agent picks up
+          → fetches message + persona
+          → @openrouter/sdk call
+          → telegram_send via @mantle/telegram
+          → marks processed
+```
+
+**Configuration:**
+
+| Env var          | Default                       | What |
+|------------------|-------------------------------|------|
+| `AGENT_MODEL`    | `deepseek/deepseek-chat`     | Any OpenRouter model slug |
+| `AGENT_PERSONA`  | "concise Telegram assistant" | System prompt for every reply |
+
+v1 is intentionally minimal: single-turn (agent doesn't see its own
+prior replies in context), one default model, per-chat serialized.
+Multi-turn memory, cost caps, and multi-model routing are noted in
+[`docs/architecture.md`](./docs/architecture.md#16-known-sharp-edges--future-work).
+
+## Docs
+
+- [`docs/architecture.md`](./docs/architecture.md) — full architecture tour: the five processes, the data plane, the `nodes` abstraction, the ingest pipelines, the MCP tools, the workspace layout. Read this before touching the codebase.
+- [`docs/telegram.md`](./docs/telegram.md) — frozen handoff covering the Telegram bridge build (May 2026). Historical project diary; the durable reference is `architecture.md`.

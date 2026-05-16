@@ -13,6 +13,7 @@
     "@mantle/db": "workspace:*",
     "@mantle/search": "workspace:*",
     "@mantle/storage": "workspace:*",
+    "@mantle/telegram": "workspace:*",
     "@modelcontextprotocol/sdk": "^1.0.4",
     "drizzle-orm": "^0.38.3",
     "zod": "^3.24.1"

@@ -1,22 +1,28 @@
 import { NextResponse } from 'next/server';
+import { Readable } from 'node:stream';
+import { ReadableStream as NodeReadableStream } from 'node:stream/web';
 import { and, eq } from 'drizzle-orm';
 import { db, emailAccounts, emailAttachments, emails } from '@mantle/db';
-import { getSignedUrl } from '@mantle/storage';
+import { getContent } from '@mantle/storage';
 import { requireOwner } from '@/lib/auth';
 
 /**
- * Attachment download: looks up the attachment by id, verifies it belongs
- * to a user-owned email, mints a short-lived signed URL against Supabase
- * Storage, and redirects the browser there. The URL never embeds bucket
- * credentials and the lookup is owner-scoped — a stolen attachment id
- * can't be used by another logged-in user.
+ * Attachment download. Looks up the attachment by id, verifies it belongs to
+ * a user-owned email, then streams the bytes back through Next. We proxy
+ * (rather than redirect to a presigned URL) so the browser never needs to
+ * reach the internal object store endpoint — important now that storage is
+ * self-hosted MinIO on a docker-network address.
  */
 export async function GET(_req: Request, ctx: { params: Promise<{ id: string }> }) {
   const user = await requireOwner();
   const { id } = await ctx.params;
 
   const [row] = await db
-    .select({ storageKey: emailAttachments.storageKey })
+    .select({
+      storageKey: emailAttachments.storageKey,
+      filename: emailAttachments.filename,
+      mimeType: emailAttachments.mimeType,
+    })
     .from(emailAttachments)
     .innerJoin(emails, eq(emails.id, emailAttachments.emailId))
     .innerJoin(emailAccounts, eq(emails.accountId, emailAccounts.id))
@@ -27,6 +33,18 @@ export async function GET(_req: Request, ctx: { params: Promise<{ id: string }> 
     return new NextResponse('not found', { status: 404 });
   }
 
-  const url = await getSignedUrl(row.storageKey, 300);
-  return NextResponse.redirect(url, { status: 302 });
+  const { body, contentType, contentLength } = await getContent(row.storageKey);
+
+  const headers = new Headers();
+  headers.set('content-type', contentType ?? row.mimeType ?? 'application/octet-stream');
+  if (contentLength !== undefined) headers.set('content-length', String(contentLength));
+  if (row.filename) {
+    headers.set(
+      'content-disposition',
+      `inline; filename*=UTF-8''${encodeURIComponent(row.filename)}`,
+    );
+  }
+
+  const webStream = Readable.toWeb(body) as unknown as NodeReadableStream<Uint8Array>;
+  return new NextResponse(webStream as unknown as ReadableStream, { status: 200, headers });
 }

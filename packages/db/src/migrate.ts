@@ -1,7 +1,7 @@
 /**
- * Apply Mantle's Drizzle migrations to the local (or remote) Postgres.
- * Supabase platform migrations are applied separately by `supabase start`
- * / `supabase db reset` — those own extensions and the `mantle` bucket.
+ * Apply Mantle's Drizzle migrations to the local Postgres.
+ * Extensions (ltree, pg_trgm, pgcrypto, uuid-ossp, vector) are installed by
+ * infra/postgres/init/01-extensions.sql at first container boot.
  *
  * Env loading is handled by Node's `--env-file-if-exists=.env.local`
  * in `package.json`; this script just trusts `process.env`.

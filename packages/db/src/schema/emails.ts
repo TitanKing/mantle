@@ -126,7 +126,7 @@ export const emailAttachments = pgTable(
     mimeType: text('mime_type'),
     sizeBytes: bigint('size_bytes', { mode: 'number' }),
     sha256: text('sha256').notNull(),
-    /** Storage key in the Supabase Storage `mantle` bucket. */
+    /** Object-storage key in the `mantle` bucket (see @mantle/storage). */
     storageKey: text('storage_key').notNull(),
     extractedText: text('extracted_text'),
     createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),

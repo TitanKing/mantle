@@ -1,6 +1,6 @@
 import { Search } from 'lucide-react';
 import { Input } from '@/components/ui/input';
-import { SignOutButton } from '@/app/forbidden/sign-out';
+import { SignOutButton } from '@/components/sign-out-button';
 
 export function TopBar({ email }: { email: string | null }) {
   return (

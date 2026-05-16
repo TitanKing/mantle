@@ -1,6 +1,6 @@
 import Link from 'next/link';
 import { and, eq, sql } from 'drizzle-orm';
-import { Inbox, Settings, TreePine, UserCheck } from 'lucide-react';
+import { Inbox, Key, KeyRound, Settings, TreePine, UserCheck } from 'lucide-react';
 import { db, emailSenders } from '@mantle/db';
 import { requireOwner } from '@/lib/auth';
 import { TreeRail } from '@/components/tree-rail';
@@ -47,6 +47,18 @@ export default async function AppLayout({ children }: { children: React.ReactNod
             className="flex items-center gap-2 rounded px-2 py-1.5 hover:bg-accent"
           >
             <Settings className="size-4" aria-hidden /> Settings
+          </Link>
+          <Link
+            href="/settings/keys"
+            className="flex items-center gap-2 rounded px-2 py-1.5 hover:bg-accent"
+          >
+            <Key className="size-4" aria-hidden /> API keys
+          </Link>
+          <Link
+            href="/settings/security"
+            className="flex items-center gap-2 rounded px-2 py-1.5 hover:bg-accent"
+          >
+            <KeyRound className="size-4" aria-hidden /> Security
           </Link>
         </nav>
         <div className="mt-2 flex-1 overflow-auto px-2 pb-2">

@@ -7,6 +7,7 @@ packages:
 # leaving esbuild / sharp / unrs-resolver as JS-only stubs with no
 # native binary — which breaks Next.js dev and the worker.
 allowBuilds:
+  '@openrouter/sdk': true
   esbuild: true
   sharp: true
   unrs-resolver: true

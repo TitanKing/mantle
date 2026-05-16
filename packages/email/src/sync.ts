@@ -27,7 +27,7 @@ const PAGE_SIZE = 50;
  *   2. Resolve the effective decision (address > domain > policy default).
  *   3. For approved senders only: call provider.fetchFull, run ingest
  *      rules, persist `nodes` + `emails` + `email_attachments`, upload
- *      attachment bytes to Supabase Storage.
+ *      attachment bytes to object storage via @mantle/storage.
  *   4. Bump the account's sync cursor after the batch.
  *
  * Pending / denied messages contribute to `email_senders.message_count`

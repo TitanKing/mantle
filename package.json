@@ -8,10 +8,12 @@
     "node": ">=20"
   },
   "scripts": {
-    "dev": "concurrently -n web,mcp,worker -c blue,magenta,green \"pnpm -C apps/web dev\" \"pnpm -C apps/mcp dev\" \"pnpm -C apps/web worker:dev\"",
+    "dev": "concurrently -n web,mcp,worker,tg,agent -c blue,magenta,green,yellow,cyan \"pnpm -C apps/web dev\" \"pnpm -C apps/mcp dev\" \"pnpm -C apps/web worker:dev\" \"pnpm -C apps/web worker:telegram:dev\" \"pnpm -C apps/agent dev\"",
     "dev:web": "pnpm -C apps/web dev",
     "dev:mcp": "pnpm -C apps/mcp dev",
     "dev:worker": "pnpm -C apps/web worker:dev",
+    "dev:telegram": "pnpm -C apps/web worker:telegram:dev",
+    "dev:agent": "pnpm -C apps/agent dev",
     "build": "pnpm -r build",
     "lint": "pnpm -r lint",
     "typecheck": "pnpm -r typecheck",
@@ -19,9 +21,12 @@
     "test:watch": "vitest",
     "db:migrate": "pnpm -C packages/db migrate",
     "db:studio": "pnpm -C packages/db studio",
-    "sb:start": "npx supabase start",
-    "sb:stop": "npx supabase stop",
-    "sb:reset": "npx supabase db reset"
+    "up": "bash scripts/up.sh",
+    "down": "docker compose -f docker-compose.dev.yml down",
+    "infra:up": "docker compose -f docker-compose.dev.yml up -d --wait",
+    "infra:down": "docker compose -f docker-compose.dev.yml down",
+    "infra:logs": "docker compose -f docker-compose.dev.yml logs -f",
+    "infra:psql": "docker exec -it mantle_pg psql -U postgres -d postgres"
   },
   "devDependencies": {
     "concurrently": "^9.1.0",

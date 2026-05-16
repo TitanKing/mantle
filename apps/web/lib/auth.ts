@@ -1,24 +1,123 @@
+import { cookies } from 'next/headers';
 import { redirect } from 'next/navigation';
-import { supabaseServer } from './supabase/server';
+import { createHmac, timingSafeEqual } from 'node:crypto';
+import { eq } from 'drizzle-orm';
+import bcrypt from 'bcryptjs';
+import { db, authUsers } from '@mantle/db';
+import { SESSION_COOKIE_NAME } from './auth-constants';
 
-/** Returns the current Supabase user or `null`. Safe to call in Server Components. */
-export async function getSessionUser() {
-  const sb = await supabaseServer();
-  const { data } = await sb.auth.getUser();
-  return data.user;
+/**
+ * Single-user session cookie auth. Cookie value: `<payload>.<sig>` where
+ *   payload = base64url(JSON.stringify({uid, exp}))
+ *   sig     = base64url(HMAC_SHA256(SESSION_SECRET, payload))
+ *
+ * Stateless — no session table. To invalidate everything in one shot, rotate
+ * SESSION_SECRET in .env.local and all existing cookies fail verification on
+ * the next request.
+ */
+
+const ONE_YEAR_SECONDS = 60 * 60 * 24 * 365;
+
+export type SessionUser = { id: string; email: string };
+
+function secret(): Buffer {
+  const s = process.env.SESSION_SECRET;
+  if (!s || s.length < 32) {
+    throw new Error('SESSION_SECRET must be set (>=32 chars). Run `openssl rand -base64 48`.');
+  }
+  return Buffer.from(s);
+}
+
+function b64urlEncode(buf: Buffer): string {
+  return buf.toString('base64').replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+}
+function b64urlDecode(s: string): Buffer {
+  s = s.replace(/-/g, '+').replace(/_/g, '/');
+  while (s.length % 4) s += '=';
+  return Buffer.from(s, 'base64');
+}
+
+function sign(payload: string): string {
+  const sig = createHmac('sha256', secret()).update(payload).digest();
+  return `${payload}.${b64urlEncode(sig)}`;
+}
+
+function verify(token: string): { uid: string; exp: number } | null {
+  const dot = token.lastIndexOf('.');
+  if (dot < 0) return null;
+  const payload = token.slice(0, dot);
+  const sigPart = token.slice(dot + 1);
+  const expected = createHmac('sha256', secret()).update(payload).digest();
+  const got = b64urlDecode(sigPart);
+  if (got.length !== expected.length) return null;
+  if (!timingSafeEqual(got, expected)) return null;
+  try {
+    const data = JSON.parse(b64urlDecode(payload).toString('utf8'));
+    if (typeof data.uid !== 'string' || typeof data.exp !== 'number') return null;
+    if (Date.now() / 1000 > data.exp) return null;
+    return { uid: data.uid, exp: data.exp };
+  } catch {
+    return null;
+  }
+}
+
+export function buildSessionCookie(userId: string): { value: string; maxAgeSec: number } {
+  const exp = Math.floor(Date.now() / 1000) + ONE_YEAR_SECONDS;
+  const payload = b64urlEncode(Buffer.from(JSON.stringify({ uid: userId, exp }), 'utf8'));
+  return { value: sign(payload), maxAgeSec: ONE_YEAR_SECONDS };
+}
+
+export { SESSION_COOKIE_NAME };
+
+/** Returns the current user, or null. Safe in Server Components. */
+export async function getSessionUser(): Promise<SessionUser | null> {
+  const c = (await cookies()).get(SESSION_COOKIE_NAME);
+  if (!c) return null;
+  const data = verify(c.value);
+  if (!data) return null;
+  const [row] = await db
+    .select({ id: authUsers.id, email: authUsers.email })
+    .from(authUsers)
+    .where(eq(authUsers.id, data.uid))
+    .limit(1);
+  if (!row || !row.email) return null;
+  return { id: row.id, email: row.email };
+}
+
+/** Gate for protected pages. Redirects to /login if no session. */
+export async function requireOwner(): Promise<SessionUser> {
+  const user = await getSessionUser();
+  if (!user) redirect('/login');
+  return user;
 }
 
 /**
- * Gate for protected pages. Redirects to `/login` if no session, or to
- * `/forbidden` if the session belongs to someone other than ALLOWED_USER_ID.
+ * Verify email+password against auth.users. Returns the user id on match,
+ * null otherwise. Pure DB-driven — no external auth service.
  */
-export async function requireOwner() {
-  const user = await getSessionUser();
-  if (!user) redirect('/login');
+export async function loginWithPassword(email: string, password: string): Promise<string | null> {
+  const [row] = await db
+    .select({ id: authUsers.id, hash: authUsers.passwordHash })
+    .from(authUsers)
+    .where(eq(authUsers.email, email))
+    .limit(1);
+  if (!row || !row.hash) return null;
+  const ok = await bcrypt.compare(password, row.hash);
+  return ok ? row.id : null;
+}
 
-  const allow = process.env.ALLOWED_USER_ID;
-  if (allow && user.id !== allow) {
-    redirect('/forbidden');
-  }
-  return user;
+/** Update password hash. Caller is responsible for verifying the old password first. */
+export async function updatePassword(userId: string, newPassword: string): Promise<void> {
+  const hash = await bcrypt.hash(newPassword, 12);
+  await db.update(authUsers).set({ passwordHash: hash }).where(eq(authUsers.id, userId));
+}
+
+export async function verifyPassword(userId: string, password: string): Promise<boolean> {
+  const [row] = await db
+    .select({ hash: authUsers.passwordHash })
+    .from(authUsers)
+    .where(eq(authUsers.id, userId))
+    .limit(1);
+  if (!row || !row.hash) return false;
+  return bcrypt.compare(password, row.hash);
 }

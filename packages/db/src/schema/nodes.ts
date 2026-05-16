@@ -28,6 +28,7 @@ export const nodeType = pgEnum('node_type', [
   'task',
   'event',
   'printer_project',
+  'telegram_message',
 ]);
 
 export const nodes = pgTable(
