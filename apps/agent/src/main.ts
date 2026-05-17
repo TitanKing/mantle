@@ -1,32 +1,42 @@
 /**
  * Mantle agent. Listens on Postgres for `telegram_message_inserted` notifies
- * and replies via OpenRouter. One process; same DB pool as everyone else.
+ * and replies via OpenRouter.
  *
- *   pg_notify (from migration 0009 trigger)
+ *   pg_notify (from migration 0009 trigger; only inbound rows now)
  *      ↓
  *   handleMessage(messageId)
  *      ↓
- *   fetch row → load OpenRouter key from api_keys → call model → send reply
- *      → mark processed
+ *   resolve responder agent from `agents` (highest-priority enabled row)
+ *      ↓
+ *   load conversation history (last N turns, inbound + outbound, chronological)
+ *      ↓
+ *   buildChatMessages — system prompt with cache_control for anthropic/* models
+ *      ↓
+ *   OpenRouter call → send reply → persist outbound row + node → mark inbound processed
  *
- * v1 is intentionally simple: single-turn (no history of our own replies in
- * context), one default model, per-chat serialization so we never have two
- * outbound replies racing for the same chat.
+ * Agent config (model, persona, API key, memory depth) lives in the DB now —
+ * `AGENT_MODEL` / `AGENT_PERSONA` env vars are dead. Configure via
+ * `/settings/agents` in the web app.
  */
 
 import postgres from 'postgres';
 import { OpenRouter } from '@openrouter/sdk';
-import { eq } from 'drizzle-orm';
-import { db, telegramMessages, telegramChats } from '@mantle/db';
+import { and, asc, desc, eq, gte, lt, ne } from 'drizzle-orm';
+import {
+  db,
+  agents,
+  nodes,
+  telegramMessages,
+  telegramChats,
+  type Agent,
+  type AgentMemoryConfig,
+} from '@mantle/db';
 import { accountForChat, sendMessage } from '@mantle/telegram';
-import { getApiKey } from '@mantle/api-keys';
+import { getApiKeyById } from '@mantle/api-keys';
+import { buildChatMessages, type HistoryTurn } from './messages.js';
 
 const USER_ID = process.env.ALLOWED_USER_ID;
 const DATABASE_URL = process.env.DATABASE_URL;
-const MODEL = process.env.AGENT_MODEL ?? 'deepseek/deepseek-chat';
-const PERSONA =
-  process.env.AGENT_PERSONA ??
-  "You are an assistant helping Jason via Telegram. Be concise and conversational — short paragraphs, no headers, no bullet lists unless explicitly useful. Match the tone of the incoming message. Skip pleasantries unless they fit naturally. If you don't know something or can't help, say so plainly.";
 
 if (!USER_ID) {
   console.error('[agent] ALLOWED_USER_ID must be set');
@@ -40,16 +50,67 @@ if (!DATABASE_URL) {
 /** Per-chat in-flight tracker. Prevents two replies racing for the same chat. */
 const inflight = new Map<string, Promise<void>>();
 
+/** Fetch the active responder agent (highest priority, enabled). */
+async function resolveResponderAgent(ownerId: string): Promise<Agent | null> {
+  const [row] = await db
+    .select()
+    .from(agents)
+    .where(and(eq(agents.ownerId, ownerId), eq(agents.role, 'responder'), eq(agents.enabled, true)))
+    .orderBy(desc(agents.priority))
+    .limit(1);
+  return row ?? null;
+}
+
+/** Load prior turns in this chat for context. Excludes the inbound message we're
+ * about to reply to (we add it last as the new user turn). Chronological order. */
+async function loadHistory(
+  chatPk: string,
+  excludeInboundId: string,
+  inboundSentAt: Date,
+  limit: number,
+  windowHours: number | null,
+): Promise<HistoryTurn[]> {
+  const conds = [eq(telegramMessages.chatId, chatPk), ne(telegramMessages.id, excludeInboundId)];
+  // Only consider strictly-earlier messages than the inbound we're handling.
+  // sent_at is unique enough at second resolution; created_at would be safer
+  // but sent_at is what telegram gives us and what users perceive as order.
+  conds.push(lt(telegramMessages.sentAt, inboundSentAt));
+  if (windowHours != null && windowHours > 0) {
+    const cutoff = new Date(inboundSentAt.getTime() - windowHours * 3600_000);
+    // Only messages newer than the cutoff count toward history.
+    conds.push(gte(telegramMessages.sentAt, cutoff));
+  }
+
+  // Take the most recent N (desc), then reverse for chronological.
+  const rows = await db
+    .select({
+      direction: telegramMessages.direction,
+      text: telegramMessages.text,
+      sentAt: telegramMessages.sentAt,
+    })
+    .from(telegramMessages)
+    .where(and(...conds))
+    .orderBy(desc(telegramMessages.sentAt))
+    .limit(limit);
+
+  return rows
+    .reverse()
+    .map((r) => ({ role: r.direction === 'outbound' ? 'assistant' : 'user', text: r.text }));
+}
+
 async function handleMessage(messageId: string): Promise<void> {
   const [row] = await db
     .select({
       id: telegramMessages.id,
       processed: telegramMessages.processed,
+      direction: telegramMessages.direction,
       chatPk: telegramMessages.chatId,
       text: telegramMessages.text,
+      sentAt: telegramMessages.sentAt,
       telegramChatId: telegramChats.telegramChatId,
       telegramMessageId: telegramMessages.telegramMessageId,
       fromName: telegramMessages.fromName,
+      accountId: telegramMessages.accountId,
     })
     .from(telegramMessages)
     .innerJoin(telegramChats, eq(telegramMessages.chatId, telegramChats.id))
@@ -58,10 +119,12 @@ async function handleMessage(messageId: string): Promise<void> {
 
   if (!row) return;
   if (row.processed) return;
+  // Defensive — the trigger only fires for inbound but a manual INSERT could
+  // get past it. We never reply to our own outbound row.
+  if (row.direction !== 'inbound') return;
 
   if (!row.text || !row.text.trim()) {
-    // Sticker, photo-only, etc. — nothing to reply to. Mark done so it stops
-    // showing in telegram_pending.
+    // Sticker, photo-only, etc. — nothing to reply to.
     await db
       .update(telegramMessages)
       .set({ processed: true, processedAt: new Date() })
@@ -69,7 +132,6 @@ async function handleMessage(messageId: string): Promise<void> {
     return;
   }
 
-  // Serialize per chat. The DB id (uuid) is fine as the lock key.
   const lockKey = row.telegramChatId;
   const prev = inflight.get(lockKey);
   let release: () => void = () => {};
@@ -80,13 +142,33 @@ async function handleMessage(messageId: string): Promise<void> {
   inflight.set(lockKey, lockPromise);
 
   try {
-    const apiKey = await getApiKey(USER_ID!, 'openrouter');
-    if (!apiKey) {
+    const agent = await resolveResponderAgent(USER_ID!);
+    if (!agent) {
       console.error(
-        `[agent] no 'openrouter' api key set — skipping ${messageId}. Add one at /settings/keys.`,
+        `[agent] no enabled responder agent — skipping ${messageId}. Create one at /settings/agents.`,
       );
       return;
     }
+    if (!agent.apiKeyId) {
+      console.error(
+        `[agent] responder agent '${agent.slug}' has no api_key_id set — skipping. Edit it at /settings/agents.`,
+      );
+      return;
+    }
+    const apiKey = await getApiKeyById(agent.apiKeyId);
+    if (!apiKey) {
+      console.error(
+        `[agent] api_key_id ${agent.apiKeyId} for agent '${agent.slug}' has no entry — was it deleted?`,
+      );
+      return;
+    }
+
+    const memoryConfig = (agent.memoryConfig ?? {}) as AgentMemoryConfig;
+    const historyLimit = memoryConfig.history_limit ?? 20;
+    const windowHours = memoryConfig.history_window_hours ?? null;
+
+    const history = await loadHistory(row.chatPk, row.id, row.sentAt, historyLimit, windowHours);
+    const messages = buildChatMessages(agent.model, agent.systemPrompt, history, row.text);
 
     const client = new OpenRouter({
       apiKey,
@@ -94,19 +176,20 @@ async function handleMessage(messageId: string): Promise<void> {
       appTitle: 'Mantle',
     });
 
-    console.log(`[agent] → ${row.fromName ?? 'unknown'} via ${MODEL} (${row.text.length}c)`);
+    console.log(
+      `[agent] → ${row.fromName ?? 'unknown'} via ${agent.model} (${row.text.length}c, ${history.length} prior turns)`,
+    );
 
     const result = await client.chat.send({
       chatRequest: {
-        model: MODEL,
-        messages: [
-          { role: 'system', content: PERSONA },
-          { role: 'user', content: row.text },
-        ],
+        model: agent.model,
+        messages,
+        ...(typeof agent.params?.temperature === 'number' ? { temperature: agent.params.temperature } : {}),
+        ...(typeof agent.params?.max_tokens === 'number' ? { maxTokens: agent.params.max_tokens } : {}),
+        ...(typeof agent.params?.top_p === 'number' ? { topP: agent.params.top_p } : {}),
       },
     });
 
-    // SDK returns ChatResult | EventStream; we don't stream so the former.
     if (!('choices' in result)) {
       console.error('[agent] unexpected streaming response — skipping');
       return;
@@ -118,20 +201,73 @@ async function handleMessage(messageId: string): Promise<void> {
       return;
     }
 
+    const usage = (result as { usage?: { cacheReadInputTokens?: number; promptTokens?: number; completionTokens?: number } }).usage;
+    if (usage) {
+      console.log(
+        `[agent]   usage: prompt=${usage.promptTokens ?? '?'} completion=${usage.completionTokens ?? '?'} cache_read=${usage.cacheReadInputTokens ?? 0}`,
+      );
+    }
+
     const account = await accountForChat(row.telegramChatId);
     if (!account) {
       console.error('[agent] no enabled telegram account for chat', row.telegramChatId);
       return;
     }
 
-    await sendMessage(account, row.telegramChatId, reply, {
+    const telegramMessageIds = await sendMessage(account, row.telegramChatId, reply, {
       replyTo: row.telegramMessageId,
     });
 
+    // Persist outbound: one node + one telegram_messages row per Telegram chunk.
+    const now = new Date();
+    const titleStem = reply.slice(0, 120);
+    for (const tgMsgId of telegramMessageIds) {
+      const [node] = await db
+        .insert(nodes)
+        .values({
+          ownerId: USER_ID!,
+          type: 'telegram_message',
+          title: titleStem,
+          path: account.branchPath,
+          data: {
+            direction: 'outbound',
+            model: agent.model,
+            agent: agent.slug,
+            replyToTelegramMessageId: row.telegramMessageId,
+          },
+          tags: ['telegram', 'outbound'],
+        })
+        .returning({ id: nodes.id });
+      if (!node) throw new Error('failed to create outbound node');
+
+      await db.insert(telegramMessages).values({
+        nodeId: node.id,
+        accountId: row.accountId,
+        chatId: row.chatPk,
+        telegramMessageId: String(tgMsgId),
+        text: reply,
+        sentAt: now,
+        direction: 'outbound',
+        agentId: agent.id,
+        modelUsed: agent.model,
+        replyToId: row.id,
+        processed: true,
+        processedAt: now,
+      });
+    }
+
+    // Mark inbound processed.
     await db
       .update(telegramMessages)
-      .set({ processed: true, processedAt: new Date() })
+      .set({ processed: true, processedAt: now })
       .where(eq(telegramMessages.id, row.id));
+
+    // Bump agent usage. Best-effort — don't fail the reply on a usage write error.
+    void db
+      .update(agents)
+      .set({ lastUsedAt: now, usageCount: (agent.usageCount ?? 0) + 1, updatedAt: now })
+      .where(eq(agents.id, agent.id))
+      .catch(() => {});
 
     console.log(`[agent] ✓ replied (${reply.length}c)`);
   } catch (err) {
@@ -149,7 +285,8 @@ async function drainPending(): Promise<void> {
   const rows = await db
     .select({ id: telegramMessages.id })
     .from(telegramMessages)
-    .where(eq(telegramMessages.processed, false));
+    .where(and(eq(telegramMessages.processed, false), eq(telegramMessages.direction, 'inbound')))
+    .orderBy(asc(telegramMessages.sentAt));
   if (rows.length === 0) {
     console.log('[agent] drain: queue empty');
     return;
@@ -162,7 +299,7 @@ async function drainPending(): Promise<void> {
 
 async function main() {
   const sql = postgres(DATABASE_URL!, { max: 2 });
-  console.log(`[agent] starting — model=${MODEL}`);
+  console.log('[agent] starting — config from agents table');
 
   await sql.listen('telegram_message_inserted', (payload: string) => {
     if (!payload) return;
@@ -172,11 +309,8 @@ async function main() {
   });
   console.log('[agent] LISTENing on telegram_message_inserted');
 
-  // Catch up on anything that arrived while we were down.
   await drainPending();
 
-  // Keep alive — sql.listen() is async-set-up, the actual listener runs on its
-  // own connection. We just need the process not to exit.
   await new Promise<never>(() => {});
 }
 

@@ -56,6 +56,21 @@ export async function listApiKeys(userId: string): Promise<ApiKeySummary[]> {
   });
 }
 
+/** Read the plaintext for one key by its row id. Used by agents that reference
+ * a specific vault entry via `api_key_id`. No owner check here — callers
+ * that hold a referenced id have already passed the owner gate. */
+export async function getApiKeyById(id: string): Promise<string | null> {
+  const [row] = await db.select().from(apiKeys).where(eq(apiKeys.id, id)).limit(1);
+  if (!row) return null;
+  const plaintext = open(row.keyEnc, row.id);
+  void db
+    .update(apiKeys)
+    .set({ lastUsed: new Date() })
+    .where(eq(apiKeys.id, row.id))
+    .catch(() => {});
+  return plaintext;
+}
+
 /** Read the plaintext for one key. Bumps `last_used` opportunistically. */
 export async function getApiKey(
   userId: string,
