@@ -163,6 +163,20 @@ async function handleMessage(messageId: string): Promise<void> {
     return;
   }
 
+  // Atomic claim. Flip processed=true BEFORE doing any work; if the row was
+  // already claimed (by a prior invocation that crashed mid-reply, or by a
+  // racing notify in another process), the UPDATE returns 0 rows and we
+  // exit silently. Tradeoff: a crash between this UPDATE and the actual
+  // Telegram send means the user gets no reply — but they don't get a
+  // duplicate either, which is the more user-friendly failure mode on a
+  // chat surface. Hot-reload-driven duplicates were the original symptom.
+  const claim = await db
+    .update(telegramMessages)
+    .set({ processed: true, processedAt: new Date() })
+    .where(and(eq(telegramMessages.id, row.id), eq(telegramMessages.processed, false)))
+    .returning({ id: telegramMessages.id });
+  if (claim.length === 0) return;
+
   const lockKey = row.telegramChatId;
   const prev = inflight.get(lockKey);
   let release: () => void = () => {};
@@ -291,11 +305,8 @@ async function handleMessage(messageId: string): Promise<void> {
       });
     }
 
-    // Mark inbound processed.
-    await db
-      .update(telegramMessages)
-      .set({ processed: true, processedAt: now })
-      .where(eq(telegramMessages.id, row.id));
+    // (Inbound was already marked processed at the top of this function via
+    // the atomic claim. Nothing to do here.)
 
     // Bump agent usage. Best-effort — don't fail the reply on a usage write error.
     void db
@@ -317,6 +328,29 @@ async function handleMessage(messageId: string): Promise<void> {
 }
 
 async function drainPending(): Promise<void> {
+  // Self-heal: inbound rows that already have an outbound reply but were
+  // never marked processed (typically because a previous run crashed or
+  // was hot-reloaded between sending Telegram and the final DB UPDATE).
+  // Flip them to processed instead of generating a duplicate reply.
+  const healed = await db.execute(sql`
+    update telegram_messages m
+       set processed = true,
+           processed_at = coalesce(processed_at, now())
+     where m.processed = false
+       and m.direction = 'inbound'
+       and exists (
+         select 1 from telegram_messages r
+          where r.reply_to_id = m.id
+            and r.direction = 'outbound'
+       )
+     returning m.id
+  `);
+  const healedCount = Array.isArray(healed) ? healed.length : (healed as { count?: number }).count ?? 0;
+  if (healedCount > 0) {
+    console.log(`[agent] drain: healed ${healedCount} previously-replied message(s)`);
+  }
+
+  // Now the genuinely-pending set: unprocessed, inbound, no reply yet.
   const rows = await db
     .select({ id: telegramMessages.id })
     .from(telegramMessages)
