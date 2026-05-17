@@ -1,0 +1,580 @@
+'use client';
+
+import { useMemo, useState, useTransition } from 'react';
+import { useRouter } from 'next/navigation';
+import { Pencil, Trash2 } from 'lucide-react';
+import { Button } from '@/components/ui/button';
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogHeader,
+  DialogTitle,
+} from '@/components/ui/dialog';
+import { Input } from '@/components/ui/input';
+import { Label } from '@/components/ui/label';
+
+/** Common OpenRouter model slugs. Free text still works for anything not listed. */
+const MODEL_SUGGESTIONS = [
+  'anthropic/claude-sonnet-4.6',
+  'anthropic/claude-opus-4.7',
+  'anthropic/claude-haiku-4.5',
+  'openai/gpt-4o',
+  'openai/gpt-4o-mini',
+  'deepseek/deepseek-chat',
+  'google/gemini-2.5-pro',
+  'google/gemini-2.5-flash',
+];
+
+const ROLES = [
+  { value: 'assistant', label: 'Assistant — interactive chat surface' },
+  { value: 'responder', label: 'Responder — replies to Telegram / async DMs' },
+  { value: 'extractor', label: 'Extractor — structured fields from documents' },
+  { value: 'summarizer', label: 'Summarizer — Tier-2 rollups + digests' },
+  { value: 'custom', label: 'Custom' },
+] as const;
+
+type Role = (typeof ROLES)[number]['value'];
+
+type AgentSummary = {
+  id: string;
+  slug: string;
+  name: string;
+  description: string | null;
+  role: Role;
+  model: string;
+  apiKeyId: string | null;
+  systemPrompt: string;
+  tools: string[];
+  memoryConfig: { history_limit?: number; history_window_hours?: number | null };
+  params: { temperature?: number; max_tokens?: number; top_p?: number };
+  priority: number;
+  enabled: boolean;
+  lastUsedAt: string | null;
+  usageCount: number;
+  createdAt: string;
+  updatedAt: string;
+};
+
+type ApiKeyOption = { id: string; service: string; label: string; masked: string };
+
+const DEFAULT_SYSTEM_PROMPT = `You are an assistant helping the user via Telegram. You have memory of the recent conversation in this chat. Be concise and conversational — short paragraphs, no headers, no bullet lists unless explicitly useful. Match the tone of the incoming message. Skip pleasantries unless they fit naturally. If you don't know something or can't help, say so plainly.`;
+
+type FormState = {
+  slug: string;
+  name: string;
+  description: string;
+  role: Role;
+  model: string;
+  apiKeyId: string;
+  systemPrompt: string;
+  priority: string;
+  enabled: boolean;
+  historyLimit: string;
+  historyWindowHours: string;
+  temperature: string;
+  maxTokens: string;
+};
+
+function emptyForm(): FormState {
+  return {
+    slug: '',
+    name: '',
+    description: '',
+    role: 'responder',
+    model: 'anthropic/claude-sonnet-4.6',
+    apiKeyId: '',
+    systemPrompt: DEFAULT_SYSTEM_PROMPT,
+    priority: '100',
+    enabled: true,
+    historyLimit: '20',
+    historyWindowHours: '',
+    temperature: '0.7',
+    maxTokens: '',
+  };
+}
+
+function formFromAgent(a: AgentSummary): FormState {
+  return {
+    slug: a.slug,
+    name: a.name,
+    description: a.description ?? '',
+    role: a.role,
+    model: a.model,
+    apiKeyId: a.apiKeyId ?? '',
+    systemPrompt: a.systemPrompt,
+    priority: String(a.priority),
+    enabled: a.enabled,
+    historyLimit: a.memoryConfig.history_limit?.toString() ?? '20',
+    historyWindowHours: a.memoryConfig.history_window_hours?.toString() ?? '',
+    temperature: a.params.temperature?.toString() ?? '0.7',
+    maxTokens: a.params.max_tokens?.toString() ?? '',
+  };
+}
+
+function slugify(s: string): string {
+  return s
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '')
+    .slice(0, 64);
+}
+
+const SELECT_CLASS =
+  'flex h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-50';
+const TEXTAREA_CLASS =
+  'w-full rounded-md border border-input bg-background px-3 py-2 text-sm font-mono ring-offset-background placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-50';
+
+export function AgentsClient({
+  initialAgents,
+  apiKeys,
+}: {
+  initialAgents: AgentSummary[];
+  apiKeys: ApiKeyOption[];
+}) {
+  const router = useRouter();
+  const [agents, setAgents] = useState<AgentSummary[]>(initialAgents);
+  const [pending, startTransition] = useTransition();
+  const [error, setError] = useState<string>();
+
+  const [editing, setEditing] = useState<{ mode: 'create' } | { mode: 'edit'; agent: AgentSummary }>();
+  const [form, setForm] = useState<FormState>(emptyForm());
+  const [slugTouched, setSlugTouched] = useState(false);
+
+  const openCreate = () => {
+    setError(undefined);
+    setForm(emptyForm());
+    setSlugTouched(false);
+    setEditing({ mode: 'create' });
+  };
+
+  const openEdit = (agent: AgentSummary) => {
+    setError(undefined);
+    setForm(formFromAgent(agent));
+    setSlugTouched(true);
+    setEditing({ mode: 'edit', agent });
+  };
+
+  const closeDialog = () => {
+    setEditing(undefined);
+    setError(undefined);
+  };
+
+  const onNameChange = (v: string) => {
+    setForm((f) => ({
+      ...f,
+      name: v,
+      slug: slugTouched ? f.slug : slugify(v),
+    }));
+  };
+
+  const submitForm = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!editing) return;
+    setError(undefined);
+
+    const memoryConfig: { history_limit?: number; history_window_hours?: number | null } = {};
+    const limit = parseInt(form.historyLimit, 10);
+    if (!Number.isNaN(limit)) memoryConfig.history_limit = limit;
+    const win = form.historyWindowHours.trim();
+    if (win) {
+      const n = parseFloat(win);
+      if (!Number.isNaN(n)) memoryConfig.history_window_hours = n;
+    }
+
+    const params: { temperature?: number; max_tokens?: number } = {};
+    const t = parseFloat(form.temperature);
+    if (!Number.isNaN(t)) params.temperature = t;
+    const mt = form.maxTokens.trim();
+    if (mt) {
+      const n = parseInt(mt, 10);
+      if (!Number.isNaN(n)) params.max_tokens = n;
+    }
+
+    const priority = parseInt(form.priority, 10);
+
+    const body = {
+      name: form.name.trim(),
+      description: form.description.trim() || null,
+      role: form.role,
+      model: form.model.trim(),
+      apiKeyId: form.apiKeyId || null,
+      systemPrompt: form.systemPrompt,
+      memoryConfig,
+      params,
+      priority: Number.isNaN(priority) ? 100 : priority,
+      enabled: form.enabled,
+      ...(editing.mode === 'create' ? { slug: form.slug.trim() } : {}),
+    };
+
+    const url = editing.mode === 'create' ? '/api/agents' : `/api/agents/${editing.agent.id}`;
+    const method = editing.mode === 'create' ? 'POST' : 'PATCH';
+    const res = await fetch(url, {
+      method,
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify(body),
+    });
+    if (!res.ok) {
+      const b = (await res.json().catch(() => ({}))) as { error?: string };
+      setError(b.error ?? 'Save failed.');
+      return;
+    }
+    closeDialog();
+    startTransition(() => router.refresh());
+  };
+
+  const toggleEnabled = async (a: AgentSummary) => {
+    const res = await fetch(`/api/agents/${a.id}`, {
+      method: 'PATCH',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ enabled: !a.enabled }),
+    });
+    if (!res.ok) {
+      const b = (await res.json().catch(() => ({}))) as { error?: string };
+      setError(b.error ?? 'Toggle failed.');
+      return;
+    }
+    setAgents((prev) => prev.map((x) => (x.id === a.id ? { ...x, enabled: !x.enabled } : x)));
+    startTransition(() => router.refresh());
+  };
+
+  const onDelete = async (a: AgentSummary) => {
+    if (!confirm(`Delete agent "${a.name}"? This cannot be undone.`)) return;
+    const res = await fetch(`/api/agents/${a.id}`, { method: 'DELETE' });
+    if (!res.ok) {
+      const b = (await res.json().catch(() => ({}))) as { error?: string };
+      setError(b.error ?? 'Delete failed.');
+      return;
+    }
+    setAgents((prev) => prev.filter((x) => x.id !== a.id));
+    startTransition(() => router.refresh());
+  };
+
+  const apiKeyById = useMemo(() => {
+    const m = new Map<string, ApiKeyOption>();
+    for (const k of apiKeys) m.set(k.id, k);
+    return m;
+  }, [apiKeys]);
+
+  return (
+    <div className="space-y-6">
+      <div className="flex items-center justify-between">
+        <h2 className="text-sm font-semibold uppercase tracking-wider text-muted-foreground">
+          Configured agents
+        </h2>
+        <Button type="button" onClick={openCreate}>
+          New agent
+        </Button>
+      </div>
+
+      {error && (
+        <p className="rounded-md border border-destructive/30 bg-destructive/10 px-3 py-2 text-sm text-destructive">
+          {error}
+        </p>
+      )}
+
+      {agents.length === 0 ? (
+        <p className="rounded-md border border-dashed border-border bg-muted/30 px-4 py-8 text-center text-sm text-muted-foreground">
+          No agents yet. Click <strong>New agent</strong> to create one — you&apos;ll need an
+          API key saved at <code>/settings/keys</code> first.
+        </p>
+      ) : (
+        <ul className="divide-y divide-border rounded-md border border-border">
+          {agents.map((a) => {
+            const key = a.apiKeyId ? apiKeyById.get(a.apiKeyId) : null;
+            return (
+              <li key={a.id} className="flex items-center gap-3 px-3 py-3">
+                <div className="min-w-0 flex-1 space-y-0.5">
+                  <div className="flex items-baseline gap-2">
+                    <span className="text-sm font-medium">{a.name}</span>
+                    <span className="text-xs text-muted-foreground">/ {a.slug}</span>
+                    <span className="rounded-sm bg-muted px-1.5 py-0.5 text-[10px] uppercase tracking-wider text-muted-foreground">
+                      {a.role}
+                    </span>
+                    {!a.enabled && (
+                      <span className="rounded-sm bg-amber-100 px-1.5 py-0.5 text-[10px] uppercase tracking-wider text-amber-900 dark:bg-amber-900/40 dark:text-amber-100">
+                        disabled
+                      </span>
+                    )}
+                  </div>
+                  <div className="flex flex-wrap items-baseline gap-x-3 gap-y-0.5 text-xs text-muted-foreground">
+                    <code className="font-mono">{a.model}</code>
+                    <span>priority {a.priority}</span>
+                    <span>history {a.memoryConfig.history_limit ?? 20} turns</span>
+                    <span>
+                      key:{' '}
+                      {key ? (
+                        <span>
+                          {key.service}/{key.label}
+                        </span>
+                      ) : (
+                        <span className="text-destructive">— none —</span>
+                      )}
+                    </span>
+                    <span>
+                      last used {a.lastUsedAt ? new Date(a.lastUsedAt).toLocaleString() : 'never'}
+                    </span>
+                  </div>
+                </div>
+                <label className="flex cursor-pointer items-center gap-1.5 text-xs text-muted-foreground">
+                  <input
+                    type="checkbox"
+                    checked={a.enabled}
+                    onChange={() => toggleEnabled(a)}
+                    disabled={pending}
+                    className="size-3.5"
+                  />
+                  enabled
+                </label>
+                <Button type="button" variant="ghost" size="sm" onClick={() => openEdit(a)}>
+                  <Pencil className="size-3.5" aria-hidden /> Edit
+                </Button>
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="sm"
+                  onClick={() => onDelete(a)}
+                  className="text-destructive hover:text-destructive"
+                >
+                  <Trash2 className="size-3.5" aria-hidden /> Delete
+                </Button>
+              </li>
+            );
+          })}
+        </ul>
+      )}
+
+      <Dialog open={!!editing} onOpenChange={(open) => !open && closeDialog()}>
+        <DialogContent className="!h-auto !max-h-[90vh] !max-w-2xl overflow-y-auto">
+          <DialogHeader>
+            <DialogTitle>
+              {editing?.mode === 'create' ? 'New agent' : `Edit ${editing?.mode === 'edit' ? editing.agent.name : ''}`}
+            </DialogTitle>
+            <DialogDescription>
+              {editing?.mode === 'create'
+                ? 'A new AI agent. Pick a stored API key, model, and persona.'
+                : 'Update the agent. Slug is immutable.'}
+            </DialogDescription>
+          </DialogHeader>
+          <form onSubmit={submitForm} className="space-y-4">
+            <div className="grid gap-3 sm:grid-cols-2">
+              <div className="space-y-1.5">
+                <Label htmlFor="name">Name</Label>
+                <Input
+                  id="name"
+                  value={form.name}
+                  onChange={(e) => onNameChange(e.target.value)}
+                  placeholder="Telegram responder"
+                  required
+                  autoFocus
+                />
+              </div>
+              <div className="space-y-1.5">
+                <Label htmlFor="slug">Slug</Label>
+                <Input
+                  id="slug"
+                  value={form.slug}
+                  onChange={(e) => {
+                    setSlugTouched(true);
+                    setForm((f) => ({ ...f, slug: e.target.value }));
+                  }}
+                  pattern="[a-z0-9_\-]+"
+                  required
+                  disabled={editing?.mode === 'edit'}
+                />
+              </div>
+            </div>
+
+            <div className="space-y-1.5">
+              <Label htmlFor="description">Description</Label>
+              <Input
+                id="description"
+                value={form.description}
+                onChange={(e) => setForm((f) => ({ ...f, description: e.target.value }))}
+                placeholder="Default Telegram responder, with memory"
+              />
+            </div>
+
+            <div className="grid gap-3 sm:grid-cols-3">
+              <div className="space-y-1.5">
+                <Label htmlFor="role">Role</Label>
+                <select
+                  id="role"
+                  value={form.role}
+                  onChange={(e) => setForm((f) => ({ ...f, role: e.target.value as Role }))}
+                  className={SELECT_CLASS}
+                >
+                  {ROLES.map((r) => (
+                    <option key={r.value} value={r.value}>
+                      {r.label}
+                    </option>
+                  ))}
+                </select>
+              </div>
+              <div className="space-y-1.5">
+                <Label htmlFor="model">Model</Label>
+                <Input
+                  id="model"
+                  list="model-suggestions"
+                  value={form.model}
+                  onChange={(e) => setForm((f) => ({ ...f, model: e.target.value }))}
+                  required
+                />
+                <datalist id="model-suggestions">
+                  {MODEL_SUGGESTIONS.map((m) => (
+                    <option key={m} value={m} />
+                  ))}
+                </datalist>
+              </div>
+              <div className="space-y-1.5">
+                <Label htmlFor="priority">Priority</Label>
+                <Input
+                  id="priority"
+                  type="number"
+                  value={form.priority}
+                  onChange={(e) => setForm((f) => ({ ...f, priority: e.target.value }))}
+                  min={0}
+                  step={1}
+                />
+              </div>
+            </div>
+
+            <div className="space-y-1.5">
+              <Label htmlFor="apiKey">API key</Label>
+              <select
+                id="apiKey"
+                value={form.apiKeyId}
+                onChange={(e) => setForm((f) => ({ ...f, apiKeyId: e.target.value }))}
+                className={SELECT_CLASS}
+                required
+              >
+                <option value="">— select a key —</option>
+                {apiKeys.map((k) => (
+                  <option key={k.id} value={k.id}>
+                    {k.service} / {k.label} ({k.masked})
+                  </option>
+                ))}
+              </select>
+              {apiKeys.length === 0 && (
+                <p className="text-xs text-muted-foreground">
+                  No keys saved.{' '}
+                  <a href="/settings/keys" className="underline">
+                    Add one
+                  </a>{' '}
+                  first.
+                </p>
+              )}
+            </div>
+
+            <div className="space-y-1.5">
+              <Label htmlFor="systemPrompt">System prompt</Label>
+              <textarea
+                id="systemPrompt"
+                value={form.systemPrompt}
+                onChange={(e) => setForm((f) => ({ ...f, systemPrompt: e.target.value }))}
+                rows={6}
+                required
+                className={TEXTAREA_CLASS}
+              />
+              <p className="text-xs text-muted-foreground">
+                For <code>anthropic/*</code> models this block is sent with{' '}
+                <code>cache_control</code>, so the prefix is reused turn-to-turn and the
+                provider only re-processes the new user message.
+              </p>
+            </div>
+
+            <fieldset className="space-y-3 rounded-md border border-border p-3">
+              <legend className="px-1 text-xs font-semibold uppercase tracking-wider text-muted-foreground">
+                Memory
+              </legend>
+              <div className="grid gap-3 sm:grid-cols-2">
+                <div className="space-y-1.5">
+                  <Label htmlFor="historyLimit">Turns to replay</Label>
+                  <Input
+                    id="historyLimit"
+                    type="number"
+                    value={form.historyLimit}
+                    onChange={(e) => setForm((f) => ({ ...f, historyLimit: e.target.value }))}
+                    min={0}
+                    step={1}
+                  />
+                  <p className="text-xs text-muted-foreground">Default 20.</p>
+                </div>
+                <div className="space-y-1.5">
+                  <Label htmlFor="historyWindowHours">Time window (hours)</Label>
+                  <Input
+                    id="historyWindowHours"
+                    type="number"
+                    value={form.historyWindowHours}
+                    onChange={(e) =>
+                      setForm((f) => ({ ...f, historyWindowHours: e.target.value }))
+                    }
+                    placeholder="(none — count only)"
+                    min={0}
+                    step={0.5}
+                  />
+                </div>
+              </div>
+            </fieldset>
+
+            <fieldset className="space-y-3 rounded-md border border-border p-3">
+              <legend className="px-1 text-xs font-semibold uppercase tracking-wider text-muted-foreground">
+                Model params
+              </legend>
+              <div className="grid gap-3 sm:grid-cols-2">
+                <div className="space-y-1.5">
+                  <Label htmlFor="temperature">Temperature</Label>
+                  <Input
+                    id="temperature"
+                    type="number"
+                    step={0.1}
+                    min={0}
+                    max={2}
+                    value={form.temperature}
+                    onChange={(e) => setForm((f) => ({ ...f, temperature: e.target.value }))}
+                  />
+                </div>
+                <div className="space-y-1.5">
+                  <Label htmlFor="maxTokens">Max tokens</Label>
+                  <Input
+                    id="maxTokens"
+                    type="number"
+                    step={1}
+                    min={1}
+                    value={form.maxTokens}
+                    onChange={(e) => setForm((f) => ({ ...f, maxTokens: e.target.value }))}
+                    placeholder="(provider default)"
+                  />
+                </div>
+              </div>
+            </fieldset>
+
+            <label className="flex items-center gap-2 text-sm">
+              <input
+                type="checkbox"
+                checked={form.enabled}
+                onChange={(e) => setForm((f) => ({ ...f, enabled: e.target.checked }))}
+              />
+              Enabled
+            </label>
+
+            {error && (
+              <p className="rounded-md border border-destructive/30 bg-destructive/10 px-3 py-2 text-sm text-destructive">
+                {error}
+              </p>
+            )}
+
+            <div className="flex justify-end gap-2 border-t border-border pt-3">
+              <Button type="button" variant="outline" onClick={closeDialog}>
+                Cancel
+              </Button>
+              <Button type="submit" disabled={pending}>
+                {editing?.mode === 'create' ? 'Create' : 'Save'}
+              </Button>
+            </div>
+          </form>
+        </DialogContent>
+      </Dialog>
+    </div>
+  );
+}
