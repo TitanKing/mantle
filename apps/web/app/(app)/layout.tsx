@@ -1,6 +1,6 @@
 import Link from 'next/link';
 import { and, eq, sql } from 'drizzle-orm';
-import { Bot, Inbox, Key, KeyRound, Settings, TreePine, UserCheck } from 'lucide-react';
+import { Activity, Bot, Inbox, Key, KeyRound, Settings, TreePine, UserCheck } from 'lucide-react';
 import { db, emailSenders } from '@mantle/db';
 import { requireOwner } from '@/lib/auth';
 import { TreeRail } from '@/components/tree-rail';
@@ -59,6 +59,12 @@ export default async function AppLayout({ children }: { children: React.ReactNod
             className="flex items-center gap-2 rounded px-2 py-1.5 hover:bg-accent"
           >
             <Bot className="size-4" aria-hidden /> Agents
+          </Link>
+          <Link
+            href="/debug"
+            className="flex items-center gap-2 rounded px-2 py-1.5 hover:bg-accent"
+          >
+            <Activity className="size-4" aria-hidden /> Debug
           </Link>
           <Link
             href="/settings/security"
