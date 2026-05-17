@@ -21,7 +21,7 @@
 
 import postgres from 'postgres';
 import { OpenRouter } from '@openrouter/sdk';
-import { and, asc, desc, eq, gte, lt, ne } from 'drizzle-orm';
+import { and, asc, desc, eq, gte, lt, ne, sql } from 'drizzle-orm';
 import {
   db,
   agents,
@@ -33,7 +33,8 @@ import {
 } from '@mantle/db';
 import { accountForChat, sendMessage } from '@mantle/telegram';
 import { getApiKeyById } from '@mantle/api-keys';
-import { buildChatMessages, type HistoryTurn } from './messages.js';
+import { buildChatMessages, type Digest, type HistoryTurn } from './messages.js';
+import { summarizeChat } from './summarizer.js';
 
 const USER_ID = process.env.ALLOWED_USER_ID;
 const DATABASE_URL = process.env.DATABASE_URL;
@@ -61,27 +62,55 @@ async function resolveResponderAgent(ownerId: string): Promise<Agent | null> {
   return row ?? null;
 }
 
-/** Load prior turns in this chat for context. Excludes the inbound message we're
- * about to reply to (we add it last as the new user turn). Chronological order. */
-async function loadHistory(
+/** Load Tier-2 digests + Tier-1 raw turns for the responder's prompt. */
+async function loadContext(
   chatPk: string,
   excludeInboundId: string,
   inboundSentAt: Date,
-  limit: number,
-  windowHours: number | null,
-): Promise<HistoryTurn[]> {
+  memoryConfig: AgentMemoryConfig,
+  ownerId: string,
+): Promise<{ digests: Digest[]; turns: HistoryTurn[] }> {
+  const historyLimit = memoryConfig.history_limit ?? 20;
+  const windowHours = memoryConfig.history_window_hours ?? null;
+  const digestLimit = memoryConfig.digest_limit ?? 3;
+
+  // Recent digest nodes for this chat. Filter by tag + chat_id stored on data.
+  const digestRows =
+    digestLimit > 0
+      ? await db
+          .select({ data: nodes.data, createdAt: nodes.createdAt })
+          .from(nodes)
+          .where(
+            and(
+              eq(nodes.ownerId, ownerId),
+              eq(nodes.type, 'note'),
+              sql`${nodes.tags} @> ARRAY['conversation-digest']::text[]`,
+              sql`${nodes.data}->>'chat_id' = ${chatPk}`,
+            ),
+          )
+          .orderBy(desc(nodes.createdAt))
+          .limit(digestLimit)
+      : [];
+
+  const digests: Digest[] = digestRows
+    .reverse() // oldest digest first
+    .map((d) => {
+      const data = d.data as Record<string, unknown>;
+      return {
+        summary: String(data.summary ?? ''),
+        periodStart: String(data.period_start ?? ''),
+        periodEnd: String(data.period_end ?? ''),
+      };
+    })
+    .filter((d) => d.summary.length > 0);
+
   const conds = [eq(telegramMessages.chatId, chatPk), ne(telegramMessages.id, excludeInboundId)];
-  // Only consider strictly-earlier messages than the inbound we're handling.
-  // sent_at is unique enough at second resolution; created_at would be safer
-  // but sent_at is what telegram gives us and what users perceive as order.
   conds.push(lt(telegramMessages.sentAt, inboundSentAt));
   if (windowHours != null && windowHours > 0) {
     const cutoff = new Date(inboundSentAt.getTime() - windowHours * 3600_000);
-    // Only messages newer than the cutoff count toward history.
     conds.push(gte(telegramMessages.sentAt, cutoff));
   }
 
-  // Take the most recent N (desc), then reverse for chronological.
   const rows = await db
     .select({
       direction: telegramMessages.direction,
@@ -91,11 +120,13 @@ async function loadHistory(
     .from(telegramMessages)
     .where(and(...conds))
     .orderBy(desc(telegramMessages.sentAt))
-    .limit(limit);
+    .limit(historyLimit);
 
-  return rows
+  const turns: HistoryTurn[] = rows
     .reverse()
     .map((r) => ({ role: r.direction === 'outbound' ? 'assistant' : 'user', text: r.text }));
+
+  return { digests, turns };
 }
 
 async function handleMessage(messageId: string): Promise<void> {
@@ -164,11 +195,15 @@ async function handleMessage(messageId: string): Promise<void> {
     }
 
     const memoryConfig = (agent.memoryConfig ?? {}) as AgentMemoryConfig;
-    const historyLimit = memoryConfig.history_limit ?? 20;
-    const windowHours = memoryConfig.history_window_hours ?? null;
 
-    const history = await loadHistory(row.chatPk, row.id, row.sentAt, historyLimit, windowHours);
-    const messages = buildChatMessages(agent.model, agent.systemPrompt, history, row.text);
+    const { digests, turns: history } = await loadContext(
+      row.chatPk,
+      row.id,
+      row.sentAt,
+      memoryConfig,
+      USER_ID!,
+    );
+    const messages = buildChatMessages(agent.model, agent.systemPrompt, digests, history, row.text);
 
     const client = new OpenRouter({
       apiKey,
@@ -177,7 +212,7 @@ async function handleMessage(messageId: string): Promise<void> {
     });
 
     console.log(
-      `[agent] → ${row.fromName ?? 'unknown'} via ${agent.model} (${row.text.length}c, ${history.length} prior turns)`,
+      `[agent] → ${row.fromName ?? 'unknown'} via ${agent.model} (${row.text.length}c, ${history.length} prior turns, ${digests.length} digests)`,
     );
 
     const result = await client.chat.send({
@@ -297,17 +332,45 @@ async function drainPending(): Promise<void> {
   }
 }
 
+/** Debounce window for summarize_due — collapses a burst of inserts in the
+ *  same chat (e.g. user message + agent reply within the same second) into
+ *  one summarization check. The check itself is cheap (one indexed COUNT). */
+const SUMMARIZE_DEBOUNCE_MS = 2000;
+const summarizePending = new Set<string>();
+let summarizeTimer: NodeJS.Timeout | null = null;
+
+function scheduleSummarize(chatPk: string): void {
+  summarizePending.add(chatPk);
+  if (summarizeTimer) return;
+  summarizeTimer = setTimeout(() => {
+    summarizeTimer = null;
+    const batch = [...summarizePending];
+    summarizePending.clear();
+    for (const id of batch) {
+      summarizeChat(id, USER_ID!).catch((err) =>
+        console.error('[agent] summarize error:', err instanceof Error ? err.message : err),
+      );
+    }
+  }, SUMMARIZE_DEBOUNCE_MS);
+}
+
 async function main() {
-  const sql = postgres(DATABASE_URL!, { max: 2 });
+  const pg = postgres(DATABASE_URL!, { max: 2 });
   console.log('[agent] starting — config from agents table');
 
-  await sql.listen('telegram_message_inserted', (payload: string) => {
+  await pg.listen('telegram_message_inserted', (payload: string) => {
     if (!payload) return;
     handleMessage(payload).catch((err) =>
       console.error('[agent] handle error:', err instanceof Error ? err.message : err),
     );
   });
   console.log('[agent] LISTENing on telegram_message_inserted');
+
+  await pg.listen('summarize_due', (payload: string) => {
+    if (!payload) return;
+    scheduleSummarize(payload);
+  });
+  console.log('[agent] LISTENing on summarize_due');
 
   await drainPending();
 
