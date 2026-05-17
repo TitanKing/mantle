@@ -349,16 +349,28 @@ Key properties:
   `responder` rows), the highest-priority enabled one wins. Priority is a
   plain int, higher = higher priority. Switching the active responder is a
   toggle in the UI.
-- **Conversational memory.** Both inbound and outbound messages live in
-  `telegram_messages` now, distinguished by the `direction` column. The
-  runner loads the last `memory_config.history_limit ?? 20` turns for
+- **Conversational memory (Tier-1).** Both inbound and outbound messages
+  live in `telegram_messages` now, distinguished by the `direction` column.
+  The runner loads the last `memory_config.history_limit ?? 20` turns for
   context. The pg_notify trigger fires only on inbound rows so the agent
   doesn't react to its own replies.
-- **Prompt caching.** For `anthropic/*` models the system block is sent with
-  `cache_control: { type: 'ephemeral' }`. Anthropic caches the prefix for
-  ~5 minutes; subsequent turns within that window read cache at ~10% cost.
-  Caching for non-Anthropic models is implicit (OpenAI, DeepSeek auto-cache)
-  or unsupported (most open-source routes) — no marker needed.
+- **Conversation digests (Tier-2).** Migration 0013 adds
+  `digest_node_id` on `telegram_messages` plus a separate `summarize_due`
+  pg_notify channel that fires on every insert. A summarizer agent (role
+  `summarizer`, default model `anthropic/claude-haiku-4.5`) listens on
+  that channel inside `apps/agent`, debounces 2s, and rolls the oldest
+  `memory_config.summarize_batch ?? 20` undigested turns into one `note`
+  node tagged `conversation-digest` whenever the undigested count for a
+  chat crosses `memory_config.summarize_threshold ?? 30`. The responder
+  loads the latest `memory_config.digest_limit ?? 3` digests for the chat
+  and prepends them as a second system message. Conversations stay
+  coherent past the raw-history window without an exploding token bill.
+- **Prompt caching.** For `anthropic/*` models the runner emits
+  `cache_control: { type: 'ephemeral' }` on the system block AND on the
+  digest block when present — two of Anthropic's four allowed breakpoints.
+  Both prefixes are stable for many turns; only the last-20-turns tail
+  drifts. Caching for non-Anthropic models is implicit (OpenAI, DeepSeek
+  auto-cache) or unsupported (most open-source routes) — no marker needed.
 - **Event-driven, not polled.** The pg_notify trigger is fired inside the
   worker's INSERT transaction, so the agent gets the message id within
   milliseconds of it landing in the DB.
@@ -372,16 +384,24 @@ Key properties:
 
 Sharp edges still open:
 
-- **No Tier-2 rollups.** Recency-only retrieval. Long conversations
-  truncate at the history limit. Per-thread / per-week digests would
-  unlock much deeper continuity without blowing the token budget.
-- **Single cache breakpoint.** Only the system prompt is marked
-  `ephemeral`. Marking the history prefix too would cut cost again, but
-  needs the prefix to be byte-stable turn-to-turn — easy to break
-  accidentally.
-- **No cost ceiling.** Each inbound triggers exactly one OpenRouter call.
+- **No third cache breakpoint.** Two of four are used (system + digest).
+  Marking the raw-history block too would cut cost further but needs the
+  prefix to be byte-stable turn-to-turn — easy to break accidentally
+  when a new turn lands.
+- **No cost ceiling.** Each inbound triggers exactly one OpenRouter
+  responder call + (every ~20 turns) one summarizer call. Cheap on
+  Haiku/DeepSeek; spendier on Sonnet/Opus.
 - **No semantic retrieval.** `nodes.embedding` exists but isn't used in
-  the agent's context assembly.
+  the agent's context assembly. The natural follow-up is "for this
+  inbound, fetch the top-K most-relevant older digests via vector
+  similarity, not just the most recent."
+- **No idle-summarization.** A chat that goes quiet just below threshold
+  sits there until N more turns arrive. Easy to add a startup pass; not
+  worth the code until it actually bites.
+- **No Tier-3 / fact consolidation.** The Mem0-style ADD/UPDATE/DELETE
+  pipeline for observation memory ("Sarah's passport expires June
+  2030", dedup'd across sources) is the next layer up — separate from
+  conversation summarization.
 
 ## 9c. Encrypted API key vault
 

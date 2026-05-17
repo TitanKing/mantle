@@ -198,15 +198,41 @@ First-time setup: add an OpenRouter key at `/settings/keys`, then create a
 responder at `/settings/agents`. The default seed values in the form
 (`anthropic/claude-sonnet-4.6`, history limit 20) are a good starting point.
 
+**Tier-2 memory: conversation digests.** When the unsummarized turn count in
+a chat crosses a threshold (default 30), a `summarizer` agent rolls the
+oldest 20 turns into a single digest node (`type='note'`,
+`tags: ['conversation-digest','telegram']`) and points those rows at it via
+`telegram_messages.digest_node_id`. The responder loads the most recent N
+digests (default 3) and prepends them to the prompt as a second system
+block. End-to-end:
+
+```
+       raw turns ──┐
+                   ├─ summarizer (Haiku) ──→  digest node (~3 sentences)
+       (oldest 20) ┘                       └→ telegram_messages.digest_node_id set
+
+       responder reply prompt:
+         [system, persona]                ← cache_control (stable forever)
+         [system, recent digests]         ← cache_control (stable for ~20 turns)
+         [last 20 raw turns]              ← drifts
+         [new user message]
+```
+
+Two cache breakpoints (Anthropic allows up to 4), so the digests stay in
+cache turn-to-turn until the next summarization fires. Configure the
+threshold and batch size in the agent row at `/settings/agents`.
+
 **Prompt caching.** For `anthropic/*` models the runner emits
-`cache_control: { type: 'ephemeral' }` on the system block. OpenRouter forwards
-this to Anthropic, which caches the prefix for 5 minutes and reuses it on the
-next turn at ~10% the cost. The agent logs cache-read tokens at INFO level so
-you can confirm it's working.
+`cache_control: { type: 'ephemeral' }` on the system block (and on the
+digest block when present). OpenRouter forwards this to Anthropic, which
+caches the prefix for 5 minutes and reuses it on the next turn at ~10% the
+cost. The agent logs cache-read tokens at INFO level so you can confirm
+it's working.
 
 What v1 doesn't have yet (see [`docs/architecture.md`](./docs/architecture.md#16-known-sharp-edges--future-work)):
-Tier-2 summary rollups, semantic retrieval over older context, per-chat agent
-overrides, multi-turn cache breakpoints, cost ceilings.
+Semantic retrieval over older content, per-chat agent overrides, multi-turn
+cache breakpoint on the raw-history block, cost ceilings, Tier-3 fact
+consolidation (Mem0-style).
 
 ## Docs
 
