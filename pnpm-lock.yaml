@@ -272,6 +272,9 @@ importers:
 
   packages/agent-runtime:
     dependencies:
+      '@mantle/api-keys':
+        specifier: workspace:*
+        version: link:../api-keys
       '@mantle/db':
         specifier: workspace:*
         version: link:../db

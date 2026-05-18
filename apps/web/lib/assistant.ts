@@ -41,6 +41,7 @@ import {
   buildChatMessages,
   composeSystemPromptWithSkills,
   effectiveToolSlugs,
+  invokeAgent,
   resolveAgentSkills,
   resolveAgentTools,
   runToolLoop,
@@ -48,6 +49,12 @@ import {
   type FactSnippet,
   type HistoryTurn,
 } from '@mantle/agent-runtime';
+import { registerAgentInvoker } from '@mantle/tools';
+
+// Register the cross-package bridge for the `invoke_agent` builtin.
+// First module load (the first /assistant request after boot) wires
+// it up. Idempotent — last call wins.
+registerAgentInvoker(invokeAgent);
 
 export type AssistantTurnResult = {
   inbound: AssistantMessage;
@@ -273,6 +280,9 @@ export async function runAssistantTurn(
     params,
     ownerId,
     agentId: agent.id,
+    agentSlug: agent.slug,
+    agentDepth: 1,
+    delegateTo: (agent.memoryConfig as { delegate_to?: string[] } | null)?.delegate_to ?? [],
     initialMessages: messages,
     tools: allowedTools,
   });

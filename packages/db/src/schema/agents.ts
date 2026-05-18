@@ -69,6 +69,11 @@ export type AgentMemoryConfig = {
    *  in different spaces and don't compare. Allowed values must output
    *  1536-dim vectors (the `nodes.embedding` column shape). */
   embedding_model?: string;
+  /** Agent slugs this agent is allowed to invoke via the `invoke_agent`
+   *  builtin. Empty/missing means no delegation permitted (fail closed).
+   *  Self-references are refused at dispatch time. The depth chain is
+   *  also capped — see MAX_AGENT_DEPTH in @mantle/tools. */
+  delegate_to?: string[];
 };
 
 export type AgentParams = {

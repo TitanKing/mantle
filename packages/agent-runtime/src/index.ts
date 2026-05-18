@@ -24,3 +24,5 @@ export {
   effectiveToolSlugs,
   type SkillForRuntime,
 } from './skills';
+
+export { invokeAgent } from './invoke-agent';

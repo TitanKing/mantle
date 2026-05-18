@@ -26,3 +26,19 @@ export {
   type PendingSummary,
   type ListPendingOptions,
 } from './pending';
+
+export {
+  registerAgentInvoker,
+  getAgentInvoker,
+  type AgentInvoker,
+  type InvokeAgentInput,
+  type InvokeAgentResult,
+} from './agent-bridge';
+
+export {
+  MAX_AGENT_DEPTH,
+  checkAgentDepth,
+  checkDelegationAllowed,
+  type DepthCheckResult,
+  type AllowlistCheckResult,
+} from './invoke-agent-guards';

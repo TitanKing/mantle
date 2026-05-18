@@ -57,6 +57,22 @@ export type ToolLoopArgs = {
    *  /pending UI can show which agent proposed each call. Optional —
    *  callers without an agent context (manual scripts) can skip it. */
   agentId?: string;
+  /** The agent row's slug. Passed to handlers (specifically
+   *  `invoke_agent`) so they can refuse self-calls + reason about who
+   *  invoked them. Optional for scripts that aren't running an agent. */
+  agentSlug?: string;
+  /** Depth this agent is running at in a delegation chain. 1 = entry
+   *  point. 2 = invoked by another agent. invoke_agent caps at
+   *  MAX_AGENT_DEPTH. Defaults to 1. */
+  agentDepth?: number;
+  /** Agent slugs this agent is permitted to invoke via the
+   *  `invoke_agent` builtin. Sourced from `memory_config.delegate_to`.
+   *  Empty/missing = no delegation allowed (fail closed). */
+  delegateTo?: readonly string[];
+  /** Parent trace id, if this loop is running inside another trace
+   *  (i.e. it was invoked by another agent). Forwarded to handlers
+   *  so the child trace can reference it. */
+  parentTraceId?: string | null;
   /** Initial messages: system + any history + the new user turn. */
   initialMessages: ChatMessage[];
   /** Tool rows the agent is permitted to use. Empty array → no tools sent. */
@@ -238,6 +254,19 @@ export async function runToolLoop(args: ToolLoopArgs): Promise<ToolLoopResult> {
               setMeta: (m) => handle.setMeta(m),
               setOutput: (o) => handle.setOutput(o),
             },
+            // Populated only when the caller passed agent context.
+            // The `invoke_agent` builtin requires it; regular tools
+            // ignore it.
+            ...(args.agentSlug
+              ? {
+                  agent: {
+                    slug: args.agentSlug,
+                    depth: args.agentDepth ?? 1,
+                    delegateTo: args.delegateTo ?? [],
+                    parentTraceId: args.parentTraceId ?? null,
+                  },
+                }
+              : {}),
           });
         },
       );

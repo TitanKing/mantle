@@ -510,6 +510,105 @@ const telegram_send: BuiltinToolDef = {
 
 // ─── export the catalog ───────────────────────────────────────────────────
 
+// ─── agent delegation ─────────────────────────────────────────────────────
+
+const invoke_agent: BuiltinToolDef = {
+  slug: 'invoke_agent',
+  name: 'Delegate to another agent',
+  description:
+    "Hand off a single, self-contained prompt to another agent (e.g. a researcher with a stronger model + retrieval tools). Use only when the work would clearly benefit from a different persona or model — not for routing every turn. The child runs once and returns its final text; its conversation history is NOT shared with the parent. The parent agent's `memory_config.delegate_to` must list the target slug, or this call is refused.",
+  inputSchema: {
+    type: 'object',
+    required: ['agent_slug', 'prompt'],
+    properties: {
+      agent_slug: {
+        type: 'string',
+        description: 'Slug of the target agent (the `agents.slug` column).',
+      },
+      prompt: {
+        type: 'string',
+        description:
+          'Self-contained instructions for the child. Include any context it needs; the child does not see your conversation history.',
+        maxLength: 32_000,
+      },
+    },
+  },
+  handler: async (input, ctx) => {
+    // Lazy imports keep the guard module + bridge out of the cold-
+    // start path of every other builtin. They're tiny but the
+    // separation lets us test them as pure helpers.
+    const { checkAgentDepth, checkDelegationAllowed } = await import(
+      './invoke-agent-guards'
+    );
+    const { getAgentInvoker } = await import('./agent-bridge');
+
+    if (!ctx.agent) {
+      return {
+        ok: false,
+        error:
+          'invoke_agent: missing parent agent context — runToolLoop did not populate ctx.agent. This is a wiring bug.',
+      };
+    }
+
+    const targetSlug = str(input.agent_slug);
+    const prompt = str(input.prompt);
+    if (!targetSlug) return { ok: false, error: 'agent_slug is required' };
+    if (!prompt) return { ok: false, error: 'prompt is required' };
+
+    // Guardrail 3: explicit allowlist + no self-call.
+    const allowed = checkDelegationAllowed(
+      ctx.agent.slug,
+      targetSlug,
+      ctx.agent.delegateTo,
+    );
+    if (!allowed.ok) return { ok: false, error: allowed.reason };
+
+    // Guardrail 1: bounded depth. checkAgentDepth returns the depth
+    // the child would run at, or refuses outright.
+    const depth = checkAgentDepth(ctx.agent.depth);
+    if (!depth.ok) return { ok: false, error: depth.reason };
+
+    const invoker = getAgentInvoker();
+    if (!invoker) {
+      return {
+        ok: false,
+        error:
+          'invoke_agent: no agent invoker registered in this process. Call registerAgentInvoker() at boot.',
+      };
+    }
+
+    // Guardrail 2: synchronous. Await the child's final result. The
+    // child's cost is captured in the child's own trace; we surface
+    // it in the parent step's meta for /traces visibility, but the
+    // parent's `traces.cost_micro_usd` does NOT roll it up — that
+    // would double-count in /debug aggregates.
+    const result = await invoker({
+      ownerId: ctx.ownerId,
+      agentSlug: targetSlug,
+      prompt,
+      depth: depth.childDepth,
+      parentTraceId: ctx.agent.parentTraceId ?? null,
+    });
+    if (!result.ok) {
+      return { ok: false, error: `child agent failed: ${result.error}` };
+    }
+    ctx.step?.setMeta({
+      child_trace_id: result.childTraceId,
+      child_cost_micro_usd: result.costMicroUsd,
+      child_tokens_in: result.tokensIn,
+      child_tokens_out: result.tokensOut,
+      delegated_to: targetSlug,
+    });
+    return {
+      ok: true,
+      output: {
+        text: result.text,
+        child_trace_id: result.childTraceId,
+      },
+    };
+  },
+};
+
 export const BUILTIN_TOOLS: BuiltinToolDef[] = [
   search_nodes,
   tree_list,
@@ -525,4 +624,5 @@ export const BUILTIN_TOOLS: BuiltinToolDef[] = [
   file_create,
   telegram_send,
   process_extraction,
+  invoke_agent,
 ];

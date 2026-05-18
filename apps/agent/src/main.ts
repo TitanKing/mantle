@@ -42,6 +42,7 @@ import {
   buildChatMessages,
   composeSystemPromptWithSkills,
   effectiveToolSlugs,
+  invokeAgent,
   resolveAgentSkills,
   resolveAgentTools,
   runToolLoop,
@@ -50,7 +51,12 @@ import {
   type FactSnippet,
   type HistoryTurn,
 } from '@mantle/agent-runtime';
-import { seedBuiltinTools } from '@mantle/tools';
+import { registerAgentInvoker, seedBuiltinTools } from '@mantle/tools';
+
+// Register the cross-package bridge so the `invoke_agent` builtin (in
+// @mantle/tools) can synchronously delegate to another agent through
+// the runtime here. Idempotent; safe to call once at boot.
+registerAgentInvoker(invokeAgent);
 import { summarizeChat } from './summarizer.js';
 import { extractNode } from './extractor.js';
 import { reflect } from './reflector.js';
@@ -437,6 +443,10 @@ async function handleMessage(messageId: string): Promise<void> {
           params: (agent.params ?? {}) as Record<string, never>,
           ownerId: USER_ID!,
           agentId: agent.id,
+          agentSlug: agent.slug,
+          agentDepth: 1,
+          delegateTo:
+            (agent.memoryConfig as { delegate_to?: string[] } | null)?.delegate_to ?? [],
           initialMessages: messages,
           tools: allowedTools,
         });

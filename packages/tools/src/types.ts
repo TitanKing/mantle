@@ -12,6 +12,24 @@ export type ToolHandlerContext = {
     setMeta(m: Record<string, unknown>): void;
     setOutput(o: Record<string, unknown>): void;
   };
+  /** Parent-agent metadata. Populated by `runToolLoop` so handlers
+   *  that need to reason about the calling agent can — currently only
+   *  the `invoke_agent` builtin uses it, for depth + allowlist checks.
+   *  Regular tools leave this undefined and ignore it. */
+  agent?: {
+    /** Stable agent slug, e.g. 'responder'. Used by invoke_agent to
+     *  refuse self-calls. */
+    slug: string;
+    /** 1 for the entry-point agent; 2 for an invoked child; etc.
+     *  Capped by MAX_AGENT_DEPTH in invoke-agent-guards.ts. */
+    depth: number;
+    /** Slugs the parent agent is allowed to delegate to. Sourced
+     *  from `agents.memory_config.delegate_to`. Empty/missing means
+     *  no delegation permitted (fail closed). */
+    delegateTo: readonly string[];
+    /** Parent trace id, threaded into the child trace for navigation. */
+    parentTraceId?: string | null;
+  };
 };
 
 export type ToolHandlerResult =

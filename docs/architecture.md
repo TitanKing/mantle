@@ -427,6 +427,43 @@ Sharp edges still open:
   2030", dedup'd across sources) is the next layer up — separate from
   conversation summarization.
 
+## 9b'. Agent delegation (`invoke_agent`)
+
+An agent can hand a one-shot prompt to another agent via the
+`invoke_agent` builtin tool. The intended shape: cheap triage agent
+(claude-haiku, no retrieval) handles every Telegram turn; when it
+detects a question that needs deep work, it calls `invoke_agent` with
+`agent_slug: 'researcher'` and a focused prompt, and the researcher
+(claude-opus + search tools + longer context) returns its final text
+as the triage agent's tool result.
+
+The bridge between `@mantle/tools` (where the builtin lives) and
+`@mantle/agent-runtime` (where `runToolLoop` lives) is a registered
+callback — `apps/agent/src/main.ts` and `apps/web/lib/assistant.ts`
+each call `registerAgentInvoker(invokeAgent)` at module load, so the
+builtin can call back into the runtime without an import cycle.
+
+Four guardrails ([`packages/tools/src/invoke-agent-guards.ts`](../packages/tools/src/invoke-agent-guards.ts)):
+
+1. **Bounded depth.** `MAX_AGENT_DEPTH = 2`. Entry-point agent runs
+   at depth 1, child at depth 2, grandchildren refused. The dispatcher
+   AND the runtime both check, so a caller routing around the bridge
+   still fails closed.
+2. **Synchronous, one-shot.** Parent awaits the child's final text.
+   The child's conversation history is NOT shared with the parent;
+   delegation passes a single prompt and receives a single reply.
+3. **Per-target allowlist.** The parent agent's
+   `memory_config.delegate_to: string[]` lists which slugs it may
+   invoke. Empty/missing = no delegation. Self-references are refused
+   even when present in the list — the closest thing to a recursion
+   footgun we have.
+4. **Cost attribution.** The child gets its own `traces` row
+   (`kind='manual'`, `subjectKind='child_agent'`, `data.parent_trace_id`
+   set for navigation). The child trace owns the child's full cost;
+   the parent's `invoke_agent` step records `meta.child_trace_id` +
+   `meta.child_cost_micro_usd` for visibility but doesn't roll up,
+   so `/debug` "spend by agent" totals stay correct.
+
 ## 9c. Encrypted API key vault
 
 `packages/api-keys/` is the storage layer for external service keys
