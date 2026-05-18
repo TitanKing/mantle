@@ -215,9 +215,20 @@ function parseExtractorOutput(raw: string): ExtractorOutput {
   const obj = parsed as Partial<ExtractorOutput>;
   return {
     summary: typeof obj.summary === 'string' ? obj.summary.trim() : '',
-    facts: Array.isArray(obj.facts) ? obj.facts.filter(isValidFact) : [],
+    facts: Array.isArray(obj.facts)
+      ? obj.facts.filter(isValidFact).map(sanitiseFactEntities)
+      : [],
     entities: Array.isArray(obj.entities) ? obj.entities.filter(isValidEntity) : [],
   };
+}
+
+/** Drop any entity mention on a fact whose name/kind is missing or
+ *  blank. Models occasionally emit `{name: undefined, kind: 'person'}`
+ *  or empty strings, which would crash reconcileEntity on .trim(). */
+function sanitiseFactEntities(f: ExtractedFact): ExtractedFact {
+  if (!Array.isArray(f.entities)) return f;
+  const clean = f.entities.filter(isValidEntity);
+  return { ...f, entities: clean };
 }
 
 function isValidFact(f: unknown): f is ExtractedFact {
@@ -233,7 +244,12 @@ function isValidFact(f: unknown): f is ExtractedFact {
 function isValidEntity(e: unknown): e is { name: string; kind: string } {
   if (!e || typeof e !== 'object') return false;
   const o = e as Record<string, unknown>;
-  return typeof o.name === 'string' && typeof o.kind === 'string';
+  return (
+    typeof o.name === 'string' &&
+    o.name.trim().length > 0 &&
+    typeof o.kind === 'string' &&
+    o.kind.trim().length > 0
+  );
 }
 
 function parseClassifierDecision(raw: string): ClassifierDecision {
