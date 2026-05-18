@@ -21,19 +21,29 @@
 
 import postgres from 'postgres';
 import { OpenRouter } from '@openrouter/sdk';
-import { and, asc, desc, eq, gte, lt, ne, sql } from 'drizzle-orm';
+import { and, asc, desc, eq, gte, isNull, lt, ne, sql } from 'drizzle-orm';
 import {
   db,
   agents,
+  entities,
+  facts,
   nodes,
   telegramMessages,
   telegramChats,
   type Agent,
   type AgentMemoryConfig,
+  type PersonaNote,
 } from '@mantle/db';
 import { accountForChat, sendMessage } from '@mantle/telegram';
 import { getApiKeyById } from '@mantle/api-keys';
-import { buildChatMessages, type Digest, type HistoryTurn } from './messages.js';
+import { embed } from '@mantle/embeddings';
+import {
+  buildChatMessages,
+  type ContentHit,
+  type Digest,
+  type FactSnippet,
+  type HistoryTurn,
+} from './messages.js';
 import { summarizeChat } from './summarizer.js';
 import { extractNode } from './extractor.js';
 
@@ -63,19 +73,112 @@ async function resolveResponderAgent(ownerId: string): Promise<Agent | null> {
   return row ?? null;
 }
 
-/** Load Tier-2 digests + Tier-1 raw turns for the responder's prompt. */
+/** Load everything the responder needs for its prompt:
+ *    persona_notes + facts + digests + content_index hits + raw turns.
+ *  Facts and content hits are vector-keyed off the incoming message, so we
+ *  embed the user's text once and reuse it. */
 async function loadContext(
   chatPk: string,
   excludeInboundId: string,
   inboundSentAt: Date,
-  memoryConfig: AgentMemoryConfig,
+  inboundText: string,
+  agent: Agent,
   ownerId: string,
-): Promise<{ digests: Digest[]; turns: HistoryTurn[] }> {
+): Promise<{
+  personaNotes: PersonaNote[];
+  facts: FactSnippet[];
+  digests: Digest[];
+  contentHits: ContentHit[];
+  turns: HistoryTurn[];
+}> {
+  const memoryConfig = (agent.memoryConfig ?? {}) as AgentMemoryConfig;
   const historyLimit = memoryConfig.history_limit ?? 20;
   const windowHours = memoryConfig.history_window_hours ?? null;
   const digestLimit = memoryConfig.digest_limit ?? 3;
+  const factLimit = memoryConfig.fact_limit ?? 10;
+  const contentHitLimit = memoryConfig.content_hit_limit ?? 3;
 
-  // Recent digest nodes for this chat. Filter by tag + chat_id stored on data.
+  const personaNotes: PersonaNote[] = (agent.personaNotes ?? []) as PersonaNote[];
+
+  // Embed once for both fact + content_index lookups. Skip if either limit is 0.
+  let queryVec: number[] | null = null;
+  if ((factLimit > 0 || contentHitLimit > 0) && inboundText.trim().length > 0) {
+    try {
+      queryVec = await embed(ownerId, inboundText.slice(0, 2000));
+    } catch (err) {
+      console.error(
+        '[agent] loadContext: query embed failed:',
+        err instanceof Error ? err.message : err,
+      );
+    }
+  }
+
+  // ─── Profile facts ──────────────────────────────────────────────────
+  let factRows: FactSnippet[] = [];
+  if (queryVec && factLimit > 0) {
+    const rows = await db
+      .select({
+        content: facts.content,
+        kind: facts.kind,
+        entityName: entities.name,
+        dist: sql<number>`${facts.embedding} <=> ${JSON.stringify(queryVec)}::vector`,
+      })
+      .from(facts)
+      .leftJoin(entities, eq(facts.entityId, entities.id))
+      .where(
+        and(
+          eq(facts.ownerId, ownerId),
+          isNull(facts.validTo),
+          sql`${facts.embedding} is not null`,
+        ),
+      )
+      .orderBy(sql`${facts.embedding} <=> ${JSON.stringify(queryVec)}::vector`)
+      .limit(factLimit);
+    factRows = rows.map((r) => ({
+      content: r.content,
+      kind: r.kind as string,
+      entityName: r.entityName,
+    }));
+  }
+
+  // ─── Content index hits ────────────────────────────────────────────
+  let contentHits: ContentHit[] = [];
+  if (queryVec && contentHitLimit > 0) {
+    const rows = await db
+      .select({
+        nodeId: nodes.id,
+        title: nodes.title,
+        type: nodes.type,
+        data: nodes.data,
+        dist: sql<number>`${nodes.embedding} <=> ${JSON.stringify(queryVec)}::vector`,
+      })
+      .from(nodes)
+      .where(
+        and(
+          eq(nodes.ownerId, ownerId),
+          sql`${nodes.embedding} is not null`,
+          // Exclude conversation-digest notes (already covered by digest layer)
+          // and telegram_message rows (those are the conversation itself).
+          sql`not (${nodes.tags} @> ARRAY['conversation-digest']::text[])`,
+          sql`${nodes.type} <> 'telegram_message'`,
+        ),
+      )
+      .orderBy(sql`${nodes.embedding} <=> ${JSON.stringify(queryVec)}::vector`)
+      .limit(contentHitLimit);
+    contentHits = rows
+      .filter((r) => (r.dist ?? 1) < 0.6) // cosine distance — exclude obvious non-matches
+      .map((r) => {
+        const data = (r.data ?? {}) as Record<string, unknown>;
+        return {
+          nodeId: r.nodeId,
+          title: r.title,
+          type: r.type as string,
+          summary: typeof data.summary === 'string' ? data.summary : null,
+        };
+      });
+  }
+
+  // ─── Conversation digests for this chat ────────────────────────────
   const digestRows =
     digestLimit > 0
       ? await db
@@ -94,7 +197,7 @@ async function loadContext(
       : [];
 
   const digests: Digest[] = digestRows
-    .reverse() // oldest digest first
+    .reverse()
     .map((d) => {
       const data = d.data as Record<string, unknown>;
       return {
@@ -105,13 +208,13 @@ async function loadContext(
     })
     .filter((d) => d.summary.length > 0);
 
+  // ─── Raw recent turns ──────────────────────────────────────────────
   const conds = [eq(telegramMessages.chatId, chatPk), ne(telegramMessages.id, excludeInboundId)];
   conds.push(lt(telegramMessages.sentAt, inboundSentAt));
   if (windowHours != null && windowHours > 0) {
     const cutoff = new Date(inboundSentAt.getTime() - windowHours * 3600_000);
     conds.push(gte(telegramMessages.sentAt, cutoff));
   }
-
   const rows = await db
     .select({
       direction: telegramMessages.direction,
@@ -122,12 +225,11 @@ async function loadContext(
     .where(and(...conds))
     .orderBy(desc(telegramMessages.sentAt))
     .limit(historyLimit);
-
   const turns: HistoryTurn[] = rows
     .reverse()
     .map((r) => ({ role: r.direction === 'outbound' ? 'assistant' : 'user', text: r.text }));
 
-  return { digests, turns };
+  return { personaNotes, facts: factRows, digests, contentHits, turns };
 }
 
 async function handleMessage(messageId: string): Promise<void> {
@@ -209,16 +311,19 @@ async function handleMessage(messageId: string): Promise<void> {
       return;
     }
 
-    const memoryConfig = (agent.memoryConfig ?? {}) as AgentMemoryConfig;
+    const { personaNotes, facts: relevantFacts, digests, contentHits, turns: history } =
+      await loadContext(row.chatPk, row.id, row.sentAt, row.text, agent, USER_ID!);
 
-    const { digests, turns: history } = await loadContext(
-      row.chatPk,
-      row.id,
-      row.sentAt,
-      memoryConfig,
-      USER_ID!,
-    );
-    const messages = buildChatMessages(agent.model, agent.systemPrompt, digests, history, row.text);
+    const messages = buildChatMessages({
+      model: agent.model,
+      systemPrompt: agent.systemPrompt,
+      personaNotes,
+      facts: relevantFacts,
+      digests,
+      contentHits,
+      history,
+      newUserText: row.text,
+    });
 
     const client = new OpenRouter({
       apiKey,
@@ -227,7 +332,7 @@ async function handleMessage(messageId: string): Promise<void> {
     });
 
     console.log(
-      `[agent] → ${row.fromName ?? 'unknown'} via ${agent.model} (${row.text.length}c, ${history.length} prior turns, ${digests.length} digests)`,
+      `[agent] → ${row.fromName ?? 'unknown'} via ${agent.model} (${row.text.length}c, ${history.length} turns, ${digests.length} digests, ${relevantFacts.length} facts, ${contentHits.length} content)`,
     );
 
     const result = await client.chat.send({

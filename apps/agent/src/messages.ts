@@ -1,22 +1,27 @@
 /**
- * Build the OpenRouter `messages` array, opting into prompt caching when the
- * upstream model supports it.
+ * Build the OpenRouter `messages` array for the responder agent.
  *
- *   - `anthropic/*` models honour `cache_control: { type: 'ephemeral' }` on
- *     content parts; the prefix gets cached for 5 minutes and reused on
- *     subsequent turns at ~10% the cost.
- *   - `openai/*`, `deepseek/*` cache automatically — no marker needed.
- *   - Other models simply ignore the marker; sending it is harmless.
+ * Cache-control strategy for `anthropic/*` models — three of Anthropic's
+ * four allowed breakpoints used here:
  *
- * Two cache breakpoints when digests are present:
- *   1. system prompt — stable forever
- *   2. digest block  — stable until a new digest lands (every ~20 turns)
- * Only the raw-history tail + new user message change turn-to-turn, so the
- * first ~2/3 of the prompt is cache-eligible.
+ *   1. persona + persona_notes + profile facts  — stable for hours/days
+ *   2. conversation_digest block                — stable until next digest
+ *   3. content_index hits (if any)              — vary by user query
+ *      (no breakpoint here; this block + raw turns just drift)
  *
- * Anthropic allows up to 4 breakpoints; we're using 2 here, leaving headroom
- * for a future "stable history prefix" breakpoint.
+ * Other providers either auto-cache (openai/*, deepseek/*) or ignore
+ * the markers entirely. Sending them is always harmless.
+ *
+ * Prompt order (top-down, durable to volatile):
+ *   [persona + style/relationship notes]      ← cache breakpoint 1
+ *   [profile — top-K facts]
+ *   [conversation_digest — last N]            ← cache breakpoint 2
+ *   [content_index hits — when query mentions content]
+ *   [recent turns — last N raw]
+ *   [new user message]
  */
+
+import type { PersonaNote } from '@mantle/db';
 
 export type HistoryTurn = { role: 'user' | 'assistant'; text: string };
 
@@ -24,6 +29,19 @@ export type Digest = {
   summary: string;
   periodStart: string;
   periodEnd: string;
+};
+
+export type FactSnippet = {
+  content: string;
+  kind: string;
+  entityName?: string | null;
+};
+
+export type ContentHit = {
+  title: string;
+  type: string;
+  summary: string | null;
+  nodeId: string;
 };
 
 type ChatMessage =
@@ -36,25 +54,42 @@ type ChatMessage =
   | { role: 'user'; content: string }
   | { role: 'assistant'; content: string };
 
-export function buildChatMessages(
-  model: string,
-  systemPrompt: string,
-  digests: Digest[],
-  history: HistoryTurn[],
-  newUserText: string,
-): ChatMessage[] {
+export function buildChatMessages(args: {
+  model: string;
+  systemPrompt: string;
+  personaNotes: PersonaNote[];
+  facts: FactSnippet[];
+  digests: Digest[];
+  contentHits: ContentHit[];
+  history: HistoryTurn[];
+  newUserText: string;
+}): ChatMessage[] {
+  const {
+    model,
+    systemPrompt,
+    personaNotes,
+    facts,
+    digests,
+    contentHits,
+    history,
+    newUserText,
+  } = args;
+
   const supportsExplicitCache = model.startsWith('anthropic/');
   const ephemeral = { type: 'ephemeral' as const };
 
-  const systemMessage: ChatMessage = supportsExplicitCache
-    ? {
-        role: 'system',
-        content: [{ type: 'text', text: systemPrompt, cacheControl: ephemeral }],
-      }
-    : { role: 'system', content: systemPrompt };
+  // ─── Block 1: persona + persona_notes + profile facts ─────────────────
+  const personaBlock = renderPersonaBlock(systemPrompt, personaNotes, facts);
+  const messages: ChatMessage[] = [
+    supportsExplicitCache
+      ? {
+          role: 'system',
+          content: [{ type: 'text', text: personaBlock, cacheControl: ephemeral }],
+        }
+      : { role: 'system', content: personaBlock },
+  ];
 
-  const messages: ChatMessage[] = [systemMessage];
-
+  // ─── Block 2: conversation digests (own breakpoint) ───────────────────
   if (digests.length > 0) {
     const body = digests
       .map((d) => `[${d.periodStart} → ${d.periodEnd}] ${d.summary}`)
@@ -70,6 +105,20 @@ export function buildChatMessages(
     );
   }
 
+  // ─── Block 3: content_index hits (no cache; varies per query) ─────────
+  if (contentHits.length > 0) {
+    const lines = contentHits
+      .map((h) => {
+        const tag = `${h.type}#${h.nodeId.slice(0, 8)}`;
+        const summary = h.summary ? ` — ${h.summary}` : '';
+        return `• "${h.title}" (${tag})${summary}`;
+      })
+      .join('\n');
+    const text = `Possibly relevant items the user may be referencing (refer to them by title if helpful):\n${lines}`;
+    messages.push({ role: 'system', content: text });
+  }
+
+  // ─── Block 4: raw recent turns ────────────────────────────────────────
   messages.push(
     ...history.map((t): ChatMessage =>
       t.role === 'user'
@@ -80,4 +129,33 @@ export function buildChatMessages(
   );
 
   return messages;
+}
+
+function renderPersonaBlock(
+  systemPrompt: string,
+  notes: PersonaNote[],
+  facts: FactSnippet[],
+): string {
+  const parts: string[] = [systemPrompt.trim()];
+
+  if (notes.length > 0) {
+    const noteLines = notes
+      .map((n) => `- (${n.kind}) ${n.content}`)
+      .join('\n');
+    parts.push(`\nWhat you've learned about how this user wants to be helped:\n${noteLines}`);
+  }
+
+  if (facts.length > 0) {
+    const factLines = facts
+      .map((f) => {
+        const ent = f.entityName ? ` [about: ${f.entityName}]` : '';
+        return `- (${f.kind}) ${f.content}${ent}`;
+      })
+      .join('\n');
+    parts.push(
+      `\nWhat you know about the user and their world (durable facts; treat as load-bearing context, not trivia):\n${factLines}`,
+    );
+  }
+
+  return parts.join('\n');
 }

@@ -130,9 +130,19 @@ export async function summarizeChat(chatPk: string, ownerId: string): Promise<vo
 
   const params = (agent.params ?? {}) as AgentParams;
 
-  // Reuse the same messages helper. Empty digests (we never recursively
-  // summarize), no prior history (the transcript IS the input).
-  const messages = buildChatMessages(agent.model, agent.systemPrompt, [], [], transcript);
+  // Reuse the same messages helper. The summarizer doesn't carry persona
+  // notes / facts / digests / content hits — it just sees the transcript as
+  // its user message, with the agent's prompt as the system block.
+  const messages = buildChatMessages({
+    model: agent.model,
+    systemPrompt: agent.systemPrompt,
+    personaNotes: [],
+    facts: [],
+    digests: [],
+    contentHits: [],
+    history: [],
+    newUserText: transcript,
+  });
 
   const client = new OpenRouter({
     apiKey,
