@@ -52,6 +52,25 @@ import {
   listPendingCalls,
   rejectPendingCall,
 } from '@mantle/tools';
+import {
+  TODO_PRIORITIES,
+  TODO_STATUSES,
+  createEvent,
+  createNote,
+  createTodo,
+  deleteEvent,
+  deleteNote,
+  deleteTodo,
+  getEvent,
+  getNote,
+  getTodo,
+  listEvents,
+  listNotes,
+  listTodos,
+  updateEvent,
+  updateNote,
+  updateTodo,
+} from '@mantle/content';
 import { and, asc, desc, eq } from 'drizzle-orm';
 
 const OWNER_ID = process.env.ALLOWED_USER_ID;
@@ -667,6 +686,238 @@ server.tool(
         { type: 'text', text: `paired chat ${chat.telegramChatId} (${chat.title ?? chat.username ?? 'unnamed'})` },
       ],
     };
+  },
+);
+
+// ─── Notes / Todos / Events ────────────────────────────────────────────────
+//
+// Three content surfaces the assistant can drive. All three are jsonb on
+// `nodes` (no dedicated tables) and all three flow through the extractor
+// for summary + embedding, so semantic search ("what notes do I have
+// about X?") works without explicit indexing here.
+
+server.tool(
+  'note_list',
+  'List the owner\'s notes. Optional `query` does a substring match against title/body/summary; `tag` filters to notes carrying that tag.',
+  {
+    query: z.string().optional(),
+    tag: z.string().optional(),
+  },
+  async ({ query, tag }) => {
+    const rows = await listNotes(OWNER_ID!, { query, tag });
+    return { content: [{ type: 'text', text: JSON.stringify(rows, null, 2) }] };
+  },
+);
+
+server.tool(
+  'note_get',
+  'Get a single note by id, including its full markdown content.',
+  { id: z.string() },
+  async ({ id }) => {
+    const row = await getNote(OWNER_ID!, id);
+    if (!row) return { content: [{ type: 'text', text: 'not found' }] };
+    return { content: [{ type: 'text', text: JSON.stringify(row, null, 2) }] };
+  },
+);
+
+server.tool(
+  'note_create',
+  'Create a note. Title is required; content is markdown.',
+  {
+    title: z.string().min(1).max(200),
+    content: z.string().max(500_000).optional(),
+    tags: z.array(z.string()).optional(),
+  },
+  async ({ title, content, tags }) => {
+    const row = await createNote(OWNER_ID!, {
+      title,
+      content: content ?? '',
+      tags: tags ?? [],
+    });
+    return { content: [{ type: 'text', text: JSON.stringify(row, null, 2) }] };
+  },
+);
+
+server.tool(
+  'note_update',
+  'Update a note. Pass only the fields you want changed.',
+  {
+    id: z.string(),
+    title: z.string().min(1).max(200).optional(),
+    content: z.string().max(500_000).optional(),
+    tags: z.array(z.string()).optional(),
+  },
+  async ({ id, title, content, tags }) => {
+    const row = await updateNote(OWNER_ID!, id, { title, content, tags });
+    if (!row) return { content: [{ type: 'text', text: 'not found' }] };
+    return { content: [{ type: 'text', text: JSON.stringify(row, null, 2) }] };
+  },
+);
+
+server.tool(
+  'note_delete',
+  'Delete a note by id.',
+  { id: z.string() },
+  async ({ id }) => {
+    const ok = await deleteNote(OWNER_ID!, id);
+    return { content: [{ type: 'text', text: ok ? 'deleted' : 'not found' }] };
+  },
+);
+
+server.tool(
+  'todo_list',
+  'List todos. `status` filters open/done; `priority` filters low/normal/high; `query` substring-matches title/body/summary. Default sort: open first, soonest due, then most-recently updated.',
+  {
+    query: z.string().optional(),
+    status: z.enum([...TODO_STATUSES, 'all'] as ['open', 'done', 'all']).optional(),
+    priority: z.enum([...TODO_PRIORITIES, 'all'] as ['low', 'normal', 'high', 'all']).optional(),
+    tag: z.string().optional(),
+  },
+  async ({ query, status, priority, tag }) => {
+    const rows = await listTodos(OWNER_ID!, {
+      query,
+      status: status ?? 'all',
+      priority: priority ?? 'all',
+      tag,
+    });
+    return { content: [{ type: 'text', text: JSON.stringify(rows, null, 2) }] };
+  },
+);
+
+server.tool(
+  'todo_get',
+  'Get a single todo by id.',
+  { id: z.string() },
+  async ({ id }) => {
+    const row = await getTodo(OWNER_ID!, id);
+    if (!row) return { content: [{ type: 'text', text: 'not found' }] };
+    return { content: [{ type: 'text', text: JSON.stringify(row, null, 2) }] };
+  },
+);
+
+server.tool(
+  'todo_create',
+  'Create a todo. Title is required. `dueAt` is an ISO 8601 timestamp (e.g. "2026-05-25T17:00:00Z").',
+  {
+    title: z.string().min(1).max(200),
+    body: z.string().max(50_000).optional(),
+    status: z.enum(TODO_STATUSES).optional(),
+    priority: z.enum(TODO_PRIORITIES).optional(),
+    dueAt: z.string().datetime().nullable().optional(),
+    tags: z.array(z.string()).optional(),
+  },
+  async ({ title, body, status, priority, dueAt, tags }) => {
+    const row = await createTodo(OWNER_ID!, {
+      title,
+      body,
+      status,
+      priority,
+      dueAt,
+      tags,
+    });
+    return { content: [{ type: 'text', text: JSON.stringify(row, null, 2) }] };
+  },
+);
+
+server.tool(
+  'todo_update',
+  'Update a todo. Use this to flip status to "done", change priority, push the due date, etc.',
+  {
+    id: z.string(),
+    title: z.string().min(1).max(200).optional(),
+    body: z.string().max(50_000).optional(),
+    status: z.enum(TODO_STATUSES).optional(),
+    priority: z.enum(TODO_PRIORITIES).optional(),
+    dueAt: z.string().datetime().nullable().optional(),
+    tags: z.array(z.string()).optional(),
+  },
+  async ({ id, ...rest }) => {
+    const row = await updateTodo(OWNER_ID!, id, rest);
+    if (!row) return { content: [{ type: 'text', text: 'not found' }] };
+    return { content: [{ type: 'text', text: JSON.stringify(row, null, 2) }] };
+  },
+);
+
+server.tool(
+  'todo_delete',
+  'Delete a todo by id.',
+  { id: z.string() },
+  async ({ id }) => {
+    const ok = await deleteTodo(OWNER_ID!, id);
+    return { content: [{ type: 'text', text: ok ? 'deleted' : 'not found' }] };
+  },
+);
+
+server.tool(
+  'event_list',
+  'List calendar events. `window` defaults to "upcoming"; use "past" or "all" to see history. `query` substring-matches title/body/location/summary.',
+  {
+    query: z.string().optional(),
+    window: z.enum(['upcoming', 'past', 'all']).optional(),
+    tag: z.string().optional(),
+  },
+  async ({ query, window, tag }) => {
+    const rows = await listEvents(OWNER_ID!, { query, window, tag });
+    return { content: [{ type: 'text', text: JSON.stringify(rows, null, 2) }] };
+  },
+);
+
+server.tool(
+  'event_get',
+  'Get a single event by id.',
+  { id: z.string() },
+  async ({ id }) => {
+    const row = await getEvent(OWNER_ID!, id);
+    if (!row) return { content: [{ type: 'text', text: 'not found' }] };
+    return { content: [{ type: 'text', text: JSON.stringify(row, null, 2) }] };
+  },
+);
+
+server.tool(
+  'event_create',
+  'Create a calendar event. `startsAt` is an ISO 8601 timestamp. `remindMinutesBefore` controls when the Telegram reminder fires (0 = right at start). The reminder lands in the owner\'s most-recent allowed Telegram DM.',
+  {
+    title: z.string().min(1).max(200),
+    body: z.string().max(50_000).optional(),
+    startsAt: z.string().datetime(),
+    endsAt: z.string().datetime().nullable().optional(),
+    location: z.string().max(200).nullable().optional(),
+    remindMinutesBefore: z.number().int().min(0).max(60 * 24 * 30).optional(),
+    tags: z.array(z.string()).optional(),
+  },
+  async (args) => {
+    const row = await createEvent(OWNER_ID!, args);
+    return { content: [{ type: 'text', text: JSON.stringify(row, null, 2) }] };
+  },
+);
+
+server.tool(
+  'event_update',
+  'Update a calendar event. If you move `startsAt` or `remindMinutesBefore` and the new reminder time is still in the future, a previously-sent reminder will fire again.',
+  {
+    id: z.string(),
+    title: z.string().min(1).max(200).optional(),
+    body: z.string().max(50_000).optional(),
+    startsAt: z.string().datetime().optional(),
+    endsAt: z.string().datetime().nullable().optional(),
+    location: z.string().max(200).nullable().optional(),
+    remindMinutesBefore: z.number().int().min(0).max(60 * 24 * 30).optional(),
+    tags: z.array(z.string()).optional(),
+  },
+  async ({ id, ...rest }) => {
+    const row = await updateEvent(OWNER_ID!, id, rest);
+    if (!row) return { content: [{ type: 'text', text: 'not found' }] };
+    return { content: [{ type: 'text', text: JSON.stringify(row, null, 2) }] };
+  },
+);
+
+server.tool(
+  'event_delete',
+  'Delete a calendar event by id. Pending reminders will not fire.',
+  { id: z.string() },
+  async ({ id }) => {
+    const ok = await deleteEvent(OWNER_ID!, id);
+    return { content: [{ type: 'text', text: ok ? 'deleted' : 'not found' }] };
   },
 );
 

@@ -65,8 +65,11 @@ const HARD_SKIP_TYPES = new Set(['branch']);
  *  `email` / `email_thread` cover IMAP-ingested messages — subject +
  *  bodyText are pulled from the `emails` row.
  *  `secret` is METADATA-ONLY: only title + description + tags reach the
- *  LLM. The sealed value never leaves the DB. */
-const DEFAULT_EXTRACT_TYPES = ['note', 'file', 'email', 'email_thread', 'secret'];
+ *  LLM. The sealed value never leaves the DB.
+ *  `task` and `event` are first-class content: title + body + metadata
+ *  (status, due_at, starts_at, location, …) all become part of the body
+ *  the extractor summarises and embeds. */
+const DEFAULT_EXTRACT_TYPES = ['note', 'file', 'email', 'email_thread', 'secret', 'task', 'event'];
 
 /** Max characters of body text we feed the summarizer in one shot.
  *  Long emails / PDFs get truncated to keep the prompt bounded and the
@@ -206,6 +209,34 @@ async function readNodeBodyRaw(node: typeof nodes.$inferSelect): Promise<string>
       .limit(1);
     if (!row) return node.title;
     return [row.subject, row.bodyText].filter(Boolean).join('\n\n');
+  }
+  // ─── Tasks (todos) — body + structured metadata ──────────────────────
+  // The extractor needs to know status/priority/due_at to write a useful
+  // summary ("DONE: ship the secrets feature" vs "OPEN, due 2026-05-25").
+  if (node.type === 'task') {
+    const d = (node.data ?? {}) as Record<string, unknown>;
+    const body = typeof d.body === 'string' ? d.body : '';
+    const lines = [
+      node.title,
+      `Status: ${d.status ?? 'open'}`,
+      `Priority: ${d.priority ?? 'normal'}`,
+      ...(typeof d.due_at === 'string' ? [`Due: ${d.due_at}`] : []),
+      ...(body ? ['', body] : []),
+    ];
+    return lines.join('\n');
+  }
+  // ─── Events — title + when + where + body ────────────────────────────
+  if (node.type === 'event') {
+    const d = (node.data ?? {}) as Record<string, unknown>;
+    const body = typeof d.body === 'string' ? d.body : '';
+    const lines = [
+      node.title,
+      ...(typeof d.starts_at === 'string' ? [`Starts: ${d.starts_at}`] : []),
+      ...(typeof d.ends_at === 'string' ? [`Ends: ${d.ends_at}`] : []),
+      ...(typeof d.location === 'string' && d.location ? [`Location: ${d.location}`] : []),
+      ...(body ? ['', body] : []),
+    ];
+    return lines.join('\n');
   }
   // For note/file/sermon, body lives in data.content (or data.text/body).
   const data = (node.data ?? {}) as Record<string, unknown>;

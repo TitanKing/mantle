@@ -1,0 +1,56 @@
+import { NextResponse } from 'next/server';
+import { z } from 'zod';
+import { requireOwner } from '@/lib/auth';
+import {
+  TODO_PRIORITIES,
+  TODO_STATUSES,
+  createTodo,
+  listTodos,
+} from '@/lib/todos';
+
+const CreateBody = z.object({
+  title: z.string().min(1).max(200),
+  body: z.string().max(50_000).optional().default(''),
+  status: z.enum(TODO_STATUSES).optional(),
+  priority: z.enum(TODO_PRIORITIES).optional(),
+  dueAt: z.string().datetime().nullable().optional(),
+  tags: z.array(z.string().max(40)).max(20).optional().default([]),
+});
+
+export async function GET(req: Request) {
+  const user = await requireOwner();
+  const url = new URL(req.url);
+  const statusParam = url.searchParams.get('status');
+  const priorityParam = url.searchParams.get('priority');
+  const status =
+    statusParam && statusParam !== 'all' && (TODO_STATUSES as readonly string[]).includes(statusParam)
+      ? (statusParam as (typeof TODO_STATUSES)[number])
+      : 'all';
+  const priority =
+    priorityParam &&
+    priorityParam !== 'all' &&
+    (TODO_PRIORITIES as readonly string[]).includes(priorityParam)
+      ? (priorityParam as (typeof TODO_PRIORITIES)[number])
+      : 'all';
+  const rows = await listTodos(user.id, {
+    query: url.searchParams.get('q') ?? undefined,
+    status,
+    priority,
+    tag: url.searchParams.get('tag') ?? undefined,
+  });
+  return NextResponse.json({ todos: rows });
+}
+
+export async function POST(req: Request) {
+  const user = await requireOwner();
+  const raw = await req.json().catch(() => ({}));
+  const parsed = CreateBody.safeParse(raw);
+  if (!parsed.success) {
+    return NextResponse.json(
+      { error: parsed.error.issues[0]?.message ?? 'invalid input' },
+      { status: 400 },
+    );
+  }
+  const row = await createTodo(user.id, parsed.data);
+  return NextResponse.json({ todo: row }, { status: 201 });
+}

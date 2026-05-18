@@ -1,0 +1,45 @@
+import { NextResponse } from 'next/server';
+import { z } from 'zod';
+import { requireOwner } from '@/lib/auth';
+import { TODO_PRIORITIES, TODO_STATUSES, deleteTodo, getTodo, updateTodo } from '@/lib/todos';
+
+const PatchBody = z.object({
+  title: z.string().min(1).max(200).optional(),
+  body: z.string().max(50_000).optional(),
+  status: z.enum(TODO_STATUSES).optional(),
+  priority: z.enum(TODO_PRIORITIES).optional(),
+  dueAt: z.string().datetime().nullable().optional(),
+  tags: z.array(z.string().max(40)).max(20).optional(),
+});
+
+export async function GET(_req: Request, ctx: { params: Promise<{ id: string }> }) {
+  const user = await requireOwner();
+  const { id } = await ctx.params;
+  const row = await getTodo(user.id, id);
+  if (!row) return NextResponse.json({ error: 'not found' }, { status: 404 });
+  return NextResponse.json({ todo: row });
+}
+
+export async function PATCH(req: Request, ctx: { params: Promise<{ id: string }> }) {
+  const user = await requireOwner();
+  const { id } = await ctx.params;
+  const raw = await req.json().catch(() => ({}));
+  const parsed = PatchBody.safeParse(raw);
+  if (!parsed.success) {
+    return NextResponse.json(
+      { error: parsed.error.issues[0]?.message ?? 'invalid input' },
+      { status: 400 },
+    );
+  }
+  const row = await updateTodo(user.id, id, parsed.data);
+  if (!row) return NextResponse.json({ error: 'not found' }, { status: 404 });
+  return NextResponse.json({ todo: row });
+}
+
+export async function DELETE(_req: Request, ctx: { params: Promise<{ id: string }> }) {
+  const user = await requireOwner();
+  const { id } = await ctx.params;
+  const ok = await deleteTodo(user.id, id);
+  if (!ok) return NextResponse.json({ error: 'not found' }, { status: 404 });
+  return NextResponse.json({ ok: true });
+}

@@ -81,9 +81,9 @@ plus a single `pnpm dev` process tree (the four Node processes orchestrated by
 
 ## 3. The processes
 
-`pnpm dev` (`package.json:11`) runs six concurrent workers, named `web`,
-`mcp`, `worker`, `tg`, `files`, and `agent`. Plus Postgres and MinIO from
-docker-compose. That's it.
+`pnpm dev` (`package.json:11`) runs seven concurrent workers, named `web`,
+`mcp`, `worker`, `tg`, `files`, `events`, and `agent`. Plus Postgres and
+MinIO from docker-compose. That's it.
 
 | Process            | What it does                                                                  |
 |--------------------|-------------------------------------------------------------------------------|
@@ -94,6 +94,7 @@ docker-compose. That's it.
 | `worker` (email)   | `apps/web/workers/email-sync.ts`. pg-boss queue consumer, runs IMAP syncs.    |
 | `tg`               | `apps/web/workers/telegram-poll.ts`. Long-polls Telegram for new DMs.         |
 | `files`            | `apps/web/workers/files-watch.ts`. chokidar on `MANTLE_FILES_ROOT`; mirrors external edits (vim, Syncthing, host `cp`) back into the DB. Loop-safe via `syncFileFromDisk`, which never re-writes bytes. |
+| `events`           | `apps/web/workers/events-reminders.ts`. Polls every 30s for events whose `remind_at` has passed and `reminder_sent_at` is null; sends a Telegram DM via `@mantle/telegram`. |
 | `agent`            | `apps/agent/src/main.ts`. LISTENs on `telegram_message_inserted`, replies via OpenRouter. Shares prompt-build + LLM helpers with the web `/assistant` via `@mantle/agent-runtime`. |
 
 The workers live under `apps/web/workers/` (not in their own app) because they
