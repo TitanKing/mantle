@@ -15,13 +15,15 @@ import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 
 /** Built-in node types the extractor can be allow-listed against. Matches
- *  the `node_type` enum in packages/db/src/schema/nodes.ts minus the
- *  HARD_SKIP set (`branch`, `secret`) which the extractor refuses regardless. */
+ *  the `node_type` enum in packages/db/src/schema/nodes.ts minus `branch`
+ *  (folders, never extracted). `secret` is included but uses metadata-only
+ *  extraction — see `apps/agent/src/extractor.ts:readNodeBodyRaw`. */
 const KNOWN_NODE_TYPES = [
   'note',
   'file',
   'email',
   'email_thread',
+  'secret',
   'sermon',
   'contact',
   'task',

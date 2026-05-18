@@ -1,6 +1,6 @@
 import Link from 'next/link';
 import { and, eq, sql } from 'drizzle-orm';
-import { Activity, Bot, ClipboardCheck, FolderTree, Hammer, Inbox, Key, KeyRound, MessageCircle, Settings, Sparkles, TreePine, UserCheck, Workflow } from 'lucide-react';
+import { Activity, Bot, ClipboardCheck, FolderTree, Hammer, Inbox, Key, KeyRound, Lock, MessageCircle, Settings, Sparkles, TreePine, UserCheck, Workflow } from 'lucide-react';
 import { db, emailSenders } from '@mantle/db';
 import { countPending } from '@mantle/tools';
 import { requireOwner } from '@/lib/auth';
@@ -43,6 +43,12 @@ export default async function AppLayout({ children }: { children: React.ReactNod
             className="flex items-center gap-2 rounded px-2 py-1.5 hover:bg-accent"
           >
             <FolderTree className="size-4" aria-hidden /> Files
+          </Link>
+          <Link
+            href="/secrets"
+            className="flex items-center gap-2 rounded px-2 py-1.5 hover:bg-accent"
+          >
+            <Lock className="size-4" aria-hidden /> Secrets
           </Link>
           <Link
             href="/settings/senders"

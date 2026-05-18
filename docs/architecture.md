@@ -509,7 +509,9 @@ container; it's there for future remote MCP clients.
 
 `packages/crypto/src/index.ts`, ~70 LOC. **AES-256-GCM** behind `seal()` /
 `open()`. Used for any column ending in `_enc` (currently
-`email_accounts.password_enc` and `telegram_accounts.bot_token_enc`).
+`email_accounts.password_enc` and `telegram_accounts.bot_token_enc`),
+plus the `secrets.ciphertext` bytea that backs the user-facing
+[secrets surface](./secrets.md).
 
 Layout: `version(1) | iv(12) | tag(16) | ciphertext(n)`, all in one `bytea`
 column. Callers never see the parts separately.

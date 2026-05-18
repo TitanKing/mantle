@@ -52,16 +52,21 @@ import { diskPathForFile, extOf, INGESTABLE_EXTS } from '@mantle/files';
 import { currentTrace, startTrace, step } from '@mantle/tracing';
 import { captureLlmUsage } from '@mantle/agent-runtime';
 
-/** Types we will NEVER extract from, no matter what the agent config says. */
-const HARD_SKIP_TYPES = new Set(['secret', 'branch']);
+/** Types we will NEVER extract from, no matter what the agent config says.
+ *  Note `secret` is NOT here — secret nodes have metadata-only extraction
+ *  (see `readNodeBody`'s special case). The encrypted value is never
+ *  loaded from the `secrets` table by this file, so it physically can't
+ *  leak into a prompt. */
+const HARD_SKIP_TYPES = new Set(['branch']);
 
 /** Default allowlist; per-agent override via memory_config.extract_types.
  *  `file` covers text files (.md/.txt/.json/.yaml) read via the disk
  *  fallback in readNodeBody, plus PDFs parsed through `pdf-parse`.
  *  `email` / `email_thread` cover IMAP-ingested messages — subject +
- *  bodyText are pulled from the `emails` row. Binaries fall through
- *  to the 20-char body guard and get skipped. */
-const DEFAULT_EXTRACT_TYPES = ['note', 'file', 'email', 'email_thread'];
+ *  bodyText are pulled from the `emails` row.
+ *  `secret` is METADATA-ONLY: only title + description + tags reach the
+ *  LLM. The sealed value never leaves the DB. */
+const DEFAULT_EXTRACT_TYPES = ['note', 'file', 'email', 'email_thread', 'secret'];
 
 /** Max characters of body text we feed the summarizer in one shot.
  *  Long emails / PDFs get truncated to keep the prompt bounded and the
@@ -178,6 +183,21 @@ async function readNodeBody(node: typeof nodes.$inferSelect): Promise<string> {
 }
 
 async function readNodeBodyRaw(node: typeof nodes.$inferSelect): Promise<string> {
+  // ─── Secrets — metadata only ─────────────────────────────────────────
+  // Critical security invariant: secrets pass title + description + tags
+  // to the LLM, and NOTHING ELSE. The sealed value lives in the `secrets`
+  // table; we never query it from this file. If you ever add a code path
+  // that loads from `secrets` here, the entire threat model breaks.
+  if (node.type === 'secret') {
+    const data = (node.data ?? {}) as Record<string, unknown>;
+    const description = typeof data.description === 'string' ? data.description : '';
+    const kind = typeof data.kind === 'string' ? data.kind : '';
+    const tagLine = Array.isArray(node.tags) && node.tags.length > 0
+      ? `\n\nTags: ${node.tags.join(', ')}`
+      : '';
+    const kindLine = kind ? `\n\nKind: ${kind}` : '';
+    return `${node.title}${kindLine}\n\n${description}${tagLine}`.trim();
+  }
   if (node.type === 'email' || node.type === 'email_thread') {
     const [row] = await db
       .select({ subject: emails.subject, bodyText: emails.bodyText })
