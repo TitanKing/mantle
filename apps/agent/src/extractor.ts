@@ -1,0 +1,640 @@
+/**
+ * The extractor — Stage-C agent that populates content_index, facts, and
+ * entities from each new content_store row.
+ *
+ * Triggered by pg_notify('node_ingested') from migration 0018. Per node:
+ *
+ *   1. Resolve the active extractor agent. Skip if none enabled.
+ *   2. Skip if node type isn't in agent.memory_config.extract_types.
+ *      Defence in depth: HARD_SKIP_TYPES (secret, branch) are skipped
+ *      regardless of config — secrets must NEVER be summarised or fact-
+ *      extracted, period.
+ *   3. Read the source body (typed dispatch by node type).
+ *   4. content_index pass — generate 1-2 sentence summary + embedding.
+ *      Write to nodes.data.summary, nodes.data.summary_model,
+ *      nodes.data.entities, and nodes.embedding.
+ *   5. Fact extraction pass (if memory_config.extract_facts !== false):
+ *      a. LLM call → JSON array of candidate facts (with entity mentions).
+ *      b. For each candidate fact:
+ *           - Embed it.
+ *           - Vector-search top-3 near-existing facts.
+ *           - Classifier LLM call returns ADD | UPDATE | DELETE | NOOP.
+ *           - Apply: INSERT new, supersede an existing row, retire an
+ *             old fact, or no-op.
+ *      c. Entity reconciliation: dedup via trigram name match +
+ *         embedding similarity; create new entities for misses;
+ *         add 'mentioned_in' edge from entity to source node.
+ *   6. Bump agent's last_used_at + usage_count.
+ *
+ * Stays pure-logic — no listener registration here. main.ts wires the
+ * pg_notify channel to extractNode().
+ */
+
+import { OpenRouter } from '@openrouter/sdk';
+import { and, desc, eq, isNull, sql } from 'drizzle-orm';
+import {
+  db,
+  agents,
+  facts,
+  entities,
+  entityEdges,
+  nodes,
+  emails,
+  type Agent,
+  type AgentMemoryConfig,
+  type AgentParams,
+  type Entity,
+  type Fact,
+} from '@mantle/db';
+import { getApiKeyById } from '@mantle/api-keys';
+import { embed } from '@mantle/embeddings';
+
+/** Types we will NEVER extract from, no matter what the agent config says. */
+const HARD_SKIP_TYPES = new Set(['secret', 'branch']);
+
+/** Default allowlist; per-agent override via memory_config.extract_types. */
+const DEFAULT_EXTRACT_TYPES = ['note'];
+
+/** Top-K near-neighbours considered when classifying a candidate fact. */
+const CLASSIFIER_NEIGHBOURS = 3;
+
+/** Similarity threshold for "this candidate fact looks like an existing one." */
+const FACT_DEDUP_THRESHOLD = 0.30; // cosine distance; lower = more similar
+
+/** Similarity threshold for resolving an entity mention to an existing entity. */
+const ENTITY_DEDUP_THRESHOLD = 0.25;
+
+// ─── Prompts ────────────────────────────────────────────────────────────────
+
+export const DEFAULT_EXTRACTOR_PROMPT = `You are a memory extractor for a personal AI assistant. You will be given the title and body of a piece of content (a note, document, email, etc.) belonging to a single user. Your job is to produce TWO outputs:
+
+1. A 1-2 sentence summary of what this content is about. Be specific — names, dates, projects, numbers. Avoid filler ("this document discusses..."). Write it as a *spine* you could read to remember what's in the document without reading the document.
+
+2. A list of facts about the user or their world that this content reveals. Each fact is a single declarative sentence. Include the entities mentioned (people, projects, places, organisations, events) so they can be cross-referenced.
+
+Output STRICT JSON, no markdown, no commentary outside the JSON:
+
+{
+  "summary": "<1-2 sentences>",
+  "facts": [
+    {
+      "content": "<the fact as a sentence>",
+      "kind": "factual" | "episodic" | "semantic" | "preference",
+      "confidence": 0.0-1.0,
+      "entities": [{ "name": "<entity>", "kind": "person" | "project" | "place" | "org" | "event" }]
+    }
+  ],
+  "entities": [{ "name": "<entity>", "kind": "person" | "project" | "place" | "org" | "event" }]
+}
+
+Guidelines:
+- "factual" = a verifiable claim with a value ("Jason's birthday is March 4").
+- "episodic" = a record of something that happened on a specific date ("On 2026-03-04 Jason mentioned his birthday").
+- "semantic" = a stable abstract identity ("Jason is a pastor").
+- "preference" = a stable interaction preference ("Jason prefers concise replies").
+- If the content doesn't reveal anything beyond what's already in its title, return an empty facts array.
+- Be conservative on confidence — 1.0 only for explicitly stated facts; 0.5-0.8 for reasonable inferences.
+- DO NOT extract secrets, passwords, API keys, or other credentials. Skip those entirely.`;
+
+const CLASSIFIER_PROMPT_TEMPLATE = (candidate: string, neighbours: string[]) => `You are managing a personal memory store. A new candidate fact has been extracted from a document. You must decide how it relates to existing nearby facts.
+
+Candidate fact:
+"${candidate}"
+
+Up to ${neighbours.length} existing facts in the store that are semantically similar:
+${neighbours.map((n, i) => `[${i + 1}] "${n}"`).join('\n')}
+
+Decide ONE of:
+- ADD     — the candidate is a new fact not represented above. INSERT it.
+- UPDATE  — the candidate refines or replaces an existing fact (target the index 1..${neighbours.length}). Existing fact will be marked valid_to=now and the candidate becomes its successor.
+- DELETE  — the candidate contradicts an existing fact (target the index). Existing fact gets retired (valid_to=now) and we do NOT add the candidate.
+- NOOP    — the candidate is essentially the same as an existing fact (target the index). Nothing to do.
+
+Output STRICT JSON, no markdown:
+{ "decision": "ADD" | "UPDATE" | "DELETE" | "NOOP", "target_index": 1..${neighbours.length} | null, "reason": "<short>" }`;
+
+// ─── Types ──────────────────────────────────────────────────────────────────
+
+type ExtractedFact = {
+  content: string;
+  kind: 'factual' | 'episodic' | 'semantic' | 'preference';
+  confidence: number;
+  entities?: { name: string; kind: string }[];
+};
+
+type ExtractorOutput = {
+  summary: string;
+  facts: ExtractedFact[];
+  entities: { name: string; kind: string }[];
+};
+
+type ClassifierDecision = {
+  decision: 'ADD' | 'UPDATE' | 'DELETE' | 'NOOP';
+  target_index: number | null;
+  reason?: string;
+};
+
+// ─── Helpers ────────────────────────────────────────────────────────────────
+
+async function resolveExtractorAgent(ownerId: string): Promise<Agent | null> {
+  const [row] = await db
+    .select()
+    .from(agents)
+    .where(
+      and(
+        eq(agents.ownerId, ownerId),
+        eq(agents.role, 'extractor'),
+        eq(agents.enabled, true),
+      ),
+    )
+    .orderBy(desc(agents.priority))
+    .limit(1);
+  return row ?? null;
+}
+
+/** Read the source body for a node, dispatched on type. Email/file/note/sermon
+ *  for now; expand the switch as we wire more types. */
+async function readNodeBody(node: typeof nodes.$inferSelect): Promise<string> {
+  if (node.type === 'email' || node.type === 'email_thread') {
+    const [row] = await db
+      .select({ subject: emails.subject, bodyText: emails.bodyText })
+      .from(emails)
+      .where(eq(emails.nodeId, node.id))
+      .limit(1);
+    if (!row) return node.title;
+    return [row.subject, row.bodyText].filter(Boolean).join('\n\n');
+  }
+  // For note/file/sermon, body lives in data.content (or data.text/body).
+  const data = (node.data ?? {}) as Record<string, unknown>;
+  const candidates = [data.content, data.text, data.body, data.markdown];
+  for (const c of candidates) {
+    if (typeof c === 'string' && c.trim().length > 0) return c;
+  }
+  return node.title;
+}
+
+/** Parse the extractor LLM response with sanity defaults. */
+function parseExtractorOutput(raw: string): ExtractorOutput {
+  // Strip ```json fences if a model adds them.
+  const cleaned = raw
+    .replace(/^```(?:json)?\s*/i, '')
+    .replace(/```\s*$/i, '')
+    .trim();
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(cleaned);
+  } catch {
+    return { summary: '', facts: [], entities: [] };
+  }
+  const obj = parsed as Partial<ExtractorOutput>;
+  return {
+    summary: typeof obj.summary === 'string' ? obj.summary.trim() : '',
+    facts: Array.isArray(obj.facts) ? obj.facts.filter(isValidFact) : [],
+    entities: Array.isArray(obj.entities) ? obj.entities.filter(isValidEntity) : [],
+  };
+}
+
+function isValidFact(f: unknown): f is ExtractedFact {
+  if (!f || typeof f !== 'object') return false;
+  const o = f as Record<string, unknown>;
+  return (
+    typeof o.content === 'string' &&
+    o.content.trim().length > 0 &&
+    ['factual', 'episodic', 'semantic', 'preference'].includes(String(o.kind))
+  );
+}
+
+function isValidEntity(e: unknown): e is { name: string; kind: string } {
+  if (!e || typeof e !== 'object') return false;
+  const o = e as Record<string, unknown>;
+  return typeof o.name === 'string' && typeof o.kind === 'string';
+}
+
+function parseClassifierDecision(raw: string): ClassifierDecision {
+  const cleaned = raw
+    .replace(/^```(?:json)?\s*/i, '')
+    .replace(/```\s*$/i, '')
+    .trim();
+  try {
+    const parsed = JSON.parse(cleaned) as ClassifierDecision;
+    if (!['ADD', 'UPDATE', 'DELETE', 'NOOP'].includes(parsed.decision)) {
+      return { decision: 'ADD', target_index: null };
+    }
+    return parsed;
+  } catch {
+    return { decision: 'ADD', target_index: null };
+  }
+}
+
+/** Call OpenRouter for a chat completion with the agent's model/params. */
+async function chatComplete(
+  client: OpenRouter,
+  model: string,
+  systemPrompt: string,
+  userText: string,
+  params: AgentParams,
+): Promise<string> {
+  const result = await client.chat.send({
+    chatRequest: {
+      model,
+      messages: [
+        { role: 'system', content: systemPrompt },
+        { role: 'user', content: userText },
+      ],
+      ...(typeof params.temperature === 'number' ? { temperature: params.temperature } : {}),
+      ...(typeof params.max_tokens === 'number' ? { maxTokens: params.max_tokens } : {}),
+      ...(typeof params.top_p === 'number' ? { topP: params.top_p } : {}),
+    },
+  });
+  if (!('choices' in result)) {
+    throw new Error('extractor: unexpected streaming response');
+  }
+  const content = result.choices[0]?.message?.content;
+  return typeof content === 'string' ? content : '';
+}
+
+// ─── Entity reconciliation ──────────────────────────────────────────────────
+
+async function reconcileEntity(
+  ownerId: string,
+  mention: { name: string; kind: string },
+): Promise<Entity> {
+  // 1. Exact name (case-insensitive) or alias match first — cheapest.
+  const trimmed = mention.name.trim();
+  const [exact] = await db
+    .select()
+    .from(entities)
+    .where(
+      and(
+        eq(entities.ownerId, ownerId),
+        sql`lower(${entities.name}) = lower(${trimmed}) or ${trimmed} = any(${entities.aliases})`,
+      ),
+    )
+    .limit(1);
+  if (exact) return exact;
+
+  // 2. Trigram fuzzy match within the same kind. Pick the strongest similarity.
+  const trgmHits = await db
+    .select({
+      row: entities,
+      sim: sql<number>`similarity(${entities.name}, ${trimmed})`,
+    })
+    .from(entities)
+    .where(and(eq(entities.ownerId, ownerId), eq(entities.kind, mention.kind)))
+    .orderBy(sql`similarity(${entities.name}, ${trimmed}) desc`)
+    .limit(1);
+  if (trgmHits[0] && trgmHits[0].sim >= 0.7) {
+    // Looks like a match — register the new spelling as an alias.
+    const existing = trgmHits[0].row;
+    if (!existing.aliases.includes(trimmed) && existing.name.toLowerCase() !== trimmed.toLowerCase()) {
+      await db
+        .update(entities)
+        .set({ aliases: [...existing.aliases, trimmed], updatedAt: new Date() })
+        .where(eq(entities.id, existing.id));
+    }
+    return existing;
+  }
+
+  // 3. Embedding match (when populated). We embed the mention only when we
+  // need to compare; cheap thanks to the embedding_cache.
+  try {
+    const [mentionVec] = await Promise.all([embed(ownerId, trimmed)]);
+    const vecHits = await db
+      .select({
+        row: entities,
+        dist: sql<number>`${entities.embedding} <=> ${JSON.stringify(mentionVec)}::vector`,
+      })
+      .from(entities)
+      .where(and(eq(entities.ownerId, ownerId), eq(entities.kind, mention.kind)))
+      .orderBy(sql`${entities.embedding} <=> ${JSON.stringify(mentionVec)}::vector`)
+      .limit(1);
+    if (vecHits[0] && (vecHits[0].dist ?? 1) < ENTITY_DEDUP_THRESHOLD) {
+      const existing = vecHits[0].row;
+      if (!existing.aliases.includes(trimmed) && existing.name.toLowerCase() !== trimmed.toLowerCase()) {
+        await db
+          .update(entities)
+          .set({ aliases: [...existing.aliases, trimmed], updatedAt: new Date() })
+          .where(eq(entities.id, existing.id));
+      }
+      return existing;
+    }
+  } catch {
+    // embedding failure shouldn't block entity creation.
+  }
+
+  // 4. No match — create new entity (embed its name + kind for future matches).
+  let embedding: number[] | null = null;
+  try {
+    embedding = await embed(ownerId, `${mention.kind}: ${trimmed}`);
+  } catch {
+    // OK to create without embedding; can be backfilled later.
+  }
+  const [inserted] = await db
+    .insert(entities)
+    .values({
+      ownerId,
+      kind: mention.kind,
+      name: trimmed,
+      aliases: [],
+      embedding,
+    })
+    .returning();
+  if (!inserted) throw new Error('extractor: failed to insert entity');
+  return inserted;
+}
+
+// ─── Fact classification ────────────────────────────────────────────────────
+
+async function classifyAndApplyFact(
+  ownerId: string,
+  candidate: ExtractedFact,
+  candidateEmbedding: number[],
+  sourceNodeId: string,
+  primaryEntityId: string | null,
+  client: OpenRouter,
+  agent: Agent,
+): Promise<'ADD' | 'UPDATE' | 'DELETE' | 'NOOP'> {
+  // Find near-neighbour facts among currently-valid rows.
+  const neighbours = await db
+    .select({
+      id: facts.id,
+      content: facts.content,
+      dist: sql<number>`${facts.embedding} <=> ${JSON.stringify(candidateEmbedding)}::vector`,
+    })
+    .from(facts)
+    .where(
+      and(
+        eq(facts.ownerId, ownerId),
+        isNull(facts.validTo),
+        sql`${facts.embedding} is not null`,
+      ),
+    )
+    .orderBy(sql`${facts.embedding} <=> ${JSON.stringify(candidateEmbedding)}::vector`)
+    .limit(CLASSIFIER_NEIGHBOURS);
+
+  const closeNeighbours = neighbours.filter((n) => (n.dist ?? 1) <= FACT_DEDUP_THRESHOLD);
+
+  // Fast path: no close neighbours → just ADD.
+  if (closeNeighbours.length === 0) {
+    await db.insert(facts).values({
+      ownerId,
+      content: candidate.content,
+      kind: candidate.kind,
+      entityId: primaryEntityId,
+      confidence: candidate.confidence,
+      validFrom: new Date(),
+      sourceNodeId,
+      embedding: candidateEmbedding,
+    });
+    return 'ADD';
+  }
+
+  // Slow path: call the classifier to decide.
+  const params = (agent.params ?? {}) as AgentParams;
+  const decisionRaw = await chatComplete(
+    client,
+    agent.model,
+    'You are a precise JSON output assistant. Output strictly the JSON requested, with no additional commentary.',
+    CLASSIFIER_PROMPT_TEMPLATE(candidate.content, closeNeighbours.map((n) => n.content)),
+    params,
+  );
+  const decision = parseClassifierDecision(decisionRaw);
+
+  const targetIdx = decision.target_index ? decision.target_index - 1 : null;
+  const target = targetIdx != null ? closeNeighbours[targetIdx] : null;
+
+  if (decision.decision === 'NOOP') return 'NOOP';
+
+  const now = new Date();
+  if (decision.decision === 'DELETE' && target) {
+    await db.update(facts).set({ validTo: now, updatedAt: now }).where(eq(facts.id, target.id));
+    return 'DELETE';
+  }
+
+  if (decision.decision === 'UPDATE' && target) {
+    // Retire the old, insert the new pointing back via supersededBy.
+    await db.update(facts).set({ validTo: now, updatedAt: now }).where(eq(facts.id, target.id));
+    const [inserted] = await db
+      .insert(facts)
+      .values({
+        ownerId,
+        content: candidate.content,
+        kind: candidate.kind,
+        entityId: primaryEntityId,
+        confidence: candidate.confidence,
+        validFrom: now,
+        sourceNodeId,
+        embedding: candidateEmbedding,
+        supersededBy: null,
+      })
+      .returning({ id: facts.id });
+    if (inserted) {
+      // Older row's superseded_by points at the newer row.
+      await db.update(facts).set({ supersededBy: inserted.id }).where(eq(facts.id, target.id));
+    }
+    return 'UPDATE';
+  }
+
+  // Default: ADD (even if classifier said UPDATE/DELETE but no valid target).
+  await db.insert(facts).values({
+    ownerId,
+    content: candidate.content,
+    kind: candidate.kind,
+    entityId: primaryEntityId,
+    confidence: candidate.confidence,
+    validFrom: new Date(),
+    sourceNodeId,
+    embedding: candidateEmbedding,
+  });
+  return 'ADD';
+}
+
+// ─── The main entrypoint ────────────────────────────────────────────────────
+
+export async function extractNode(nodeId: string, ownerId: string): Promise<void> {
+  const agent = await resolveExtractorAgent(ownerId);
+  if (!agent) return; // No extractor configured. Silent.
+
+  // Load the node.
+  const [node] = await db.select().from(nodes).where(eq(nodes.id, nodeId)).limit(1);
+  if (!node) return;
+  if (HARD_SKIP_TYPES.has(node.type)) return;
+
+  const memoryConfig = (agent.memoryConfig ?? {}) as AgentMemoryConfig;
+  const extractTypes = memoryConfig.extract_types ?? DEFAULT_EXTRACT_TYPES;
+  if (!extractTypes.includes(node.type)) return;
+
+  if (!agent.apiKeyId) {
+    console.error(`[extractor] agent '${agent.slug}' has no api_key_id — skipping`);
+    return;
+  }
+  const apiKey = await getApiKeyById(agent.apiKeyId);
+  if (!apiKey) {
+    console.error(`[extractor] api_key_id ${agent.apiKeyId} not found — skipping`);
+    return;
+  }
+
+  // Skip if we've already extracted this node (data.summary present + embedding set).
+  const existingData = (node.data ?? {}) as Record<string, unknown>;
+  if (existingData.summary && node.embedding) {
+    return;
+  }
+
+  const body = await readNodeBody(node);
+  if (!body || body.trim().length < 20) {
+    // Not enough content to extract meaningfully.
+    return;
+  }
+
+  const client = new OpenRouter({
+    apiKey,
+    httpReferer: 'https://mantle.crossworks.network',
+    appTitle: 'Mantle',
+  });
+
+  console.log(
+    `[extractor] node ${node.id.slice(0, 8)} (${node.type}, ${node.title.slice(0, 40)}) via ${agent.model}`,
+  );
+
+  const systemPrompt = agent.systemPrompt || DEFAULT_EXTRACTOR_PROMPT;
+  const userPayload = `Title: ${node.title}\nType: ${node.type}\n\nBody:\n${body.slice(0, 8000)}`;
+  const rawOutput = await chatComplete(
+    client,
+    agent.model,
+    systemPrompt,
+    userPayload,
+    (agent.params ?? {}) as AgentParams,
+  );
+  const parsed = parseExtractorOutput(rawOutput);
+
+  // ─── content_index pass ───────────────────────────────────────────────
+  const summary = parsed.summary;
+  const allEntityMentions = [
+    ...parsed.entities,
+    ...parsed.facts.flatMap((f) => f.entities ?? []),
+  ];
+  // Dedup by lowercase name.
+  const seenNames = new Set<string>();
+  const uniqueMentions = allEntityMentions.filter((m) => {
+    const key = m.name.trim().toLowerCase();
+    if (seenNames.has(key)) return false;
+    seenNames.add(key);
+    return true;
+  });
+
+  // Embedding source: title + summary + leading body (signal-dense). Capped at ~2KB
+  // because text-embedding-3-small has an 8K-token context but our hot path
+  // doesn't benefit from feeding it more than the first part of a long doc.
+  const embedText = [node.title, summary, body.slice(0, 500)].filter(Boolean).join('\n\n');
+  let embedding: number[] | null = null;
+  try {
+    embedding = await embed(ownerId, embedText);
+  } catch (err) {
+    console.error('[extractor] embed failed:', err instanceof Error ? err.message : err);
+  }
+
+  await db
+    .update(nodes)
+    .set({
+      data: {
+        ...existingData,
+        summary,
+        summary_model: agent.model,
+        summary_at: new Date().toISOString(),
+        entities: uniqueMentions.map((m) => m.name),
+      },
+      ...(embedding ? { embedding } : {}),
+      updatedAt: new Date(),
+    })
+    .where(eq(nodes.id, node.id));
+
+  console.log(`[extractor]   → content_index: summary (${summary.length}c), ${uniqueMentions.length} entities`);
+
+  // ─── entity reconciliation ────────────────────────────────────────────
+  const entityIdByName = new Map<string, string>();
+  for (const mention of uniqueMentions) {
+    try {
+      const ent = await reconcileEntity(ownerId, mention);
+      entityIdByName.set(mention.name.trim().toLowerCase(), ent.id);
+      // 'mentioned_in' edge from entity → node.
+      await db.insert(entityEdges).values({
+        ownerId,
+        sourceId: ent.id,
+        sourceKind: 'entity',
+        targetId: node.id,
+        targetKind: 'node',
+        relation: 'mentioned_in',
+        validFrom: new Date(),
+      });
+    } catch (err) {
+      console.error(
+        `[extractor]   entity '${mention.name}' failed:`,
+        err instanceof Error ? err.message : err,
+      );
+    }
+  }
+
+  // ─── fact extraction pass ─────────────────────────────────────────────
+  if (memoryConfig.extract_facts === false || parsed.facts.length === 0) {
+    // No facts to process.
+    void bumpAgentUsage(agent.id, agent.usageCount ?? 0);
+    return;
+  }
+
+  const factTexts = parsed.facts.map((f) => f.content);
+  let factVectors: number[][] = [];
+  try {
+    const { embedBatch } = await import('@mantle/embeddings');
+    factVectors = await embedBatch(ownerId, factTexts);
+  } catch (err) {
+    console.error('[extractor] fact embed batch failed:', err instanceof Error ? err.message : err);
+    return;
+  }
+
+  const tally = { ADD: 0, UPDATE: 0, DELETE: 0, NOOP: 0 };
+  for (let i = 0; i < parsed.facts.length; i++) {
+    const candidate = parsed.facts[i]!;
+    const vec = factVectors[i]!;
+    // Pick a primary entity for this fact: the first entity in the fact's
+    // own entities[] that we successfully reconciled.
+    let primaryEntityId: string | null = null;
+    for (const e of candidate.entities ?? []) {
+      const id = entityIdByName.get(e.name.trim().toLowerCase());
+      if (id) {
+        primaryEntityId = id;
+        break;
+      }
+    }
+    try {
+      const decision = await classifyAndApplyFact(
+        ownerId,
+        candidate,
+        vec,
+        node.id,
+        primaryEntityId,
+        client,
+        agent,
+      );
+      tally[decision]++;
+    } catch (err) {
+      console.error('[extractor]   fact classify failed:', err instanceof Error ? err.message : err);
+    }
+  }
+
+  console.log(
+    `[extractor]   → facts: ADD=${tally.ADD} UPDATE=${tally.UPDATE} DELETE=${tally.DELETE} NOOP=${tally.NOOP}`,
+  );
+
+  void bumpAgentUsage(agent.id, agent.usageCount ?? 0);
+}
+
+async function bumpAgentUsage(agentId: string, currentCount: number): Promise<void> {
+  try {
+    await db
+      .update(agents)
+      .set({ lastUsedAt: new Date(), usageCount: currentCount + 1, updatedAt: new Date() })
+      .where(eq(agents.id, agentId));
+  } catch {
+    // Best-effort.
+  }
+}

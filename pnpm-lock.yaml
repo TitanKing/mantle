@@ -29,6 +29,9 @@ importers:
       '@mantle/db':
         specifier: workspace:*
         version: link:../../packages/db
+      '@mantle/embeddings':
+        specifier: workspace:*
+        version: link:../../packages/embeddings
       '@mantle/telegram':
         specifier: workspace:*
         version: link:../../packages/telegram

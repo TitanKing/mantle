@@ -35,6 +35,7 @@ import { accountForChat, sendMessage } from '@mantle/telegram';
 import { getApiKeyById } from '@mantle/api-keys';
 import { buildChatMessages, type Digest, type HistoryTurn } from './messages.js';
 import { summarizeChat } from './summarizer.js';
+import { extractNode } from './extractor.js';
 
 const USER_ID = process.env.ALLOWED_USER_ID;
 const DATABASE_URL = process.env.DATABASE_URL;
@@ -388,6 +389,28 @@ function scheduleSummarize(chatPk: string): void {
   }, SUMMARIZE_DEBOUNCE_MS);
 }
 
+/** Debounce window for node_ingested. Same per-node coalescing logic as
+ *  summarize_due — multiple inserts of the same node id within 2s collapse
+ *  to one extractor call. Cross-node parallelism preserved (Set iteration). */
+const EXTRACT_DEBOUNCE_MS = 2000;
+const extractPending = new Set<string>();
+let extractTimer: NodeJS.Timeout | null = null;
+
+function scheduleExtract(nodeId: string): void {
+  extractPending.add(nodeId);
+  if (extractTimer) return;
+  extractTimer = setTimeout(() => {
+    extractTimer = null;
+    const batch = [...extractPending];
+    extractPending.clear();
+    for (const id of batch) {
+      extractNode(id, USER_ID!).catch((err) =>
+        console.error('[agent] extract error:', err instanceof Error ? err.message : err),
+      );
+    }
+  }, EXTRACT_DEBOUNCE_MS);
+}
+
 async function main() {
   const pg = postgres(DATABASE_URL!, { max: 2 });
   console.log('[agent] starting — config from agents table');
@@ -405,6 +428,12 @@ async function main() {
     scheduleSummarize(payload);
   });
   console.log('[agent] LISTENing on summarize_due');
+
+  await pg.listen('node_ingested', (payload: string) => {
+    if (!payload) return;
+    scheduleExtract(payload);
+  });
+  console.log('[agent] LISTENing on node_ingested');
 
   await drainPending();
 
