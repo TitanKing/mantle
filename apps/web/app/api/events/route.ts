@@ -10,6 +10,7 @@ const CreateBody = z.object({
   endsAt: z.string().datetime().nullable().optional(),
   location: z.string().max(200).nullable().optional(),
   remindMinutesBefore: z.number().int().min(0).max(60 * 24 * 30).optional(),
+  timezone: z.string().max(64).optional(),
   tags: z.array(z.string().max(40)).max(20).optional().default([]),
 });
 

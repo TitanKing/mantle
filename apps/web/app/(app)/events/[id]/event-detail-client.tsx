@@ -60,10 +60,15 @@ export function EventDetailClient({ initial }: { initial: EventRow }) {
   const save = async (e: React.FormEvent) => {
     e.preventDefault();
     setError(null);
+    // Re-capture the browser TZ on save so an edit from a different
+    // device/timezone reflects the user's current wall-clock context.
+    const tz =
+      Intl.DateTimeFormat().resolvedOptions().timeZone || undefined;
     const payload: Record<string, unknown> = {
       title: form.title.trim(),
       body: form.body,
       remindMinutesBefore: form.remindMinutesBefore,
+      timezone: tz,
       tags: form.tags
         .split(',')
         .map((t) => t.trim().toLowerCase())

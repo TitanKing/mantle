@@ -168,10 +168,20 @@ export async function runToolLoop(args: ToolLoopArgs): Promise<ToolLoopResult> {
       const slug = call.function.name;
       const tool = toolsByName.get(slug);
       let input: Record<string, unknown> = {};
+      let argParseError: string | null = null;
       try {
-        input = call.function.arguments ? JSON.parse(call.function.arguments) : {};
-      } catch {
-        /* leave empty */
+        const parsed = call.function.arguments ? JSON.parse(call.function.arguments) : {};
+        if (parsed === null || typeof parsed !== 'object' || Array.isArray(parsed)) {
+          argParseError = 'tool arguments must be a JSON object';
+        } else {
+          input = parsed as Record<string, unknown>;
+        }
+      } catch (err) {
+        // Capture the parse error so we can hand it back to the model
+        // as a structured tool_result. Previously we silently swallowed
+        // the error and dispatched with input={}, which made the model
+        // think the call succeeded and re-issue the same broken JSON.
+        argParseError = `tool arguments are not valid JSON (${(err as Error).message})`;
       }
 
       const outcome = await step(
@@ -181,6 +191,15 @@ export async function runToolLoop(args: ToolLoopArgs): Promise<ToolLoopResult> {
           input: { slug, args: input },
         },
         async (handle) => {
+          if (argParseError) {
+            handle.setMeta({ error: argParseError, argsRaw: call.function.arguments });
+            return {
+              ok: false as const,
+              error:
+                `${argParseError}. Re-issue the tool call with a valid JSON object ` +
+                `whose keys match the tool's inputSchema. Do not retry with the same arguments.`,
+            };
+          }
           if (!tool) {
             handle.setMeta({ error: 'tool not in agent allowlist' });
             return {

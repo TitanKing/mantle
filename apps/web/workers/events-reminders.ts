@@ -59,7 +59,22 @@ async function findReminderChat(ownerId: string): Promise<{
 }
 
 function formatReminder(e: EventRow): string {
-  const startTime = new Date(e.startsAt).toLocaleString();
+  // Format in the event's IANA timezone so the user sees the wall-clock
+  // time they entered, not whatever timezone the worker process runs in.
+  // (Without this, a 14:00 event created in CET would render as 13:00
+  // when the worker is in UTC — confusing and wrong.)
+  let startTime: string;
+  try {
+    startTime = new Intl.DateTimeFormat('en-GB', {
+      timeZone: e.timezone,
+      dateStyle: 'medium',
+      timeStyle: 'short',
+    }).format(new Date(e.startsAt));
+    if (e.timezone !== 'UTC') startTime += ` (${e.timezone})`;
+  } catch {
+    // Defensive fallback if e.timezone somehow isn't a valid IANA zone.
+    startTime = new Date(e.startsAt).toISOString();
+  }
   const lines = [`⏰ Reminder: *${e.title}*`, `Starts: ${startTime}`];
   if (e.location) lines.push(`Where: ${e.location}`);
   if (e.body) lines.push('', e.body);

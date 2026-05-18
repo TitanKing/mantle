@@ -89,11 +89,18 @@ export function EventsClient({
     setError(null);
     if (!form.title.trim()) return setError('Title is required');
     if (!form.startsAt) return setError('Start time is required');
+    // Capture the browser's IANA tz so the reminder formatter (and
+    // the assistant later) can show times in the user's wall clock,
+    // not the agent process's. Falls back to UTC inside the lib if
+    // we somehow got nothing back.
+    const tz =
+      Intl.DateTimeFormat().resolvedOptions().timeZone || undefined;
     const payload: Record<string, unknown> = {
       title: form.title.trim(),
       body: form.body,
       startsAt: new Date(form.startsAt).toISOString(),
       remindMinutesBefore: form.remindMinutesBefore,
+      timezone: tz,
       tags: form.tags
         .split(',')
         .map((t) => t.trim().toLowerCase())

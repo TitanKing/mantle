@@ -1,12 +1,22 @@
 /**
  * Mantle MCP server.
  *
- * Exposes the user's tree, emails, files, telegram messages, and rules to
- * Claude over MCP. Defaults to stdio (Claude Desktop / Claude Code); pass
- * `--http` to bind an HTTP+SSE listener on $MCP_HTTP_PORT for remote use.
+ * Exposes the user's tree, emails, files, telegram messages, secrets, and
+ * content surfaces to Claude over MCP. Stdio only — Claude Desktop or
+ * Claude Code spawn this process and talk to it over JSON-RPC.
  *
- * Env loading is handled by Node's `--env-file-if-exists=.env.local` in the
- * package script; this entry just trusts `process.env`.
+ * Threat model: stdio means anyone who can spawn this process inherits
+ * the owner's full data access. That's fine on your laptop and on a
+ * personal VPS where you're the only shell user. **Do not** expose this
+ * as a network service without a real auth layer; an HTTP transport is
+ * intentionally not wired here so it can't be enabled by accident.
+ *
+ * Owner is scoped by ALLOWED_USER_ID; at startup we verify the value is
+ * a real UUID AND that the row exists in auth.users — typoing the env
+ * to a stranger's UUID would otherwise silently surface their data.
+ *
+ * Env loading is handled by Node's `--env-file-if-exists=.env.local` in
+ * the package script; this entry just trusts `process.env`.
  */
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
@@ -52,6 +62,7 @@ import {
   listPendingCalls,
   rejectPendingCall,
 } from '@mantle/tools';
+import { authUsers } from '@mantle/db';
 import {
   TODO_PRIORITIES,
   TODO_STATUSES,
@@ -75,8 +86,38 @@ import { and, asc, desc, eq } from 'drizzle-orm';
 
 const OWNER_ID = process.env.ALLOWED_USER_ID;
 if (!OWNER_ID) {
-  console.error('ALLOWED_USER_ID must be set so the MCP server knows whose tree to expose.');
+  console.error('[mantle-mcp] ALLOWED_USER_ID must be set so the MCP server knows whose tree to expose.');
   process.exit(1);
+}
+
+// Lightweight UUID syntax guard. Catches typos like trailing whitespace
+// or extra characters in .env that would otherwise sneak past Drizzle's
+// stringly-typed eq() and silently match nothing.
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+if (!UUID_RE.test(OWNER_ID)) {
+  console.error(
+    `[mantle-mcp] ALLOWED_USER_ID '${OWNER_ID}' is not a valid UUID. Refusing to start.`,
+  );
+  process.exit(1);
+}
+
+// Verify the user actually exists. Without this, a typo in
+// ALLOWED_USER_ID would not error — it'd just scope every query to
+// "user not found", returning empty results and accepting writes that
+// no longer belong to any real owner. Cheap to check once at boot.
+{
+  const [existing] = await db
+    .select({ id: authUsers.id })
+    .from(authUsers)
+    .where(eq(authUsers.id, OWNER_ID))
+    .limit(1);
+  if (!existing) {
+    console.error(
+      `[mantle-mcp] ALLOWED_USER_ID ${OWNER_ID} does not match any auth.users row. ` +
+        `Run the web UI signup or update .env.local.`,
+    );
+    process.exit(1);
+  }
 }
 
 const server = new McpServer({ name: 'mantle', version: '0.0.1' });
@@ -875,7 +916,7 @@ server.tool(
 
 server.tool(
   'event_create',
-  'Create a calendar event. `startsAt` is an ISO 8601 timestamp. `remindMinutesBefore` controls when the Telegram reminder fires (0 = right at start). The reminder lands in the owner\'s most-recent allowed Telegram DM.',
+  'Create a calendar event. `startsAt` is an ISO 8601 instant. `remindMinutesBefore` controls when the Telegram reminder fires (0 = right at start). The reminder lands in the owner\'s most-recent allowed Telegram DM. `timezone` is an optional IANA tz (e.g. "Africa/Johannesburg") used to format the reminder message — the storage is always UTC.',
   {
     title: z.string().min(1).max(200),
     body: z.string().max(50_000).optional(),
@@ -883,6 +924,7 @@ server.tool(
     endsAt: z.string().datetime().nullable().optional(),
     location: z.string().max(200).nullable().optional(),
     remindMinutesBefore: z.number().int().min(0).max(60 * 24 * 30).optional(),
+    timezone: z.string().max(64).optional(),
     tags: z.array(z.string()).optional(),
   },
   async (args) => {
@@ -893,7 +935,7 @@ server.tool(
 
 server.tool(
   'event_update',
-  'Update a calendar event. If you move `startsAt` or `remindMinutesBefore` and the new reminder time is still in the future, a previously-sent reminder will fire again.',
+  'Update a calendar event. If you move `startsAt` or `remindMinutesBefore` and the new reminder time is still in the future, a previously-sent reminder will fire again. Pass `timezone` (IANA tz) to change how the reminder message formats the time.',
   {
     id: z.string(),
     title: z.string().min(1).max(200).optional(),
@@ -902,6 +944,7 @@ server.tool(
     endsAt: z.string().datetime().nullable().optional(),
     location: z.string().max(200).nullable().optional(),
     remindMinutesBefore: z.number().int().min(0).max(60 * 24 * 30).optional(),
+    timezone: z.string().max(64).optional(),
     tags: z.array(z.string()).optional(),
   },
   async ({ id, ...rest }) => {

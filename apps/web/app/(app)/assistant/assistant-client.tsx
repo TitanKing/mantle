@@ -1,6 +1,8 @@
 'use client';
 
 import { useEffect, useRef, useState } from 'react';
+import ReactMarkdown from 'react-markdown';
+import remarkGfm from 'remark-gfm';
 
 type Message = {
   id: string;
@@ -113,7 +115,11 @@ export function AssistantClient({
                       : 'rounded-tl-sm bg-muted text-foreground')
                   }
                 >
-                  <p className="whitespace-pre-wrap">{m.text}</p>
+                  <div className="prose prose-sm dark:prose-invert max-w-none [&>:first-child]:mt-0 [&>:last-child]:mb-0 [&_pre]:bg-background/60 [&_pre]:text-xs [&_code]:text-xs">
+                    <ReactMarkdown remarkPlugins={[remarkGfm]}>
+                      {m.text}
+                    </ReactMarkdown>
+                  </div>
                   <div className="mt-1 flex items-baseline gap-2 text-[10px] text-muted-foreground">
                     <span>{new Date(m.createdAt).toLocaleTimeString()}</span>
                     {m.model && <code className="font-mono">{m.model}</code>}

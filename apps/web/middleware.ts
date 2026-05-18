@@ -62,9 +62,15 @@ export async function middleware(req: NextRequest) {
 
   const secret = process.env.SESSION_SECRET;
   if (!secret || secret.length < 32) {
-    const url = new URL('/login', req.url);
-    url.searchParams.set('error', 'Server is missing SESSION_SECRET.');
-    return NextResponse.redirect(url);
+    // Misconfig: log server-side, return a generic 500. Never put config
+    // details in the URL — they end up in browser history, referer
+    // headers, and access logs. Operator sees the real reason in stderr;
+    // the user sees a neutral page.
+    console.error('[middleware] SESSION_SECRET missing or <32 chars; refusing all requests');
+    return new NextResponse('Service unavailable', {
+      status: 500,
+      headers: { 'Cache-Control': 'no-store' },
+    });
   }
 
   const token = req.cookies.get(SESSION_COOKIE_NAME)?.value;

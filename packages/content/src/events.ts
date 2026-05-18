@@ -30,6 +30,12 @@ export type EventRow = {
   remindMinutesBefore: number;
   remindAt: string;
   reminderSentAt: string | null;
+  /** IANA timezone (e.g. "Africa/Johannesburg") captured from the
+   *  client at create time. Used for display only — `starts_at` is
+   *  always a UTC instant so the reminder fires at the right moment
+   *  regardless of where the agent process or DB run. Defaults to
+   *  'UTC' if the client didn't supply one. */
+  timezone: string;
   tags: string[];
   summary: string | null;
   createdAt: string;
@@ -54,6 +60,7 @@ function rowOf(n: Node): EventRow {
     remindMinutesBefore: remind,
     remindAt,
     reminderSentAt: typeof d.reminder_sent_at === 'string' ? d.reminder_sent_at : null,
+    timezone: typeof d.timezone === 'string' && d.timezone.length > 0 ? d.timezone : 'UTC',
     tags: n.tags ?? [],
     summary: typeof d.summary === 'string' ? d.summary : null,
     createdAt: n.createdAt.toISOString(),
@@ -130,8 +137,25 @@ export type CreateEventInput = {
   endsAt?: string | null;
   location?: string | null;
   remindMinutesBefore?: number;
+  /** IANA tz string from the client (e.g. `Intl.DateTimeFormat().
+   *  resolvedOptions().timeZone`). Display only; falls back to 'UTC'. */
+  timezone?: string;
   tags?: string[];
 };
+
+/** Defence-in-depth: ensure the string is a real IANA zone before we
+ *  store it. Anything we don't recognise falls back to 'UTC' so we
+ *  never end up writing junk that crashes the reminder formatter. */
+function sanitiseTimezone(tz: string | undefined): string {
+  if (!tz || typeof tz !== 'string' || tz.length > 64) return 'UTC';
+  try {
+    // The constructor throws RangeError on an invalid IANA name.
+    new Intl.DateTimeFormat('en-US', { timeZone: tz });
+    return tz;
+  } catch {
+    return 'UTC';
+  }
+}
 
 function computeRemindAt(startsAt: string, minutesBefore: number): string {
   return new Date(new Date(startsAt).getTime() - minutesBefore * 60_000).toISOString();
@@ -149,6 +173,7 @@ export async function createEvent(ownerId: string, input: CreateEventInput): Pro
     starts_at: startsAt.toISOString(),
     remind_minutes_before: remindMinutes,
     remind_at: computeRemindAt(startsAt.toISOString(), remindMinutes),
+    timezone: sanitiseTimezone(input.timezone),
   };
   if (input.endsAt) {
     const endsAt = new Date(input.endsAt);
@@ -210,6 +235,7 @@ export async function updateEvent(
   if (input.remindMinutesBefore !== undefined) {
     newData.remind_minutes_before = Math.max(0, Math.floor(input.remindMinutesBefore));
   }
+  if (input.timezone !== undefined) newData.timezone = sanitiseTimezone(input.timezone);
   // Recompute remind_at if starts_at OR lead time moved. Clear
   // reminder_sent_at when the reminder time itself moves into the
   // future, so the worker fires the new ping.
