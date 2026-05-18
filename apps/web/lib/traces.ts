@@ -6,36 +6,23 @@ import {
   traces,
   type TraceStep,
 } from '@mantle/db';
+import type {
+  TraceDetail,
+  TraceFilter,
+  TraceStepSummary,
+  TraceSummary,
+} from './traces-format';
 
 /**
  * Read-only helpers for /traces. Owner-scoped — pass the user's id.
+ *
+ * Pure types + format helpers live in `./traces-format` so client
+ * components can pull them in without dragging postgres-js into the
+ * browser bundle.
  */
 
-export type TraceSummary = {
-  id: string;
-  kind: string;
-  status: string;
-  startedAt: string;
-  finishedAt: string | null;
-  durationMs: number | null;
-  costMicroUsd: number;
-  tokensIn: number;
-  tokensOut: number;
-  tokensCacheRead: number;
-  stepCount: number;
-  subjectKind: string | null;
-  subjectId: string | null;
-  agentName: string | null;
-  agentSlug: string | null;
-  error: string | null;
-};
-
-export type TraceFilter = {
-  kinds?: string[];
-  statuses?: string[];
-  sinceHours?: number;
-  limit?: number;
-};
+export type { TraceSummary, TraceFilter, TraceStepSummary, TraceDetail } from './traces-format';
+export { formatMicroUsd, formatDuration } from './traces-format';
 
 export async function listTraces(userId: string, filter: TraceFilter = {}): Promise<TraceSummary[]> {
   const limit = Math.min(filter.limit ?? 50, 500);
@@ -96,26 +83,6 @@ export async function listTraces(userId: string, filter: TraceFilter = {}): Prom
   }));
 }
 
-export type TraceDetail = TraceSummary & {
-  data: Record<string, unknown>;
-  steps: TraceStepSummary[];
-};
-
-export type TraceStepSummary = {
-  id: string;
-  parentStepId: string | null;
-  ordinal: number;
-  name: string;
-  kind: string;
-  status: string;
-  startedAt: string;
-  finishedAt: string | null;
-  durationMs: number | null;
-  input: Record<string, unknown>;
-  output: Record<string, unknown>;
-  meta: Record<string, unknown>;
-  error: string | null;
-};
 
 export async function getTrace(userId: string, traceId: string): Promise<TraceDetail | null> {
   const [t] = await db
@@ -189,21 +156,6 @@ function stepSummary(s: TraceStep): TraceStepSummary {
     meta: (s.meta ?? {}) as Record<string, unknown>,
     error: s.error,
   };
-}
-
-export function formatMicroUsd(microUsd: number): string {
-  if (microUsd === 0) return '$0';
-  const usd = microUsd / 1_000_000;
-  if (usd >= 1) return `$${usd.toFixed(2)}`;
-  if (usd >= 0.01) return `$${usd.toFixed(3)}`;
-  return `$${usd.toFixed(4)}`;
-}
-
-export function formatDuration(ms: number | null): string {
-  if (ms == null) return '—';
-  if (ms < 1000) return `${ms}ms`;
-  if (ms < 60_000) return `${(ms / 1000).toFixed(1)}s`;
-  return `${(ms / 60_000).toFixed(1)}m`;
 }
 
 // silence unused-import in tree-shake scenarios

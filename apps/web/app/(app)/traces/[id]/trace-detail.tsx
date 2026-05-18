@@ -11,8 +11,8 @@ import {
 } from '@xyflow/react';
 import dagre from 'dagre';
 import '@xyflow/react/dist/style.css';
-import type { TraceDetail as TraceDetailType, TraceStepSummary } from '@/lib/traces';
-import { formatDuration } from '@/lib/traces';
+import type { TraceDetail as TraceDetailType, TraceStepSummary } from '@/lib/traces-format';
+import { formatDuration } from '@/lib/traces-format';
 
 const NODE_W = 260;
 const NODE_H = 80;
