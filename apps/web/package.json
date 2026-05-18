@@ -11,13 +11,15 @@
     "typecheck": "tsc --noEmit",
     "worker:dev": "tsx --watch --env-file-if-exists=./.env.local workers/email-sync.ts",
     "worker:telegram:dev": "tsx --watch --env-file-if-exists=./.env.local workers/telegram-poll.ts",
-    "seed:telegram": "tsx --env-file-if-exists=./.env.local scripts/seed-telegram.ts"
+    "seed:telegram": "tsx --env-file-if-exists=./.env.local scripts/seed-telegram.ts",
+    "extract:backfill": "tsx --env-file-if-exists=./.env.local scripts/extract-backfill.ts"
   },
   "dependencies": {
     "@mantle/api-keys": "workspace:*",
     "@mantle/crypto": "workspace:*",
     "@mantle/db": "workspace:*",
     "@mantle/email": "workspace:*",
+    "@mantle/embeddings": "workspace:*",
     "@mantle/rules": "workspace:*",
     "@mantle/search": "workspace:*",
     "@mantle/storage": "workspace:*",

@@ -19,8 +19,12 @@ const MemoryConfig = z
     history_limit: z.number().int().min(0).max(500).optional(),
     history_window_hours: z.number().min(0).max(24 * 365).nullable().optional(),
     digest_limit: z.number().int().min(0).max(20).optional(),
+    fact_limit: z.number().int().min(0).max(100).optional(),
+    content_hit_limit: z.number().int().min(0).max(20).optional(),
     summarize_threshold: z.number().int().min(1).max(10_000).optional(),
     summarize_batch: z.number().int().min(1).max(1_000).optional(),
+    extract_types: z.array(z.string().min(1).max(64)).max(32).optional(),
+    extract_facts: z.boolean().optional(),
   })
   .strict();
 

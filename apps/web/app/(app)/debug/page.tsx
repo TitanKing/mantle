@@ -1,18 +1,29 @@
 import { requireOwner } from '@/lib/auth';
-import { listAgentActivity, listDigests, listTelegramChats } from '@/lib/debug';
+import {
+  contentIndexCoverage,
+  listAgentActivity,
+  listDigests,
+  listFacts,
+  listPersonaNotes,
+  listTelegramChats,
+} from '@/lib/debug';
 
 /**
  * Operator's eye on the system: what has the summarizer produced, which
- * Telegram chats are about to roll up, which agents are warm.
+ * Telegram chats are about to roll up, which agents are warm, what facts
+ * the extractor has captured, content_index coverage, persona notes.
  *
  * Pure server-rendered, no client JS — refresh the page for fresh data.
  */
 export default async function DebugPage() {
   const user = await requireOwner();
-  const [digests, chats, agents] = await Promise.all([
+  const [digests, chats, agents, factRows, coverage, personaNotes] = await Promise.all([
     listDigests(user.id, 25),
     listTelegramChats(user.id),
     listAgentActivity(user.id),
+    listFacts(user.id, 25),
+    contentIndexCoverage(user.id),
+    listPersonaNotes(user.id),
   ]);
 
   return (
@@ -63,6 +74,135 @@ export default async function DebugPage() {
               </li>
             ))}
           </ul>
+        )}
+      </section>
+
+      {/* ─── Recent facts ───────────────────────────────────────────────── */}
+      <section className="space-y-3">
+        <div className="flex items-baseline justify-between">
+          <h2 className="text-sm font-semibold uppercase tracking-wider text-muted-foreground">
+            Recent facts (profile)
+          </h2>
+          <span className="text-xs text-muted-foreground">{factRows.length} shown</span>
+        </div>
+
+        {factRows.length === 0 ? (
+          <p className="rounded-md border border-dashed border-border bg-muted/30 px-4 py-6 text-sm text-muted-foreground">
+            No facts yet. Set up an <code>extractor</code> agent at{' '}
+            <a href="/settings/agents" className="underline">/settings/agents</a> and
+            ingest some content (or run <code>pnpm extract:backfill</code>).
+          </p>
+        ) : (
+          <ul className="divide-y divide-border rounded-md border border-border">
+            {factRows.map((f) => (
+              <li key={f.id} className="px-3 py-2 text-sm">
+                <div className="flex flex-wrap items-baseline gap-x-2 gap-y-0.5 text-xs text-muted-foreground">
+                  <span className="rounded-sm bg-muted px-1.5 py-0.5 uppercase tracking-wider">
+                    {f.kind}
+                  </span>
+                  {f.entityName && (
+                    <span>
+                      <strong>{f.entityName}</strong>{' '}
+                      <span className="text-muted-foreground/70">({f.entityKind})</span>
+                    </span>
+                  )}
+                  {f.confidence < 1 && (
+                    <span className="text-amber-700 dark:text-amber-300">
+                      confidence {f.confidence.toFixed(2)}
+                    </span>
+                  )}
+                  {f.sourceTitle && (
+                    <span className="text-muted-foreground/70">
+                      ← {f.sourceTitle.slice(0, 40)}
+                    </span>
+                  )}
+                  <span className="ml-auto">{fmtRelative(f.createdAt)}</span>
+                </div>
+                <p className="mt-1 text-sm">{f.content}</p>
+              </li>
+            ))}
+          </ul>
+        )}
+      </section>
+
+      {/* ─── Content index coverage ────────────────────────────────────── */}
+      <section className="space-y-3">
+        <h2 className="text-sm font-semibold uppercase tracking-wider text-muted-foreground">
+          Content index coverage
+        </h2>
+        <div className="rounded-md border border-border p-3 text-sm">
+          {coverage.total === 0 ? (
+            <p className="text-muted-foreground">No content nodes yet.</p>
+          ) : (
+            <>
+              <div className="flex items-baseline justify-between">
+                <span>
+                  <strong>{coverage.indexed}</strong> / {coverage.total} indexed{' '}
+                  <span className="text-muted-foreground">
+                    ({((coverage.indexed / Math.max(1, coverage.total)) * 100).toFixed(0)}%)
+                  </span>
+                </span>
+                {coverage.indexed < coverage.total && (
+                  <span className="text-xs text-amber-700 dark:text-amber-300">
+                    Run <code>pnpm extract:backfill</code> to catch up.
+                  </span>
+                )}
+              </div>
+              <ul className="mt-3 grid gap-1 text-xs text-muted-foreground sm:grid-cols-2">
+                {coverage.byType.map((row) => {
+                  const pct = (row.indexed / Math.max(1, row.total)) * 100;
+                  return (
+                    <li key={row.type} className="flex items-baseline justify-between gap-3">
+                      <span>
+                        <code className="font-mono">{row.type}</code> ·{' '}
+                        <strong>{row.indexed}</strong>/{row.total}
+                      </span>
+                      <span className={pct === 100 ? 'text-emerald-700 dark:text-emerald-300' : ''}>
+                        {pct.toFixed(0)}%
+                      </span>
+                    </li>
+                  );
+                })}
+              </ul>
+            </>
+          )}
+        </div>
+      </section>
+
+      {/* ─── Persona notes ──────────────────────────────────────────────── */}
+      <section className="space-y-3">
+        <h2 className="text-sm font-semibold uppercase tracking-wider text-muted-foreground">
+          Persona notes
+        </h2>
+        {personaNotes.length === 0 ? (
+          <p className="rounded-md border border-dashed border-border bg-muted/30 px-4 py-6 text-sm text-muted-foreground">
+            No persona notes yet. Set up a <code>reflector</code> agent at{' '}
+            <a href="/settings/agents" className="underline">/settings/agents</a> and
+            it will start observing dialog signals every 10 minutes.
+          </p>
+        ) : (
+          <div className="space-y-3">
+            {personaNotes.map((p) => (
+              <div key={p.agentId} className="rounded-md border border-border p-3 text-sm">
+                <div className="text-xs text-muted-foreground">
+                  <strong>{p.agentName}</strong> / {p.agentSlug} — {p.notes.length} note{p.notes.length === 1 ? '' : 's'}
+                </div>
+                <ul className="mt-2 space-y-1">
+                  {p.notes.map((n, i) => (
+                    <li key={i} className="flex items-baseline gap-2">
+                      <span className="rounded-sm bg-muted px-1.5 py-0.5 text-[10px] uppercase tracking-wider text-muted-foreground">
+                        {n.kind}
+                      </span>
+                      <span className="text-sm">{n.content}</span>
+                      <span className="ml-auto text-xs text-muted-foreground">
+                        {fmtRelative(n.at)}
+                      </span>
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            ))}
+          </div>
         )}
       </section>
 

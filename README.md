@@ -229,10 +229,28 @@ caches the prefix for 5 minutes and reuses it on the next turn at ~10% the
 cost. The agent logs cache-read tokens at INFO level so you can confirm
 it's working.
 
-What v1 doesn't have yet (see [`docs/architecture.md`](./docs/architecture.md#16-known-sharp-edges--future-work)):
-Semantic retrieval over older content, per-chat agent overrides, multi-turn
-cache breakpoint on the raw-history block, cost ceilings, Tier-3 fact
-consolidation (Mem0-style).
+**Memory layer (six tiers).** All shipped: `persona` + `recent_turns` +
+`conversation_digest` + `profile` (dedup'd facts with ADD/UPDATE/DELETE
+classifier) + `content_index` (per-item summary + embedding) +
+`content_store`. Plus the embedding subsystem (`@mantle/embeddings`,
+OpenRouter-routed, hash-cached) and reflector for `persona_notes`
+evolution. Read [`docs/memory.md`](./docs/memory.md) for the full design
+and the layer-to-schema-to-agent map.
+
+To bootstrap memory on existing content:
+
+```bash
+pnpm -C apps/web extract:backfill                  # all eligible nodes
+pnpm -C apps/web extract:backfill --types=note     # restrict
+pnpm -C apps/web extract:backfill --since=2025-01-01
+```
+
+The agent must be running — the script just feeds `pg_notify('node_ingested')`;
+the listener does the work.
+
+What still isn't there: entity-anchored retrieval / graph traversal API,
+cost ceilings on extractor runs, web-assistant surface. See
+[`docs/architecture.md`](./docs/architecture.md#16-known-sharp-edges--future-work).
 
 ## Docs
 

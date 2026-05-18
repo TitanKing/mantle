@@ -620,27 +620,31 @@ Each step delivers value standalone.
 
 1. **`recent_turns`** — DONE (migration 0012, agent runner).
 2. **`conversation_digest`** — DONE (migration 0013, summarizer agent).
-3. **`content_index` population** — backfill `data.summary` and
-   `embedding` on existing `nodes`. Extractor agent runs at ingest time
-   on new content. Responder gains a basic `search_content_index()` call
-   it can invoke when the user references stored content. **Next.**
-4. **`profile` v1 (facts only, no graph)** — `facts` table, extractor
-   produces facts at ingest using a ported ADD/UPDATE/DELETE/NOOP
-   classifier prompt. Responder retrieves top-K relevant facts and
-   prepends them. (Migration 0014.)
-5. **`persona` evolution** — `persona_notes` storage + a small
-   reflective agent that watches conversations for relationship signals
-   ("Jason said 'too verbose' on date X") and appends to notes. Stays
-   small; never overwrites the core seed prompt.
-6. **`profile` v2 (entities + graph)** — `entities` and `entity_edges`
-   tables, entity-anchored retrieval, hybrid vector+graph filtering.
-   (Migration 0015+.)
-7. **Web assistant surface** — same Sarah, browser chat. Memory is
-   shared; surface is new. Likely a new node type for the conversation
-   stream, or extending the telegram_messages model into a generic
-   `conversation_messages` table.
+3. **`packages/embeddings` + embedding_cache** — DONE (migration 0014).
+   Shared `embed()`/`embedBatch()` via OpenRouter; content-hash cache
+   makes re-embedding identical strings free.
+4. **`facts` table + extractor agent (content_index + profile)** — DONE
+   (migrations 0015/0016/0017/0018). Extractor runs on
+   `pg_notify('node_ingested')`, writes summary + embedding to
+   `nodes.data` / `nodes.embedding`, runs the ADD/UPDATE/DELETE
+   classifier against existing facts, reconciles entity mentions to
+   `entities` + adds `mentioned_in` edges. Configured via
+   `memory_config.extract_types` (default `['note']`).
+5. **Responder retrieves the full stack** — DONE. Embeds the inbound
+   message once, vector-searches facts + content_index, prepends them
+   with three Anthropic cache breakpoints (persona+facts / digests /
+   content hits + turns).
+6. **`persona` evolution** — DONE. Reflector agent runs every 10 min,
+   appends to `agents.persona_notes` when it spots a style preference,
+   relationship signal, or correction in recent dialog. Capped at 100
+   notes per agent (oldest aged out FIFO).
+7. **`entities` + graph traversal API** — entities + entity_edges
+   tables exist (migration 0016); entity-anchored retrieval helpers
+   and the MCP `search` traversal extension are next.
+8. **Web assistant surface** — same agent, browser chat. Memory is
+   shared; surface is new.
 
-Roughly a weekend per step.
+Roughly a weekend per remaining step.
 
 ---
 
@@ -668,18 +672,30 @@ Roughly a weekend per step.
 
 ## 10. Reading the code
 
-Live today:
-- [`apps/agent/src/main.ts`](../apps/agent/src/main.ts) — responder +
-  context assembly (`loadContext`).
-- [`apps/agent/src/summarizer.ts`](../apps/agent/src/summarizer.ts) —
-  `conversation_digest` production.
-- [`apps/agent/src/messages.ts`](../apps/agent/src/messages.ts) —
-  `buildChatMessages` with cache breakpoints.
+Live today, in order of first read:
 
-To come (read in this order once shipped):
-1. `packages/db/src/schema/facts.ts` — the shape of a fact.
-2. `apps/agent/src/extractor.ts` — what runs at ingest, what prompts
-   are used, the dedup classifier.
-3. `apps/agent/src/main.ts` `loadContext()` extension — how `profile`
-   and `content_index` blend with the rest of the layers.
-4. `packages/search/src/index.ts` — hybrid vector + graph retrieval.
+1. [`packages/db/src/schema/facts.ts`](../packages/db/src/schema/facts.ts) —
+   shape of a fact (factual / episodic / semantic / preference).
+2. [`packages/db/src/schema/entities.ts`](../packages/db/src/schema/entities.ts)
+   + [`entity-edges.ts`](../packages/db/src/schema/entity-edges.ts) —
+   the graph axis.
+3. [`packages/embeddings/src/index.ts`](../packages/embeddings/src/index.ts) —
+   shared `embed`/`embedBatch` via OpenRouter, with hash-keyed cache.
+4. [`apps/agent/src/extractor.ts`](../apps/agent/src/extractor.ts) —
+   per-item summary + embedding + facts + entity reconciliation. The
+   ADD/UPDATE/DELETE/NOOP classifier prompt lives in here.
+5. [`apps/agent/src/main.ts`](../apps/agent/src/main.ts) `loadContext()` —
+   how persona / facts / digests / content_hits / turns get assembled
+   into the responder's prompt.
+6. [`apps/agent/src/messages.ts`](../apps/agent/src/messages.ts) —
+   `buildChatMessages` with three Anthropic cache breakpoints.
+7. [`apps/agent/src/summarizer.ts`](../apps/agent/src/summarizer.ts) —
+   `conversation_digest` production from `recent_turns`.
+8. [`apps/agent/src/reflector.ts`](../apps/agent/src/reflector.ts) —
+   persona_notes evolution from dialog signals.
+9. [`apps/web/scripts/extract-backfill.ts`](../apps/web/scripts/extract-backfill.ts) —
+   re-fires `node_ingested` for existing nodes missing summary/embedding.
+
+The full lookup at `/debug` shows recent digests, facts, content_index
+coverage, persona_notes, Telegram chat state, and agent activity in
+one server-rendered page.

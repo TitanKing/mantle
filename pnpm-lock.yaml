@@ -103,6 +103,9 @@ importers:
       '@mantle/email':
         specifier: workspace:*
         version: link:../../packages/email
+      '@mantle/embeddings':
+        specifier: workspace:*
+        version: link:../../packages/embeddings
       '@mantle/rules':
         specifier: workspace:*
         version: link:../../packages/rules

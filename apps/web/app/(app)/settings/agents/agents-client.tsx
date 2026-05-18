@@ -41,8 +41,12 @@ type MemoryConfig = {
   history_limit?: number;
   history_window_hours?: number | null;
   digest_limit?: number;
+  fact_limit?: number;
+  content_hit_limit?: number;
   summarize_threshold?: number;
   summarize_batch?: number;
+  extract_types?: string[];
+  extract_facts?: boolean;
 };
 
 type AgentSummary = {
@@ -81,6 +85,43 @@ Do NOT include conversational filler ("the user said hi"). Be specific — write
 
 This summary will be loaded into the assistant's context on future replies, so write it as a reference, not a narrative.`;
 
+const DEFAULT_EXTRACTOR_PROMPT = `You are a memory extractor for a personal AI assistant. You will be given the title and body of a piece of content (a note, document, email, etc.) belonging to a single user. Your job is to produce TWO outputs:
+
+1. A 1-2 sentence summary of what this content is about. Be specific — names, dates, projects, numbers. Avoid filler.
+
+2. A list of facts about the user or their world that this content reveals. Each fact is a single declarative sentence with the entities mentioned (people, projects, places, organisations, events) for cross-referencing.
+
+Output STRICT JSON, no markdown:
+
+{
+  "summary": "<1-2 sentences>",
+  "facts": [{ "content": "<sentence>", "kind": "factual|episodic|semantic|preference", "confidence": 0.0-1.0, "entities": [{ "name": "...", "kind": "person|project|place|org|event" }] }],
+  "entities": [{ "name": "...", "kind": "..." }]
+}
+
+Guidelines:
+- factual = verifiable claim with a value.
+- episodic = something that happened on a date.
+- semantic = a stable abstract identity.
+- preference = how the user prefers to be helped.
+- Be conservative on confidence — 1.0 only for explicit; 0.5-0.8 for reasonable inferences.
+- DO NOT extract secrets, passwords, or credentials.`;
+
+const DEFAULT_REFLECTOR_PROMPT = `You are a reflector for a personal AI assistant. You will be given a transcript of recent exchanges + the assistant's current persona_notes. Spot NEW signals worth remembering, AND ONLY new ones.
+
+Look for: style hints (response format preferences), relationship notes (how user and assistant interact), corrections (when the user said something is wrong).
+
+Output STRICT JSON, no markdown:
+
+{ "new_notes": [{ "kind": "style|relationship|correction", "content": "<single declarative sentence>" }] }
+
+Rules:
+- Skip anything already covered by an existing persona_note.
+- Be specific — "Jason prefers terse, no-bullet replies" beats "user likes brevity".
+- Don't invent — only return notes grounded in the transcript.
+- Return an EMPTY new_notes array if nothing notable surfaces.
+- Don't include trivia about content (those belong in facts, not persona).`;
+
 /** Defaults for a fresh agent row, keyed by role. */
 function defaultsForRole(role: Role): {
   model: string;
@@ -89,6 +130,9 @@ function defaultsForRole(role: Role): {
   digestLimit: string;
   summarizeThreshold: string;
   summarizeBatch: string;
+  extractTypes: string;
+  factLimit: string;
+  contentHitLimit: string;
 } {
   if (role === 'summarizer') {
     return {
@@ -98,6 +142,35 @@ function defaultsForRole(role: Role): {
       digestLimit: '0',
       summarizeThreshold: '30',
       summarizeBatch: '20',
+      extractTypes: '',
+      factLimit: '0',
+      contentHitLimit: '0',
+    };
+  }
+  if (role === 'extractor') {
+    return {
+      model: 'anthropic/claude-haiku-4.5',
+      systemPrompt: DEFAULT_EXTRACTOR_PROMPT,
+      historyLimit: '0',
+      digestLimit: '0',
+      summarizeThreshold: '30',
+      summarizeBatch: '20',
+      extractTypes: 'note',
+      factLimit: '0',
+      contentHitLimit: '0',
+    };
+  }
+  if (role === 'reflector') {
+    return {
+      model: 'anthropic/claude-haiku-4.5',
+      systemPrompt: DEFAULT_REFLECTOR_PROMPT,
+      historyLimit: '0',
+      digestLimit: '0',
+      summarizeThreshold: '30',
+      summarizeBatch: '20',
+      extractTypes: '',
+      factLimit: '0',
+      contentHitLimit: '0',
     };
   }
   return {
@@ -107,6 +180,9 @@ function defaultsForRole(role: Role): {
     digestLimit: '3',
     summarizeThreshold: '30',
     summarizeBatch: '20',
+    extractTypes: '',
+    factLimit: '10',
+    contentHitLimit: '3',
   };
 }
 
@@ -123,8 +199,12 @@ type FormState = {
   historyLimit: string;
   historyWindowHours: string;
   digestLimit: string;
+  factLimit: string;
+  contentHitLimit: string;
   summarizeThreshold: string;
   summarizeBatch: string;
+  extractTypes: string;
+  extractFacts: boolean;
   temperature: string;
   maxTokens: string;
 };
@@ -144,8 +224,12 @@ function emptyForm(role: Role = 'responder'): FormState {
     historyLimit: d.historyLimit,
     historyWindowHours: '',
     digestLimit: d.digestLimit,
+    factLimit: d.factLimit,
+    contentHitLimit: d.contentHitLimit,
     summarizeThreshold: d.summarizeThreshold,
     summarizeBatch: d.summarizeBatch,
+    extractTypes: d.extractTypes,
+    extractFacts: true,
     temperature: '0.7',
     maxTokens: '',
   };
@@ -166,8 +250,12 @@ function formFromAgent(a: AgentSummary): FormState {
     historyLimit: a.memoryConfig.history_limit?.toString() ?? d.historyLimit,
     historyWindowHours: a.memoryConfig.history_window_hours?.toString() ?? '',
     digestLimit: a.memoryConfig.digest_limit?.toString() ?? d.digestLimit,
+    factLimit: a.memoryConfig.fact_limit?.toString() ?? d.factLimit,
+    contentHitLimit: a.memoryConfig.content_hit_limit?.toString() ?? d.contentHitLimit,
     summarizeThreshold: a.memoryConfig.summarize_threshold?.toString() ?? d.summarizeThreshold,
     summarizeBatch: a.memoryConfig.summarize_batch?.toString() ?? d.summarizeBatch,
+    extractTypes: a.memoryConfig.extract_types?.join(',') ?? d.extractTypes,
+    extractFacts: a.memoryConfig.extract_facts ?? true,
     temperature: a.params.temperature?.toString() ?? '0.7',
     maxTokens: a.params.max_tokens?.toString() ?? '',
   };
@@ -247,7 +335,9 @@ export function AgentsClient({
       const isUntouchedPrompt =
         f.systemPrompt === prevDefaults.systemPrompt ||
         f.systemPrompt === DEFAULT_SYSTEM_PROMPT ||
-        f.systemPrompt === DEFAULT_SUMMARIZER_PROMPT;
+        f.systemPrompt === DEFAULT_SUMMARIZER_PROMPT ||
+        f.systemPrompt === DEFAULT_EXTRACTOR_PROMPT ||
+        f.systemPrompt === DEFAULT_REFLECTOR_PROMPT;
       return {
         ...f,
         role: next,
@@ -270,15 +360,27 @@ export function AgentsClient({
       const n = parseFloat(win);
       if (!Number.isNaN(n)) memoryConfig.history_window_hours = n;
     }
-    if (form.role === 'responder') {
+    if (form.role === 'responder' || form.role === 'assistant') {
       const dl = parseInt(form.digestLimit, 10);
       if (!Number.isNaN(dl)) memoryConfig.digest_limit = dl;
+      const fl = parseInt(form.factLimit, 10);
+      if (!Number.isNaN(fl)) memoryConfig.fact_limit = fl;
+      const cl = parseInt(form.contentHitLimit, 10);
+      if (!Number.isNaN(cl)) memoryConfig.content_hit_limit = cl;
     }
     if (form.role === 'summarizer') {
       const st = parseInt(form.summarizeThreshold, 10);
       if (!Number.isNaN(st)) memoryConfig.summarize_threshold = st;
       const sb = parseInt(form.summarizeBatch, 10);
       if (!Number.isNaN(sb)) memoryConfig.summarize_batch = sb;
+    }
+    if (form.role === 'extractor') {
+      const types = form.extractTypes
+        .split(',')
+        .map((s) => s.trim())
+        .filter(Boolean);
+      memoryConfig.extract_types = types.length > 0 ? types : ['note'];
+      memoryConfig.extract_facts = form.extractFacts;
     }
 
     const params: { temperature?: number; max_tokens?: number } = {};
@@ -630,21 +732,71 @@ export function AgentsClient({
                 </div>
               </div>
 
-              {form.role === 'responder' && (
-                <div className="space-y-1.5">
-                  <Label htmlFor="digestLimit">Digest count</Label>
-                  <Input
-                    id="digestLimit"
-                    type="number"
-                    value={form.digestLimit}
-                    onChange={(e) => setForm((f) => ({ ...f, digestLimit: e.target.value }))}
-                    min={0}
-                    step={1}
-                  />
-                  <p className="text-xs text-muted-foreground">
-                    How many recent Tier-2 digests to prepend to the prompt. Default 3.
-                    Requires a <code>summarizer</code> agent to exist and produce digests.
-                  </p>
+              {(form.role === 'responder' || form.role === 'assistant') && (
+                <div className="grid gap-3 sm:grid-cols-3">
+                  <div className="space-y-1.5">
+                    <Label htmlFor="digestLimit">Digests</Label>
+                    <Input
+                      id="digestLimit"
+                      type="number"
+                      value={form.digestLimit}
+                      onChange={(e) => setForm((f) => ({ ...f, digestLimit: e.target.value }))}
+                      min={0}
+                      step={1}
+                    />
+                    <p className="text-xs text-muted-foreground">Default 3</p>
+                  </div>
+                  <div className="space-y-1.5">
+                    <Label htmlFor="factLimit">Facts</Label>
+                    <Input
+                      id="factLimit"
+                      type="number"
+                      value={form.factLimit}
+                      onChange={(e) => setForm((f) => ({ ...f, factLimit: e.target.value }))}
+                      min={0}
+                      step={1}
+                    />
+                    <p className="text-xs text-muted-foreground">Default 10</p>
+                  </div>
+                  <div className="space-y-1.5">
+                    <Label htmlFor="contentHitLimit">Content hits</Label>
+                    <Input
+                      id="contentHitLimit"
+                      type="number"
+                      value={form.contentHitLimit}
+                      onChange={(e) => setForm((f) => ({ ...f, contentHitLimit: e.target.value }))}
+                      min={0}
+                      step={1}
+                    />
+                    <p className="text-xs text-muted-foreground">Default 3</p>
+                  </div>
+                </div>
+              )}
+
+              {form.role === 'extractor' && (
+                <div className="space-y-3">
+                  <div className="space-y-1.5">
+                    <Label htmlFor="extractTypes">Node types to process</Label>
+                    <Input
+                      id="extractTypes"
+                      value={form.extractTypes}
+                      onChange={(e) => setForm((f) => ({ ...f, extractTypes: e.target.value }))}
+                      placeholder="note"
+                    />
+                    <p className="text-xs text-muted-foreground">
+                      Comma-separated. Start with <code>note</code>; expand to
+                      <code> file, sermon, email, email_thread</code> as you wire them up.
+                      Secrets and branches are HARD-SKIPPED regardless of this setting.
+                    </p>
+                  </div>
+                  <label className="flex items-center gap-2 text-sm">
+                    <input
+                      type="checkbox"
+                      checked={form.extractFacts}
+                      onChange={(e) => setForm((f) => ({ ...f, extractFacts: e.target.checked }))}
+                    />
+                    Extract facts (uncheck for content_index population only)
+                  </label>
                 </div>
               )}
 

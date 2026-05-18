@@ -1,5 +1,14 @@
-import { and, desc, eq, sql } from 'drizzle-orm';
-import { db, agents, nodes, telegramChats, telegramMessages } from '@mantle/db';
+import { and, desc, eq, isNull, sql } from 'drizzle-orm';
+import {
+  db,
+  agents,
+  entities,
+  facts,
+  nodes,
+  telegramChats,
+  telegramMessages,
+  type PersonaNote,
+} from '@mantle/db';
 
 /**
  * Read-only helpers for the /debug page. All owner-scoped — pass the user's
@@ -142,5 +151,117 @@ export async function listAgentActivity(userId: string): Promise<AgentActivityRo
     lastUsedAt: r.lastUsedAt?.toISOString() ?? null,
     usageCount: r.usageCount ?? 0,
   }));
+}
+
+export type FactRow = {
+  id: string;
+  content: string;
+  kind: string;
+  confidence: number;
+  entityName: string | null;
+  entityKind: string | null;
+  sourceNodeId: string | null;
+  sourceTitle: string | null;
+  createdAt: string;
+};
+
+export async function listFacts(userId: string, limit = 25): Promise<FactRow[]> {
+  const rows = await db
+    .select({
+      id: facts.id,
+      content: facts.content,
+      kind: facts.kind,
+      confidence: facts.confidence,
+      entityId: facts.entityId,
+      entityName: entities.name,
+      entityKind: entities.kind,
+      sourceNodeId: facts.sourceNodeId,
+      sourceTitle: nodes.title,
+      createdAt: facts.createdAt,
+    })
+    .from(facts)
+    .leftJoin(entities, eq(facts.entityId, entities.id))
+    .leftJoin(nodes, eq(facts.sourceNodeId, nodes.id))
+    .where(and(eq(facts.ownerId, userId), isNull(facts.validTo)))
+    .orderBy(desc(facts.createdAt))
+    .limit(limit);
+
+  return rows.map((r) => ({
+    id: r.id,
+    content: r.content,
+    kind: r.kind as string,
+    confidence: r.confidence,
+    entityName: r.entityName,
+    entityKind: r.entityKind,
+    sourceNodeId: r.sourceNodeId,
+    sourceTitle: r.sourceTitle,
+    createdAt: r.createdAt.toISOString(),
+  }));
+}
+
+export type ContentIndexCoverage = {
+  total: number;
+  indexed: number;
+  byType: Array<{ type: string; total: number; indexed: number }>;
+};
+
+export async function contentIndexCoverage(userId: string): Promise<ContentIndexCoverage> {
+  const rows = await db
+    .select({
+      type: nodes.type,
+      total: sql<number>`count(*)::int`,
+      indexed: sql<number>`count(*) filter (where ${nodes.embedding} is not null and ${nodes.data}->>'summary' is not null)::int`,
+    })
+    .from(nodes)
+    .where(
+      and(
+        eq(nodes.ownerId, userId),
+        sql`${nodes.type} <> 'branch'`,
+        sql`${nodes.type} <> 'secret'`,
+        // Exclude conversation-digest notes (they're derived, not source content).
+        sql`not (${nodes.tags} @> ARRAY['conversation-digest']::text[])`,
+      ),
+    )
+    .groupBy(nodes.type);
+
+  let total = 0;
+  let indexed = 0;
+  const byType: ContentIndexCoverage['byType'] = [];
+  for (const r of rows) {
+    total += r.total ?? 0;
+    indexed += r.indexed ?? 0;
+    byType.push({ type: r.type as string, total: r.total ?? 0, indexed: r.indexed ?? 0 });
+  }
+  byType.sort((a, b) => b.total - a.total);
+  return { total, indexed, byType };
+}
+
+export type PersonaNotesRow = {
+  agentId: string;
+  agentName: string;
+  agentSlug: string;
+  notes: PersonaNote[];
+};
+
+export async function listPersonaNotes(userId: string): Promise<PersonaNotesRow[]> {
+  const rows = await db
+    .select({
+      id: agents.id,
+      name: agents.name,
+      slug: agents.slug,
+      personaNotes: agents.personaNotes,
+    })
+    .from(agents)
+    .where(and(eq(agents.ownerId, userId), eq(agents.enabled, true)))
+    .orderBy(desc(agents.priority));
+
+  return rows
+    .map((r) => ({
+      agentId: r.id,
+      agentName: r.name,
+      agentSlug: r.slug,
+      notes: (r.personaNotes ?? []) as PersonaNote[],
+    }))
+    .filter((r) => r.notes.length > 0);
 }
 
