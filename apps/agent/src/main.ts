@@ -65,8 +65,28 @@ if (!DATABASE_URL) {
 /** Per-chat in-flight tracker. Prevents two replies racing for the same chat. */
 const inflight = new Map<string, Promise<void>>();
 
-/** Fetch the active responder agent (highest priority, enabled). */
-async function resolveResponderAgent(ownerId: string): Promise<Agent | null> {
+/** Fetch the active responder agent for a chat.
+ *
+ *  Resolution order:
+ *    1. If the chat has `responder_agent_id` set AND that agent is enabled
+ *       AND its role is responder/assistant/custom, use it. (Custom because
+ *       a user may have pinned a one-off agent to a single chat.)
+ *    2. Otherwise fall back to the highest-priority enabled responder
+ *       (the global default).
+ */
+async function resolveResponderAgent(
+  ownerId: string,
+  overrideAgentId: string | null,
+): Promise<Agent | null> {
+  if (overrideAgentId) {
+    const [pinned] = await db
+      .select()
+      .from(agents)
+      .where(and(eq(agents.id, overrideAgentId), eq(agents.ownerId, ownerId), eq(agents.enabled, true)))
+      .limit(1);
+    if (pinned) return pinned;
+    // Override exists in DB but agent disabled/missing → fall through to global default.
+  }
   const [row] = await db
     .select()
     .from(agents)
@@ -248,6 +268,7 @@ async function handleMessage(messageId: string): Promise<void> {
       telegramMessageId: telegramMessages.telegramMessageId,
       fromName: telegramMessages.fromName,
       accountId: telegramMessages.accountId,
+      responderAgentId: telegramChats.responderAgentId,
     })
     .from(telegramMessages)
     .innerJoin(telegramChats, eq(telegramMessages.chatId, telegramChats.id))
@@ -286,7 +307,7 @@ async function handleMessage(messageId: string): Promise<void> {
   // Resolve the responder + key BEFORE opening a trace. Failure modes here
   // (no agent, no key) don't generate traces — there's nothing useful to
   // record about "the system was misconfigured."
-  const agent = await resolveResponderAgent(USER_ID!);
+  const agent = await resolveResponderAgent(USER_ID!, row.responderAgentId);
   if (!agent) {
     console.error(
       `[agent] no enabled responder agent — skipping ${messageId}. Create one at /settings/agents.`,

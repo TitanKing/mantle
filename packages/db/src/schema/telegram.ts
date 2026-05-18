@@ -84,6 +84,12 @@ export const telegramChats = pgTable(
     pairingCode: text('pairing_code'),
     pairingExpiresAt: timestamp('pairing_expires_at', { withTimezone: true }),
     pairingReplies: integer('pairing_replies').default(0).notNull(),
+    /** Per-chat override of which responder agent handles this chat. NULL =
+     *  fall back to global priority resolution (highest-priority enabled
+     *  responder). Cleared automatically if the referenced agent is deleted. */
+    responderAgentId: uuid('responder_agent_id').references(() => agents.id, {
+      onDelete: 'set null',
+    }),
     lastMessageAt: timestamp('last_message_at', { withTimezone: true }),
     createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
     updatedAt: timestamp('updated_at', { withTimezone: true }).defaultNow().notNull(),

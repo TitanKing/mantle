@@ -355,6 +355,10 @@ Key properties:
   `responder` rows), the highest-priority enabled one wins. Priority is a
   plain int, higher = higher priority. Switching the active responder is a
   toggle in the UI.
+- **Per-chat overrides.** A `telegram_chats` row can pin a specific agent
+  via `responder_agent_id` (migration 0020); when set + the agent is
+  enabled, that agent handles inbound for the chat. NULL falls back to
+  global priority resolution. Managed inline on the `/debug` chats table.
 - **Recent turns (`recent_turns`).** Both inbound and outbound messages
   live in `telegram_messages` now, distinguished by the `direction` column.
   The runner loads the last `memory_config.history_limit ?? 20` turns for

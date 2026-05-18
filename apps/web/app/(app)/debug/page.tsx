@@ -1,5 +1,6 @@
 import Link from 'next/link';
 import { requireOwner } from '@/lib/auth';
+import { ChatAgentOverride } from './chat-agent-override';
 import {
   contentIndexCoverage,
   listAgentActivity,
@@ -405,6 +406,7 @@ export default async function DebugPage() {
                 <tr>
                   <th className="px-3 py-2 text-left font-semibold">Chat</th>
                   <th className="px-3 py-2 text-left font-semibold">Status</th>
+                  <th className="px-3 py-2 text-left font-semibold">Agent</th>
                   <th className="px-3 py-2 text-right font-semibold">Total</th>
                   <th className="px-3 py-2 text-right font-semibold">Digested</th>
                   <th className="px-3 py-2 text-right font-semibold">Pending</th>
@@ -435,6 +437,13 @@ export default async function DebugPage() {
                         {c.allowlistStatus}
                       </span>
                     </td>
+                    <td className="px-3 py-2">
+                      <ChatAgentOverride
+                        chatId={c.id}
+                        current={c.responderAgentId}
+                        agents={agents}
+                      />
+                    </td>
                     <td className="px-3 py-2 text-right tabular-nums">{c.totalTurns}</td>
                     <td className="px-3 py-2 text-right tabular-nums text-muted-foreground">
                       {c.digested}
@@ -456,7 +465,9 @@ export default async function DebugPage() {
         <p className="text-xs text-muted-foreground">
           <strong>Pending</strong> is the count of turns not yet folded into a digest. A
           chat with pending ≥ 30 (the default summarizer threshold) is about to roll up
-          on the next inbound or outbound message.
+          on the next inbound or outbound message. <strong>Agent</strong> pins a specific
+          responder to this chat; <em>default</em> falls back to the global
+          highest-priority enabled responder.
         </p>
       </section>
 

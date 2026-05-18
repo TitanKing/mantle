@@ -77,6 +77,7 @@ export type ChatRow = {
   digested: number;
   undigested: number;
   lastActivity: string | null;
+  responderAgentId: string | null;
 };
 
 export async function listTelegramChats(userId: string): Promise<ChatRow[]> {
@@ -88,6 +89,7 @@ export async function listTelegramChats(userId: string): Promise<ChatRow[]> {
       telegramChatId: telegramChats.telegramChatId,
       allowlistStatus: telegramChats.allowlistStatus,
       lastMessageAt: telegramChats.lastMessageAt,
+      responderAgentId: telegramChats.responderAgentId,
       totalTurns: sql<number>`count(${telegramMessages.id})::int`,
       digested: sql<number>`count(${telegramMessages.id}) filter (where ${telegramMessages.digestNodeId} is not null)::int`,
       undigested: sql<number>`count(${telegramMessages.id}) filter (where ${telegramMessages.digestNodeId} is null)::int`,
@@ -108,6 +110,7 @@ export async function listTelegramChats(userId: string): Promise<ChatRow[]> {
     digested: r.digested ?? 0,
     undigested: r.undigested ?? 0,
     lastActivity: r.lastMessageAt?.toISOString() ?? null,
+    responderAgentId: r.responderAgentId,
   }));
 }
 
