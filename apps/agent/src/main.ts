@@ -573,6 +573,41 @@ async function drainPending(): Promise<void> {
   }
 }
 
+/**
+ * Boot-time recovery for the extractor debounce. Debounced work lives
+ * in an in-memory Set; a crash inside the 2-second window loses any
+ * pending node ids. This catches the case by scanning for recently-
+ * inserted nodes of an extractable type that have no summary yet, and
+ * queueing them through the same `scheduleExtract` pipeline as if a
+ * fresh `pg_notify('node_ingested')` had arrived.
+ *
+ * Scoped to the last 24h so we don't re-extract years of history if
+ * someone bumps the agent for the first time on an old DB. The
+ * extractor's own per-agent / per-type guards take it from there.
+ */
+async function drainUnextractedNodes(): Promise<void> {
+  const since = new Date(Date.now() - 24 * 60 * 60 * 1000);
+  const rows = await db
+    .select({ id: nodes.id })
+    .from(nodes)
+    .where(
+      and(
+        eq(nodes.ownerId, USER_ID!),
+        ne(nodes.type, 'branch'),
+        gte(nodes.createdAt, since),
+        isNull(nodes.embedding),
+      ),
+    )
+    .orderBy(asc(nodes.createdAt))
+    .limit(500);
+  if (rows.length === 0) {
+    console.log('[agent] drain extractor: queue empty');
+    return;
+  }
+  console.log(`[agent] drain extractor: queueing ${rows.length} unextracted node(s) from last 24h`);
+  for (const r of rows) scheduleExtract(r.id);
+}
+
 /** Debounce window for summarize_due — collapses a burst of inserts in the
  *  same chat (e.g. user message + agent reply within the same second) into
  *  one summarization check. The check itself is cheap (one indexed COUNT). */
@@ -659,15 +694,40 @@ async function main() {
   // Reflector: slow background pass every REFLECTOR_INTERVAL_MS that
   // checks for new outbound activity and appends to persona_notes when
   // something notable surfaces. No-op if no reflector agent is enabled.
+  //
+  // Backoff: a failing tick (embeddings down, OpenRouter flapping)
+  // used to retry every 10 minutes forever. Now we double the wait
+  // on each failure up to 1h, and reset on the first success.
   const REFLECTOR_INTERVAL_MS = 10 * 60 * 1000; // 10 minutes
+  const REFLECTOR_BACKOFF_CAP_MS = 60 * 60 * 1000;
+  let reflectBackoffMs = 0;
+  let reflectSkipUntil = 0;
   setInterval(() => {
-    reflect(USER_ID!).catch((err) =>
-      console.error('[agent] reflect error:', err instanceof Error ? err.message : err),
-    );
+    if (Date.now() < reflectSkipUntil) return;
+    reflect(USER_ID!)
+      .then(() => {
+        if (reflectBackoffMs > 0) {
+          console.log('[agent] reflector recovered; clearing backoff');
+        }
+        reflectBackoffMs = 0;
+        reflectSkipUntil = 0;
+      })
+      .catch((err) => {
+        reflectBackoffMs = Math.min(
+          REFLECTOR_BACKOFF_CAP_MS,
+          reflectBackoffMs === 0 ? REFLECTOR_INTERVAL_MS : reflectBackoffMs * 2,
+        );
+        reflectSkipUntil = Date.now() + reflectBackoffMs;
+        console.error(
+          `[agent] reflect error (next try in ${Math.round(reflectBackoffMs / 1000)}s):`,
+          err instanceof Error ? err.message : err,
+        );
+      });
   }, REFLECTOR_INTERVAL_MS);
-  console.log(`[agent] reflector tick every ${REFLECTOR_INTERVAL_MS / 1000}s`);
+  console.log(`[agent] reflector tick every ${REFLECTOR_INTERVAL_MS / 1000}s (with failure backoff up to 1h)`);
 
   await drainPending();
+  await drainUnextractedNodes();
 
   await new Promise<never>(() => {});
 }

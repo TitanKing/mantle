@@ -14,6 +14,7 @@ import {
 } from '@/components/ui/dialog';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
+import { useToast } from '@/components/ui/toast';
 
 type EventRow = {
   id: string;
@@ -69,6 +70,7 @@ export function EventsClient({
   initialPast: EventRow[];
 }) {
   const router = useRouter();
+  const toast = useToast();
   const [upcoming, setUpcoming] = useState(initialUpcoming);
   const [past, setPast] = useState(initialPast);
   const [open, setOpen] = useState(false);
@@ -142,7 +144,11 @@ export function EventsClient({
   const handleDelete = async (id: string) => {
     if (!confirm('Delete this event? Pending reminders will not fire.')) return;
     const res = await fetch(`/api/events/${id}`, { method: 'DELETE' });
-    if (!res.ok) return;
+    if (!res.ok) {
+      const j = await res.json().catch(() => ({}));
+      toast.error(j.error ?? `Could not delete event (${res.status})`);
+      return;
+    }
     setUpcoming((prev) => prev.filter((e) => e.id !== id));
     setPast((prev) => prev.filter((e) => e.id !== id));
     startTransition(() => router.refresh());

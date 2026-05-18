@@ -273,8 +273,11 @@ async function readNodeBodyRaw(node: typeof nodes.$inferSelect): Promise<string>
   return node.title;
 }
 
-/** Parse the extractor LLM response with sanity defaults. */
-function parseExtractorOutput(raw: string): ExtractorOutput {
+/** Parse the extractor LLM response with sanity defaults. Distinct
+ *  log lines for "the model returned bad JSON" vs "the model returned
+ *  valid JSON but no facts" — used to look identical, which made
+ *  silent prompt drift impossible to spot. */
+function parseExtractorOutput(raw: string, context?: { nodeId?: string; model?: string }): ExtractorOutput {
   // Strip ```json fences if a model adds them.
   const cleaned = raw
     .replace(/^```(?:json)?\s*/i, '')
@@ -283,7 +286,16 @@ function parseExtractorOutput(raw: string): ExtractorOutput {
   let parsed: unknown;
   try {
     parsed = JSON.parse(cleaned);
-  } catch {
+  } catch (err) {
+    console.error(
+      '[extractor] LLM returned non-JSON; producing empty result',
+      {
+        nodeId: context?.nodeId,
+        model: context?.model,
+        message: (err as Error).message,
+        preview: cleaned.slice(0, 200),
+      },
+    );
     return { summary: '', facts: [], entities: [] };
   }
   const obj = parsed as Partial<ExtractorOutput>;
@@ -654,7 +666,7 @@ export async function extractNode(nodeId: string, ownerId: string): Promise<void
             (agent.params ?? {}) as AgentParams,
           );
           captureLlmUsage(h, r.raw, agent.model);
-          return parseExtractorOutput(r.content);
+          return parseExtractorOutput(r.content, { nodeId: node.id, model: agent.model });
         },
       );
 
@@ -672,7 +684,14 @@ export async function extractNode(nodeId: string, ownerId: string): Promise<void
         return true;
       });
 
-      const embedText = [node.title, summary, body.slice(0, 500)]
+      // Embed against title + summary. The summary already condenses the
+      // full body (after head+tail truncation), so it's a faithful
+      // representation regardless of how long the original was.
+      // Previously we appended `body.slice(0, 500)` here, which gave
+      // long emails / PDFs an embedding biased toward the first ~500
+      // chars (lede only) and made vector search find them by greeting,
+      // not by content. The summary is what we want indexed.
+      const embedText = [node.title, summary]
         .filter(Boolean)
         .join('\n\n');
       let embedding: number[] | null = null;
@@ -786,6 +805,16 @@ export async function extractNode(nodeId: string, ownerId: string): Promise<void
               const spent = currentTrace()?.costMicroUsd ?? 0;
               if (spent >= costCap) {
                 capExceededAt = i;
+                // Surface every dropped fact so a tight cap isn't an
+                // invisible data-loss event. The previous code summed
+                // them up only after the loop and left the individual
+                // contents undiscoverable.
+                const dropped = parsed.facts.slice(i).map((f) => f.content);
+                console.warn(
+                  `[extractor] cost cap ${costCap}µ$ hit at fact ${i}/${parsed.facts.length}; ` +
+                    `dropping ${dropped.length} fact(s) from node ${node.id}:`,
+                  dropped,
+                );
                 break;
               }
             }

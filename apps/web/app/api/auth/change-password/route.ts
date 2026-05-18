@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server';
 import { z } from 'zod';
 import { getSessionUser, updatePassword, verifyPassword } from '@/lib/auth';
+import { rateLimit } from '@/lib/rate-limit';
 
 const ChangePasswordBody = z
   .object({
@@ -16,6 +17,23 @@ export async function POST(req: Request) {
   const user = await getSessionUser();
   if (!user) {
     return NextResponse.json({ error: 'Not signed in.' }, { status: 401 });
+  }
+
+  // Throttle even with a valid session — a hijacked cookie should not
+  // be able to pin bcrypt CPU. 5/hour per user comfortably fits any
+  // honest workflow.
+  const limit = rateLimit(`auth:change-password:${user.id}`, {
+    max: 5,
+    windowMs: 60 * 60 * 1000,
+  });
+  if (!limit.ok) {
+    return NextResponse.json(
+      { error: 'Too many password change attempts. Try again later.' },
+      {
+        status: 429,
+        headers: { 'Retry-After': String(limit.retryAfterSec) },
+      },
+    );
   }
 
   const raw = await req.json().catch(() => ({}));

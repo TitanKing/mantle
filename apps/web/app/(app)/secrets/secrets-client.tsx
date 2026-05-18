@@ -14,6 +14,7 @@ import {
 } from '@/components/ui/dialog';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
+import { useToast } from '@/components/ui/toast';
 
 const KINDS = ['password', 'token', 'server', 'card', 'note', 'other'] as const;
 type Kind = (typeof KINDS)[number];
@@ -59,6 +60,7 @@ export function SecretsClient({
   availableTags: string[];
 }) {
   const router = useRouter();
+  const toast = useToast();
   const [secrets, setSecrets] = useState(initialSecrets);
   const [query, setQuery] = useState('');
   const [kindFilter, setKindFilter] = useState<Kind | 'all'>('all');
@@ -123,7 +125,11 @@ export function SecretsClient({
   const handleDelete = async (id: string) => {
     if (!confirm('Delete this secret? The encrypted value will be wiped.')) return;
     const res = await fetch(`/api/secrets/${id}`, { method: 'DELETE' });
-    if (!res.ok) return;
+    if (!res.ok) {
+      const j = await res.json().catch(() => ({}));
+      toast.error(j.error ?? `Could not delete secret (${res.status})`);
+      return;
+    }
     setSecrets((prev) => prev.filter((s) => s.id !== id));
     startTransition(() => router.refresh());
   };

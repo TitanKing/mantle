@@ -36,6 +36,9 @@ export const apiKeys = pgTable(
     label: text('label').notNull().default('default'),
     keyEnc: bytea('key_enc').notNull(),
     keyVersion: integer('key_version').notNull().default(1),
+    /** Precomputed first-4 + last-4 of the plaintext, set at create
+     *  and rotate. Lets list views render without decrypting every row. */
+    masked: text('masked').notNull().default('••••'),
     scopes: text('scopes').array().default(sql`'{}'::text[]`).notNull(),
     lastUsed: timestamp('last_used', { withTimezone: true }),
     createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),

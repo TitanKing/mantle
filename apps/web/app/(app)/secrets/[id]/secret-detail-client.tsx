@@ -18,6 +18,7 @@ import {
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
+import { useToast } from '@/components/ui/toast';
 
 const KINDS = ['password', 'token', 'server', 'card', 'note', 'other'] as const;
 type Kind = (typeof KINDS)[number];
@@ -41,6 +42,7 @@ type Payload = { note: string; fields: Field[] };
 
 export function SecretDetailClient({ initial }: { initial: SecretRow }) {
   const router = useRouter();
+  const toast = useToast();
   const [meta, setMeta] = useState(initial);
   const [revealed, setRevealed] = useState<Payload | null>(null);
   const [revealedFieldIdx, setRevealedFieldIdx] = useState<Set<number>>(new Set());
@@ -177,7 +179,11 @@ export function SecretDetailClient({ initial }: { initial: SecretRow }) {
   const handleDelete = async () => {
     if (!confirm('Delete this secret? The encrypted value will be wiped.')) return;
     const res = await fetch(`/api/secrets/${meta.id}`, { method: 'DELETE' });
-    if (!res.ok) return;
+    if (!res.ok) {
+      const j = await res.json().catch(() => ({}));
+      toast.error(j.error ?? `Could not delete secret (${res.status})`);
+      return;
+    }
     router.push('/secrets');
   };
 

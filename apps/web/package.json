@@ -15,7 +15,8 @@
     "worker:events:dev": "tsx --watch --env-file-if-exists=./.env.local workers/events-reminders.ts",
     "seed:telegram": "tsx --env-file-if-exists=./.env.local scripts/seed-telegram.ts",
     "extract:backfill": "tsx --env-file-if-exists=./.env.local scripts/extract-backfill.ts",
-    "re-embed": "tsx --env-file-if-exists=./.env.local scripts/re-embed.ts"
+    "re-embed": "tsx --env-file-if-exists=./.env.local scripts/re-embed.ts",
+    "rotate:master-key": "tsx --env-file-if-exists=./.env.local scripts/rotate-master-key.ts"
   },
   "dependencies": {
     "@mantle/agent-runtime": "workspace:*",

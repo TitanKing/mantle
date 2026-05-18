@@ -7,6 +7,7 @@ import { ArrowLeft, Bell, MapPin, Pencil, Save, Trash2, X } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
+import { useToast } from '@/components/ui/toast';
 
 type EventRow = {
   id: string;
@@ -43,6 +44,7 @@ function fmtLocal(iso: string | null | undefined): string {
 
 export function EventDetailClient({ initial }: { initial: EventRow }) {
   const router = useRouter();
+  const toast = useToast();
   const [event, setEvent] = useState(initial);
   const [editing, setEditing] = useState(false);
   const [form, setForm] = useState({
@@ -96,7 +98,11 @@ export function EventDetailClient({ initial }: { initial: EventRow }) {
   const handleDelete = async () => {
     if (!confirm('Delete this event? Pending reminders will not fire.')) return;
     const res = await fetch(`/api/events/${event.id}`, { method: 'DELETE' });
-    if (!res.ok) return;
+    if (!res.ok) {
+      const j = await res.json().catch(() => ({}));
+      toast.error(j.error ?? `Could not delete event (${res.status})`);
+      return;
+    }
     router.push('/events');
   };
 

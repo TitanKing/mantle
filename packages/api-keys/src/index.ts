@@ -24,36 +24,32 @@ export type ApiKeySummary = {
   updatedAt: Date;
 };
 
-function mask(plaintext: string): string {
+/** Compute the display mask. Exported so create/rotate can stash it
+ *  alongside the ciphertext at write time. */
+export function maskPlaintext(plaintext: string): string {
   if (plaintext.length < 8) return '••••';
   return `${plaintext.slice(0, 4)}…${plaintext.slice(-4)}`;
 }
 
-/** List rows for a user with the plaintext masked. Decrypts each row in
- * memory just to compute the mask — fine at personal scale. */
+/** List rows for a user. Reads the precomputed `masked` column instead
+ *  of decrypting every row — keeps every plaintext out of process
+ *  memory for an operation that doesn't actually need it, and saves a
+ *  chunk of AES work on every settings/keys page load. */
 export async function listApiKeys(userId: string): Promise<ApiKeySummary[]> {
   const rows = await db
-    .select()
+    .select({
+      id: apiKeys.id,
+      service: apiKeys.service,
+      label: apiKeys.label,
+      masked: apiKeys.masked,
+      lastUsed: apiKeys.lastUsed,
+      createdAt: apiKeys.createdAt,
+      updatedAt: apiKeys.updatedAt,
+    })
     .from(apiKeys)
     .where(eq(apiKeys.userId, userId))
     .orderBy(desc(apiKeys.updatedAt));
-  return rows.map((r) => {
-    let masked = '••••';
-    try {
-      masked = mask(open(r.keyEnc, r.id));
-    } catch {
-      // Wrong master key or tampered row — surface a placeholder rather than failing the list.
-    }
-    return {
-      id: r.id,
-      service: r.service,
-      label: r.label,
-      masked,
-      lastUsed: r.lastUsed,
-      createdAt: r.createdAt,
-      updatedAt: r.updatedAt,
-    };
-  });
+  return rows;
 }
 
 /** Read the plaintext for one key by its row id. Used by agents that reference
@@ -108,9 +104,10 @@ export async function setApiKey(
 ): Promise<ApiKey> {
   const id = randomUUID();
   const { ciphertext, keyVersion } = seal(plaintext, id);
+  const masked = maskPlaintext(plaintext);
   const [inserted] = await db
     .insert(apiKeys)
-    .values({ id, userId, service, label, keyEnc: ciphertext, keyVersion })
+    .values({ id, userId, service, label, keyEnc: ciphertext, keyVersion, masked })
     .returning();
   if (!inserted) throw new Error('failed to insert api_key');
   return inserted;
@@ -129,9 +126,10 @@ export async function rotateApiKey(
     .limit(1);
   if (!row) return null;
   const { ciphertext, keyVersion } = seal(plaintext, row.id);
+  const masked = maskPlaintext(plaintext);
   const [updated] = await db
     .update(apiKeys)
-    .set({ keyEnc: ciphertext, keyVersion, updatedAt: new Date() })
+    .set({ keyEnc: ciphertext, keyVersion, masked, updatedAt: new Date() })
     .where(eq(apiKeys.id, row.id))
     .returning();
   return updated ?? null;

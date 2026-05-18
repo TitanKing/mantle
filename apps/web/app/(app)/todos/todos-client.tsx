@@ -13,6 +13,7 @@ import {
 } from '@/components/ui/dialog';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
+import { useToast } from '@/components/ui/toast';
 
 const STATUSES = ['open', 'done'] as const;
 const PRIORITIES = ['low', 'normal', 'high'] as const;
@@ -52,6 +53,7 @@ function formatDue(iso: string | null): string {
 
 export function TodosClient({ initialTodos }: { initialTodos: TodoRow[] }) {
   const router = useRouter();
+  const toast = useToast();
   const [todos, setTodos] = useState(initialTodos);
   const [query, setQuery] = useState('');
   const [statusFilter, setStatusFilter] = useState<Status | 'all'>('open');
@@ -101,7 +103,11 @@ export function TodosClient({ initialTodos }: { initialTodos: TodoRow[] }) {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(payload),
     });
-    if (!res.ok) return;
+    if (!res.ok) {
+      const j = await res.json().catch(() => ({}));
+      toast.error(j.error ?? `Could not update todo (${res.status})`);
+      return;
+    }
     const { todo } = await res.json();
     setTodos((prev) => prev.map((t) => (t.id === id ? todo : t)));
     startTransition(() => router.refresh());
@@ -144,7 +150,11 @@ export function TodosClient({ initialTodos }: { initialTodos: TodoRow[] }) {
   const handleDelete = async (id: string) => {
     if (!confirm('Delete this todo?')) return;
     const res = await fetch(`/api/todos/${id}`, { method: 'DELETE' });
-    if (!res.ok) return;
+    if (!res.ok) {
+      const j = await res.json().catch(() => ({}));
+      toast.error(j.error ?? `Could not delete todo (${res.status})`);
+      return;
+    }
     setTodos((prev) => prev.filter((t) => t.id !== id));
     startTransition(() => router.refresh());
   };

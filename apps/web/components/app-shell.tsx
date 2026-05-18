@@ -3,6 +3,7 @@
 import { useEffect, useState } from 'react';
 import { usePathname } from 'next/navigation';
 import { Menu, X } from 'lucide-react';
+import { ToastProvider } from '@/components/ui/toast';
 
 /**
  * Mobile-responsive shell. Server-rendered sidebar + topbar + content
@@ -54,6 +55,7 @@ export function AppShell({
   }, [open]);
 
   return (
+    <ToastProvider>
     <div className="grid h-screen grid-cols-1 grid-rows-[48px_1fr] bg-background md:grid-cols-[260px_1fr]">
       <aside
         className={
@@ -96,5 +98,6 @@ export function AppShell({
         {children}
       </main>
     </div>
+    </ToastProvider>
   );
 }

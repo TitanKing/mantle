@@ -148,7 +148,13 @@ async function ingestOne(
   message: RawMessage,
   rules: Awaited<ReturnType<typeof db.select> extends never ? never : Awaited<ReturnType<typeof loadRules>>>,
 ): Promise<boolean> {
-  // Skip if we already have it.
+  // Dedup pre-check. The hard guarantee is the UNIQUE index
+  // emails_account_msg_uq on (account_id, provider_msg_id) — even if
+  // pg-boss retries this job after a crash, a duplicate insert will be
+  // rejected and the surrounding `db.transaction` rolls back cleanly,
+  // so neither orphan nodes nor orphan attachment objects can survive.
+  // The SELECT here is a fast path that avoids spending OpenRouter on
+  // rule evaluation + an attachment fetch we'd just throw away.
   const [existing] = await db
     .select({ id: emails.id })
     .from(emails)
