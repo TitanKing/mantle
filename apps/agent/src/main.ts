@@ -40,6 +40,9 @@ import { embed } from '@mantle/embeddings';
 import { startTrace, step } from '@mantle/tracing';
 import {
   buildChatMessages,
+  composeSystemPromptWithSkills,
+  effectiveToolSlugs,
+  resolveAgentSkills,
   resolveAgentTools,
   runToolLoop,
   type ContentHit,
@@ -380,12 +383,20 @@ async function handleMessage(messageId: string): Promise<void> {
             },
           );
 
+        // Resolve attached skills early so we can compose the system
+        // prompt + extend the agent's effective tool allowlist.
+        const attachedSkills = await resolveAgentSkills(USER_ID!, agent.skillSlugs ?? []);
+        const effectiveSystemPrompt = composeSystemPromptWithSkills(
+          agent.systemPrompt,
+          attachedSkills,
+        );
+
         const messages = await step(
           { name: 'build_messages', kind: 'compute' },
           async (h) => {
             const m = buildChatMessages({
               model: agent.model,
-              systemPrompt: agent.systemPrompt,
+              systemPrompt: effectiveSystemPrompt,
               personaNotes,
               facts: relevantFacts,
               digests,
@@ -393,7 +404,10 @@ async function handleMessage(messageId: string): Promise<void> {
               history,
               newUserText: row.text,
             });
-            h.setMeta({ blockCount: m.length });
+            h.setMeta({
+              blockCount: m.length,
+              skillCount: attachedSkills.length,
+            });
             return m;
           },
         );
@@ -408,9 +422,14 @@ async function handleMessage(messageId: string): Promise<void> {
           `[agent] → ${row.fromName ?? 'unknown'} via ${agent.model} (${row.text.length}c, ${history.length} turns, ${digests.length} digests, ${relevantFacts.length} facts, ${contentHits.length} content)`,
         );
 
-        // Resolve the agent's tool allowlist. Empty array → tool-loop
-        // sends no `tools` and behaves identically to the old single-call.
-        const allowedTools = await resolveAgentTools(USER_ID!, agent.toolSlugs ?? []);
+        // Resolve the agent's tool allowlist, unioned with every attached
+        // skill's tool_slugs. Empty result → tool-loop sends no `tools`
+        // and behaves identically to the old single-call path.
+        const allowedToolSlugs = effectiveToolSlugs(
+          agent.toolSlugs ?? [],
+          attachedSkills,
+        );
+        const allowedTools = await resolveAgentTools(USER_ID!, allowedToolSlugs);
 
         const loopOutcome = await runToolLoop({
           client,

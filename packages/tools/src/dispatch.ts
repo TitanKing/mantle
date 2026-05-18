@@ -66,12 +66,73 @@ export async function dispatchTool(
     return dispatchHttp(h, input, ctx);
   }
   if (h.kind === 'shell') {
-    return {
-      ok: false,
-      error: 'shell tools are not yet supported (phase 5)',
-    };
+    return dispatchShell(h, input, ctx);
   }
   return { ok: false, error: `unknown handler kind` };
+}
+
+const SHELL_TIMEOUT_MS = 30_000;
+const SHELL_OUTPUT_CAP = 10 * 1024;
+
+/**
+ * Run a shell command template. Placeholders `${input.<field>}` are
+ * substituted with shell-escaped values from the input. The command
+ * runs via /bin/sh -c with a hard timeout + output cap. stdout +
+ * stderr + exit code come back as JSON for the model.
+ *
+ * NOT a sandbox. The operator owns the cmd template; the model only
+ * supplies args. Don't register shell tools you wouldn't paste into
+ * your own terminal.
+ */
+async function dispatchShell(
+  h: Extract<ToolHandler, { kind: 'shell' }>,
+  input: Record<string, unknown>,
+  ctx: ToolHandlerContext,
+): Promise<ToolHandlerResult> {
+  const { exec } = await import('node:child_process');
+  const cmd = renderShellCommand(h.cmd, input);
+  ctx.step?.setMeta({ cmd });
+  return new Promise((resolve) => {
+    exec(
+      cmd,
+      {
+        timeout: SHELL_TIMEOUT_MS,
+        maxBuffer: SHELL_OUTPUT_CAP,
+        shell: '/bin/sh',
+      },
+      (err, stdout, stderr) => {
+        const out = String(stdout).slice(0, SHELL_OUTPUT_CAP);
+        const errOut = String(stderr).slice(0, SHELL_OUTPUT_CAP);
+        if (err) {
+          const exitCode = (err as NodeJS.ErrnoException & { code?: number | string }).code;
+          resolve({
+            ok: false,
+            error: `shell exited with ${exitCode ?? 'error'}: ${err.message}\nstderr:\n${errOut}`,
+          });
+          return;
+        }
+        resolve({ ok: true, output: { stdout: out, stderr: errOut, exitCode: 0 } });
+      },
+    );
+  });
+}
+
+/** Shell-escape a single value via single-quote wrapping. Internal
+ *  single quotes become `'\''`. Non-string values are JSON-stringified. */
+function shellEscape(v: unknown): string {
+  let s: string;
+  if (v === null || v === undefined) s = '';
+  else if (typeof v === 'string') s = v;
+  else if (typeof v === 'number' || typeof v === 'boolean') s = String(v);
+  else s = JSON.stringify(v);
+  return `'${s.replace(/'/g, `'\\''`)}'`;
+}
+
+/** Substitute `${input.<key>}` in the template with shell-escaped values. */
+function renderShellCommand(template: string, input: Record<string, unknown>): string {
+  return template.replace(/\$\{input\.([a-zA-Z0-9_]+)\}/g, (_, key: string) =>
+    shellEscape(input[key]),
+  );
 }
 
 async function dispatchHttp(

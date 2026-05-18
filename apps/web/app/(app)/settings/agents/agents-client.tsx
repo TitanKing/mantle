@@ -109,6 +109,13 @@ export type ToolOption = {
   kind: string;
 };
 
+export type SkillOption = {
+  slug: string;
+  name: string;
+  description: string;
+  toolSlugs: string[];
+};
+
 const DEFAULT_SYSTEM_PROMPT = `You are an assistant helping the user via Telegram. You have memory of the recent conversation in this chat. Be concise and conversational — short paragraphs, no headers, no bullet lists unless explicitly useful. Match the tone of the incoming message. Skip pleasantries unless they fit naturally. If you don't know something or can't help, say so plainly.`;
 
 const DEFAULT_SUMMARIZER_PROMPT = `You are a memory compressor for an ongoing Telegram conversation. You will be given a chronological transcript of a chat between the user and an AI assistant, with each line prefixed by its 1-indexed turn number.
@@ -254,6 +261,7 @@ type FormState = {
   embeddingModel: string;
   /** Slugs this agent may call during a turn. */
   toolSlugs: string[];
+  skillSlugs: string[];
   temperature: string;
   maxTokens: string;
 };
@@ -282,6 +290,7 @@ function emptyForm(role: Role = 'responder'): FormState {
     extractCostCapCents: '',
     embeddingModel: '',
     toolSlugs: [],
+    skillSlugs: [],
     temperature: '0.7',
     maxTokens: '',
   };
@@ -314,6 +323,7 @@ function formFromAgent(a: AgentSummary): FormState {
         : '',
     embeddingModel: a.memoryConfig.embedding_model ?? '',
     toolSlugs: a.toolSlugs ?? [],
+    skillSlugs: a.skillSlugs ?? [],
     temperature: a.params.temperature?.toString() ?? '0.7',
     maxTokens: a.params.max_tokens?.toString() ?? '',
   };
@@ -336,10 +346,12 @@ export function AgentsClient({
   initialAgents,
   apiKeys,
   availableTools,
+  availableSkills,
 }: {
   initialAgents: AgentSummary[];
   apiKeys: ApiKeyOption[];
   availableTools: ToolOption[];
+  availableSkills: SkillOption[];
 }) {
   const router = useRouter();
   const [agents, setAgents] = useState<AgentSummary[]>(initialAgents);
@@ -484,6 +496,7 @@ export function AgentsClient({
       priority: Number.isNaN(priority) ? 100 : priority,
       enabled: form.enabled,
       toolSlugs: form.toolSlugs,
+      skillSlugs: form.skillSlugs,
       ...(editing.mode === 'create' ? { slug: form.slug.trim() } : {}),
     };
 
@@ -991,6 +1004,29 @@ export function AgentsClient({
 
             <fieldset className="space-y-3 rounded-md border border-border p-3">
               <legend className="px-1 text-xs font-semibold uppercase tracking-wider text-muted-foreground">
+                Skills
+              </legend>
+              {availableSkills.length === 0 ? (
+                <p className="text-xs text-muted-foreground">
+                  No skills yet. Author one at{' '}
+                  <a href="/settings/skills" className="underline">/settings/skills</a>.
+                </p>
+              ) : (
+                <SkillPicker
+                  available={availableSkills}
+                  selected={form.skillSlugs}
+                  onChange={(next) => setForm((f) => ({ ...f, skillSlugs: next }))}
+                />
+              )}
+              <p className="text-xs text-muted-foreground">
+                Each attached skill appends its instructions to the agent&apos;s system
+                prompt and joins its suggested tools into the agent&apos;s allowlist
+                (always-loaded mode).
+              </p>
+            </fieldset>
+
+            <fieldset className="space-y-3 rounded-md border border-border p-3">
+              <legend className="px-1 text-xs font-semibold uppercase tracking-wider text-muted-foreground">
                 Model params
               </legend>
               <div className="grid gap-3 sm:grid-cols-2">
@@ -1247,6 +1283,55 @@ function ToolPicker({
           {selected.length} tool{selected.length === 1 ? '' : 's'} selected
         </p>
       )}
+    </div>
+  );
+}
+
+/**
+ * Skill multi-select. Like ToolPicker but each chip is a skill slug;
+ * hover shows the skill description. Selected skills will have their
+ * instructions appended to the system prompt at run time.
+ */
+function SkillPicker({
+  available,
+  selected,
+  onChange,
+}: {
+  available: SkillOption[];
+  selected: string[];
+  onChange: (next: string[]) => void;
+}) {
+  const set = new Set(selected);
+  const toggle = (slug: string) => {
+    const next = new Set(set);
+    if (next.has(slug)) next.delete(slug);
+    else next.add(slug);
+    onChange(Array.from(next));
+  };
+  return (
+    <div className="flex flex-wrap gap-1.5">
+      {available.map((s) => {
+        const on = set.has(s.slug);
+        return (
+          <button
+            key={s.slug}
+            type="button"
+            onClick={() => toggle(s.slug)}
+            title={s.description}
+            className={
+              'rounded-full border px-2.5 py-0.5 text-xs transition ' +
+              (on
+                ? 'border-primary bg-primary text-primary-foreground'
+                : 'border-input bg-background text-muted-foreground hover:border-muted-foreground/50')
+            }
+          >
+            {s.name}
+            {s.toolSlugs.length > 0 && (
+              <span className="ml-1 opacity-70">·{s.toolSlugs.length}🔧</span>
+            )}
+          </button>
+        );
+      })}
     </div>
   );
 }

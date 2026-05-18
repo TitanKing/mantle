@@ -1,6 +1,6 @@
 import Link from 'next/link';
 import { and, eq, sql } from 'drizzle-orm';
-import { Activity, Bot, FolderTree, Hammer, Inbox, Key, KeyRound, MessageCircle, Settings, TreePine, UserCheck, Workflow } from 'lucide-react';
+import { Activity, Bot, FolderTree, Hammer, Inbox, Key, KeyRound, MessageCircle, Settings, Sparkles, TreePine, UserCheck, Workflow } from 'lucide-react';
 import { db, emailSenders } from '@mantle/db';
 import { requireOwner } from '@/lib/auth';
 import { TreeRail } from '@/components/tree-rail';
@@ -77,6 +77,12 @@ export default async function AppLayout({ children }: { children: React.ReactNod
             className="flex items-center gap-2 rounded px-2 py-1.5 hover:bg-accent"
           >
             <Hammer className="size-4" aria-hidden /> Tools
+          </Link>
+          <Link
+            href="/settings/skills"
+            className="flex items-center gap-2 rounded px-2 py-1.5 hover:bg-accent"
+          >
+            <Sparkles className="size-4" aria-hidden /> Skills
           </Link>
           <Link
             href="/traces"

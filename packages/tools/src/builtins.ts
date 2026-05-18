@@ -409,6 +409,59 @@ const file_create: BuiltinToolDef = {
 
 import { accountForChat, sendMessage } from '@mantle/telegram';
 
+// ─── system / triggers ────────────────────────────────────────────────────
+
+const process_extraction: BuiltinToolDef = {
+  slug: 'process_extraction',
+  name: 'Kick the extractor',
+  description:
+    "Re-fires the pg_notify('node_ingested') signal for any nodes missing data.summary or embedding. Optional `node_id` to target a single node; optional `types` to restrict by node kind; optional `limit` to cap (default 100). Idempotent — already-extracted nodes are short-circuited by the extractor.",
+  inputSchema: {
+    type: 'object',
+    properties: {
+      node_id: { type: 'string', format: 'uuid', description: 'optional single node to re-extract' },
+      types: {
+        type: 'array',
+        items: { type: 'string' },
+        description: 'optional node-type filter (e.g. ["file","note"])',
+      },
+      limit: { type: 'integer', minimum: 1, maximum: 1000, default: 100 },
+    },
+  },
+  handler: async (input, ctx) => {
+    const limit = num(input.limit, 100) ?? 100;
+    if (typeof input.node_id === 'string' && input.node_id) {
+      // Fire for exactly one node, no eligibility check — operator chose it.
+      await db.execute(sql`SELECT pg_notify('node_ingested', ${input.node_id}::text)`);
+      ctx.step?.setOutput({ fired: 1, node_id: input.node_id });
+      return { ok: true, output: { fired: 1, node_id: input.node_id } };
+    }
+    const typeFilter = Array.isArray(input.types)
+      ? (input.types as string[])
+      : null;
+    const conds = [
+      eq(nodes.ownerId, ctx.ownerId),
+      sql`${nodes.type} <> 'branch'`,
+      sql`${nodes.type} <> 'secret'`,
+      sql`(${nodes.data}->>'summary' is null or ${nodes.embedding} is null)`,
+    ];
+    if (typeFilter && typeFilter.length > 0) {
+      conds.push(sql`${nodes.type}::text = any(${typeFilter}::text[])`);
+    }
+    const rows = await db
+      .select({ id: nodes.id })
+      .from(nodes)
+      .where(and(...conds))
+      .orderBy(desc(nodes.createdAt))
+      .limit(limit);
+    for (const r of rows) {
+      await db.execute(sql`SELECT pg_notify('node_ingested', ${r.id}::text)`);
+    }
+    ctx.step?.setOutput({ fired: rows.length });
+    return { ok: true, output: { fired: rows.length } };
+  },
+};
+
 const telegram_send: BuiltinToolDef = {
   slug: 'telegram_send',
   name: 'Send a Telegram message',
@@ -471,4 +524,5 @@ export const BUILTIN_TOOLS: BuiltinToolDef[] = [
   file_read,
   file_create,
   telegram_send,
+  process_extraction,
 ];

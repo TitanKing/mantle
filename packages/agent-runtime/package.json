@@ -15,7 +15,8 @@
     "@mantle/db": "workspace:*",
     "@mantle/tools": "workspace:*",
     "@mantle/tracing": "workspace:*",
-    "@openrouter/sdk": "^0.12.35"
+    "@openrouter/sdk": "^0.12.35",
+    "drizzle-orm": "^0.38.3"
   },
   "devDependencies": {
     "@types/node": "^22.10.5",

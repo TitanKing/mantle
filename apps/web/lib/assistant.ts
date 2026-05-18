@@ -39,6 +39,9 @@ import { getApiKeyById } from '@mantle/api-keys';
 import { embed } from '@mantle/embeddings';
 import {
   buildChatMessages,
+  composeSystemPromptWithSkills,
+  effectiveToolSlugs,
+  resolveAgentSkills,
   resolveAgentTools,
   runToolLoop,
   type ContentHit,
@@ -234,9 +237,15 @@ export async function runAssistantTurn(
   const ctx = await loadContext(ownerId, agent, trimmed);
   const filteredHistory = ctx.history; // history was loaded before insert; safe.
 
+  const attachedSkills = await resolveAgentSkills(ownerId, agent.skillSlugs ?? []);
+  const effectiveSystemPrompt = composeSystemPromptWithSkills(
+    agent.systemPrompt,
+    attachedSkills,
+  );
+
   const messages = buildChatMessages({
     model: agent.model,
-    systemPrompt: agent.systemPrompt,
+    systemPrompt: effectiveSystemPrompt,
     personaNotes: ctx.personaNotes,
     facts: ctx.facts,
     digests: [],
@@ -252,9 +261,11 @@ export async function runAssistantTurn(
   });
 
   const params = (agent.params ?? {}) as AgentParams;
-  // Resolve the agent's tool allowlist. Empty array → tool-loop sends
-  // no `tools` and the loop reduces to one LLM call (same as before).
-  const allowedTools = await resolveAgentTools(ownerId, agent.toolSlugs ?? []);
+  // Resolve the agent's tool allowlist, unioned with every attached
+  // skill's tool_slugs. Empty result → tool-loop sends no `tools`
+  // and the loop reduces to one LLM call (same as before).
+  const allowedToolSlugs = effectiveToolSlugs(agent.toolSlugs ?? [], attachedSkills);
+  const allowedTools = await resolveAgentTools(ownerId, allowedToolSlugs);
 
   const loopOutcome = await runToolLoop({
     client,

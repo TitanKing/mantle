@@ -3,11 +3,12 @@ import { db, tools } from '@mantle/db';
 import { requireOwner } from '@/lib/auth';
 import { listAgents } from '@/lib/agents';
 import { listApiKeys } from '@/lib/api-keys';
+import { listSkills } from '@/lib/skills';
 import { AgentsClient } from './agents-client';
 
 export default async function AgentsSettingsPage() {
   const user = await requireOwner();
-  const [agents, keys, toolRows] = await Promise.all([
+  const [agents, keys, toolRows, skillRows] = await Promise.all([
     listAgents(user.id),
     listApiKeys(user.id),
     db
@@ -21,6 +22,7 @@ export default async function AgentsSettingsPage() {
       .from(tools)
       .where(eq(tools.ownerId, user.id))
       .orderBy(tools.slug),
+    listSkills(user.id),
   ]);
 
   // The active responder is whatever the runner picks: highest priority among
@@ -69,6 +71,14 @@ export default async function AgentsSettingsPage() {
           requiresConfirm: t.requiresConfirm,
           kind: (t.handler as { kind: string }).kind,
         }))}
+        availableSkills={skillRows
+          .filter((s) => s.enabled)
+          .map((s) => ({
+            slug: s.slug,
+            name: s.name,
+            description: s.description,
+            toolSlugs: s.toolSlugs,
+          }))}
       />
     </div>
   );

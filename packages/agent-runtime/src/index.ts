@@ -17,3 +17,10 @@ export {
   type ToolLoopArgs,
   type ToolLoopResult,
 } from './tool-loop';
+
+export {
+  resolveAgentSkills,
+  composeSystemPromptWithSkills,
+  effectiveToolSlugs,
+  type SkillForRuntime,
+} from './skills';
