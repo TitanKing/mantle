@@ -1,3 +1,4 @@
+import Link from 'next/link';
 import { requireOwner } from '@/lib/auth';
 import {
   contentIndexCoverage,
@@ -7,6 +8,14 @@ import {
   listPersonaNotes,
   listTelegramChats,
 } from '@/lib/debug';
+import {
+  embedderCacheStats,
+  recentFailures,
+  spendByAgent,
+  topErrors,
+  trafficWindow,
+} from '@/lib/metrics';
+import { formatDuration, formatMicroUsd } from '@/lib/traces';
 
 /**
  * Operator's eye on the system: what has the summarizer produced, which
@@ -17,14 +26,39 @@ import {
  */
 export default async function DebugPage() {
   const user = await requireOwner();
-  const [digests, chats, agents, factRows, coverage, personaNotes] = await Promise.all([
+  const [
+    digests,
+    chats,
+    agents,
+    factRows,
+    coverage,
+    personaNotes,
+    traffic24h,
+    spend7d,
+    cache7d,
+    errors7d,
+    recentFails,
+  ] = await Promise.all([
     listDigests(user.id, 25),
     listTelegramChats(user.id),
     listAgentActivity(user.id),
     listFacts(user.id, 25),
     contentIndexCoverage(user.id),
     listPersonaNotes(user.id),
+    trafficWindow(user.id, 24),
+    spendByAgent(user.id, 7),
+    embedderCacheStats(user.id, 7),
+    topErrors(user.id, 7, 5),
+    recentFailures(user.id, 10),
   ]);
+
+  const totalSpend = spend7d.reduce((sum, r) => sum + r.costMicroUsd, 0);
+  const cacheTotal = cache7d.hits + cache7d.misses;
+  const cachePct = cacheTotal > 0 ? (cache7d.hits / cacheTotal) * 100 : 0;
+  const successRate24 =
+    traffic24h.count > 0
+      ? ((traffic24h.count - traffic24h.errorCount) / traffic24h.count) * 100
+      : 100;
 
   return (
     <div className="mx-auto max-w-5xl space-y-10 px-6 py-8">
@@ -35,6 +69,154 @@ export default async function DebugPage() {
           the page to see the latest. Owner-scoped.
         </p>
       </header>
+
+      {/* ─── Dashboard widgets ──────────────────────────────────────────── */}
+      <section className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+        <StatCard
+          title="Last 24h"
+          primary={`${traffic24h.count} traces`}
+          secondary={
+            traffic24h.count === 0
+              ? '—'
+              : `${successRate24.toFixed(0)}% success · avg ${formatDuration(traffic24h.avgMs)}`
+          }
+          accent={traffic24h.errorCount > 0 ? 'amber' : 'emerald'}
+        />
+        <StatCard
+          title="Token spend (7d)"
+          primary={formatMicroUsd(totalSpend)}
+          secondary={
+            spend7d.length === 0
+              ? '—'
+              : spend7d
+                  .slice(0, 2)
+                  .map(
+                    (a) =>
+                      `${a.agentName ?? 'unknown'}: ${formatMicroUsd(a.costMicroUsd)}`,
+                  )
+                  .join(' · ')
+          }
+        />
+        <StatCard
+          title="Embed cache (7d)"
+          primary={
+            cacheTotal === 0 ? '—' : `${cachePct.toFixed(0)}% hit`
+          }
+          secondary={
+            cacheTotal === 0
+              ? 'no embed activity'
+              : `${cache7d.hits} hits · ${cache7d.misses} misses · ${cache7d.apiCalls} api calls`
+          }
+        />
+        <StatCard
+          title="Failures (7d)"
+          primary={`${errors7d.reduce((a, b) => a + b.count, 0)}`}
+          secondary={
+            errors7d.length === 0
+              ? 'all clean'
+              : `${errors7d.length} distinct error${errors7d.length === 1 ? '' : 's'}`
+          }
+          accent={errors7d.length > 0 ? 'red' : 'emerald'}
+        />
+      </section>
+
+      {/* ─── Top errors ─────────────────────────────────────────────────── */}
+      {errors7d.length > 0 && (
+        <section className="space-y-3">
+          <h2 className="text-sm font-semibold uppercase tracking-wider text-muted-foreground">
+            Top errors (7d)
+          </h2>
+          <ul className="divide-y divide-border rounded-md border border-border">
+            {errors7d.map((e) => (
+              <li key={e.message} className="flex items-baseline gap-3 px-3 py-2 text-sm">
+                <span className="rounded-md bg-destructive/10 px-2 py-0.5 text-xs font-medium text-destructive">
+                  ×{e.count}
+                </span>
+                <span className="flex-1 truncate">{e.message}</span>
+                <Link
+                  href={`/traces/${e.lastTraceId}`}
+                  className="text-xs text-muted-foreground hover:underline"
+                >
+                  {new Date(e.lastAt).toLocaleString()}
+                </Link>
+              </li>
+            ))}
+          </ul>
+        </section>
+      )}
+
+      {/* ─── Recent failures ────────────────────────────────────────────── */}
+      {recentFails.length > 0 && (
+        <section className="space-y-3">
+          <h2 className="text-sm font-semibold uppercase tracking-wider text-muted-foreground">
+            Recent failed traces
+          </h2>
+          <ul className="divide-y divide-border rounded-md border border-border">
+            {recentFails.map((f) => (
+              <li key={f.id} className="flex items-baseline gap-3 px-3 py-2 text-sm">
+                <span className="rounded-sm bg-muted px-1.5 py-0.5 text-[10px] uppercase tracking-wider">
+                  {f.kind}
+                </span>
+                <Link
+                  href={`/traces/${f.id}`}
+                  className="flex-1 truncate text-destructive hover:underline"
+                >
+                  {f.error.slice(0, 120)}
+                </Link>
+                <span className="text-xs text-muted-foreground">
+                  {new Date(f.startedAt).toLocaleString()}
+                </span>
+              </li>
+            ))}
+          </ul>
+        </section>
+      )}
+
+      {/* ─── Spend by agent ────────────────────────────────────────────── */}
+      {spend7d.length > 0 && (
+        <section className="space-y-3">
+          <h2 className="text-sm font-semibold uppercase tracking-wider text-muted-foreground">
+            Spend by agent (7d)
+          </h2>
+          <div className="overflow-x-auto rounded-md border border-border">
+            <table className="w-full text-sm">
+              <thead className="bg-muted/40 text-xs uppercase tracking-wider text-muted-foreground">
+                <tr>
+                  <th className="px-3 py-2 text-left font-semibold">Agent</th>
+                  <th className="px-3 py-2 text-right font-semibold">Runs</th>
+                  <th className="px-3 py-2 text-right font-semibold">Tokens in</th>
+                  <th className="px-3 py-2 text-right font-semibold">Tokens out</th>
+                  <th className="px-3 py-2 text-right font-semibold">Cache read</th>
+                  <th className="px-3 py-2 text-right font-semibold">Cost</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-border">
+                {spend7d.map((a) => (
+                  <tr key={a.agentId ?? 'unknown'}>
+                    <td className="px-3 py-2">
+                      {a.agentName ?? '(unattributed)'}
+                      {a.agentSlug && (
+                        <span className="ml-1 text-xs text-muted-foreground">
+                          / {a.agentSlug}
+                        </span>
+                      )}
+                    </td>
+                    <td className="px-3 py-2 text-right tabular-nums">{a.runs}</td>
+                    <td className="px-3 py-2 text-right tabular-nums">{a.tokensIn}</td>
+                    <td className="px-3 py-2 text-right tabular-nums">{a.tokensOut}</td>
+                    <td className="px-3 py-2 text-right tabular-nums text-muted-foreground">
+                      {a.cacheReadTokens}
+                    </td>
+                    <td className="px-3 py-2 text-right tabular-nums">
+                      {formatMicroUsd(a.costMicroUsd)}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </section>
+      )}
 
       {/* ─── Recent digests ─────────────────────────────────────────────── */}
       <section className="space-y-3">
@@ -347,6 +529,32 @@ export default async function DebugPage() {
 }
 
 /** YYYY-MM-DD HH:MM from an ISO timestamp. */
+function StatCard({
+  title,
+  primary,
+  secondary,
+  accent,
+}: {
+  title: string;
+  primary: string;
+  secondary: string;
+  accent?: 'emerald' | 'amber' | 'red';
+}) {
+  const accentClass =
+    accent === 'red'
+      ? 'border-destructive/30 bg-destructive/5'
+      : accent === 'amber'
+        ? 'border-amber-400/40 bg-amber-100/30 dark:bg-amber-900/20'
+        : 'border-border';
+  return (
+    <div className={`rounded-md border ${accentClass} p-3`}>
+      <div className="text-[10px] uppercase tracking-wider text-muted-foreground">{title}</div>
+      <div className="mt-1 text-xl font-semibold tabular-nums">{primary}</div>
+      <div className="text-xs text-muted-foreground">{secondary}</div>
+    </div>
+  );
+}
+
 function fmtShort(iso: string): string {
   if (!iso) return '';
   return iso.slice(0, 16).replace('T', ' ');
