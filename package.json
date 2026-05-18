@@ -21,6 +21,8 @@
     "test:watch": "vitest",
     "db:migrate": "pnpm -C packages/db migrate",
     "db:studio": "pnpm -C packages/db studio",
+    "extract:backfill": "pnpm -C apps/web extract:backfill",
+    "re-embed": "pnpm -C apps/web re-embed",
     "up": "bash scripts/up.sh",
     "down": "docker compose -f docker-compose.dev.yml down",
     "infra:up": "docker compose -f docker-compose.dev.yml up -d --wait",

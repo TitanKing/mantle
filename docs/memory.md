@@ -518,6 +518,19 @@ agents. Different model type, different endpoint, different scale.
   cutover) — not impossible, but a deliberate move. `text-embedding-3-small`
   at 1536 is the safest commitment.
 
+- **Switching models (same 1536 dims).** Vectors from different models
+  live in different spaces — comparing across them returns garbage
+  distances. To switch cleanly:
+  1. Update `MANTLE_EMBEDDING_MODEL` or the per-agent
+     `memoryConfig.embedding_model` to the new slug.
+  2. Run `pnpm re-embed --model=<new-slug>` to re-vectorise every
+     stored embedding (`nodes`, `facts`, `entities`) using the new
+     model. Reuses the cached summary + fact + entity text — skips
+     the chat-model extraction entirely; only pays the embedding API.
+  3. Use `--dry-run` first to see row count + cost estimate.
+  Idempotent: re-running with the same model hits the embedding_cache
+  for every row and is free.
+
 - **Where it's called.**
   - **At write time** by the `extractor` (per content_store item +
     per fact), by the `summarizer` (per digest, for relevance ranking),
