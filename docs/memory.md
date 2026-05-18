@@ -646,9 +646,12 @@ Each step delivers value standalone.
    appends to `agents.persona_notes` when it spots a style preference,
    relationship signal, or correction in recent dialog. Capped at 100
    notes per agent (oldest aged out FIFO).
-7. **`entities` + graph traversal API** — entities + entity_edges
-   tables exist (migration 0016); entity-anchored retrieval helpers
-   and the MCP `search` traversal extension are next.
+7. **`entities` + graph traversal API** — DONE. `packages/search` exposes
+   `searchEntities`, `entityNeighbors`, `entityFacts`, `entityMentions`;
+   four matching MCP tools (`entity_search`, `entity_neighbors`,
+   `entity_facts`, `entity_mentions`) ship the graph axis to Claude.
+   Single-hop only for now — recursive CTE multi-hop walker waits until
+   a query actually demands it.
 8. **Web assistant surface** — same agent, browser chat. Memory is
    shared; surface is new.
 

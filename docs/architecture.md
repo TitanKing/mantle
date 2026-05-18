@@ -458,6 +458,10 @@ the new value with no restart.
 | `search`                      | Hybrid full-text + tree search across all node types                   |
 | `email_get`                   | Fetch one email by id                                                  |
 | `email_list`                  | Recent emails, optional `accountId`/`since` filters                    |
+| `entity_search`               | Resolve a name/alias to entities (exact + trigram fuzzy)               |
+| `entity_neighbors`            | First-hop entity↔entity edges, both directions                         |
+| `entity_facts`                | Currently-valid facts on an entity (+ optional retired history)        |
+| `entity_mentions`             | Content nodes that mention an entity (via `mentioned_in` edges)        |
 | `telegram_pending`            | Unprocessed DMs, oldest first                                          |
 | `telegram_send`               | Send a DM (allowlist-gated, reply-threading, MarkdownV2 optional)      |
 | `telegram_react`              | Set an emoji reaction                                                  |

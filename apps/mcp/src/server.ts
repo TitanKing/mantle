@@ -19,7 +19,13 @@ import {
   telegramChats,
   telegramMessages,
 } from '@mantle/db';
-import { searchNodes } from '@mantle/search';
+import {
+  entityFacts,
+  entityMentions,
+  entityNeighbors,
+  searchEntities,
+  searchNodes,
+} from '@mantle/search';
 import {
   accountForChat,
   editMessage,
@@ -121,6 +127,77 @@ server.tool(
       .where(conds.length ? and(...conds) : undefined)
       .orderBy(desc(emails.internalDate))
       .limit(limit ?? 50);
+    return { content: [{ type: 'text', text: JSON.stringify(rows, null, 2) }] };
+  },
+);
+
+// ─── entities ─────────────────────────────────────────────────────────────
+
+server.tool(
+  'entity_search',
+  "Resolve a name or alias to entities in Jason's memory. Exact name/alias matches return similarity=1; otherwise trigram fuzzy match. Optional `kind` filter (person, project, place, org, event, ...).",
+  {
+    q: z.string().min(1),
+    kind: z.string().optional(),
+    limit: z.number().int().min(1).max(50).optional(),
+  },
+  async ({ q, kind, limit }) => {
+    const hits = await searchEntities({ ownerId: OWNER_ID!, q, kind, limit });
+    return { content: [{ type: 'text', text: JSON.stringify(hits, null, 2) }] };
+  },
+);
+
+server.tool(
+  'entity_neighbors',
+  "Walk the entity graph one hop from a given entity. Returns connected entities via entity_edges in both directions by default. Optional `relation` filter (e.g. 'married_to', 'works_at', 'mentioned_in'), `direction` ('in'|'out'|'both'), and `current_only` to drop edges with valid_to set.",
+  {
+    entity_id: z.string().uuid(),
+    relation: z.string().optional(),
+    direction: z.enum(['in', 'out', 'both']).optional(),
+    current_only: z.boolean().optional(),
+    limit: z.number().int().min(1).max(200).optional(),
+  },
+  async ({ entity_id, relation, direction, current_only, limit }) => {
+    const rows = await entityNeighbors({
+      ownerId: OWNER_ID!,
+      entityId: entity_id,
+      relation,
+      direction,
+      currentOnly: current_only,
+      limit,
+    });
+    return { content: [{ type: 'text', text: JSON.stringify(rows, null, 2) }] };
+  },
+);
+
+server.tool(
+  'entity_facts',
+  "All facts attached to an entity. By default returns currently-valid facts only; set `include_retired=true` to see superseded history too. Use after entity_search to get '\"what do I know about Sarah?\"' answers.",
+  {
+    entity_id: z.string().uuid(),
+    include_retired: z.boolean().optional(),
+    limit: z.number().int().min(1).max(200).optional(),
+  },
+  async ({ entity_id, include_retired, limit }) => {
+    const rows = await entityFacts({
+      ownerId: OWNER_ID!,
+      entityId: entity_id,
+      includeRetired: include_retired,
+      limit,
+    });
+    return { content: [{ type: 'text', text: JSON.stringify(rows, null, 2) }] };
+  },
+);
+
+server.tool(
+  'entity_mentions',
+  'Content_store nodes that mention this entity, newest first. Walks entity_edges where source_kind=entity, target_kind=node, relation=mentioned_in. Returns node id, title, type, and the per-node summary if the extractor has populated one.',
+  {
+    entity_id: z.string().uuid(),
+    limit: z.number().int().min(1).max(200).optional(),
+  },
+  async ({ entity_id, limit }) => {
+    const rows = await entityMentions({ ownerId: OWNER_ID!, entityId: entity_id, limit });
     return { content: [{ type: 'text', text: JSON.stringify(rows, null, 2) }] };
   },
 );

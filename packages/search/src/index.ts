@@ -1,6 +1,20 @@
 import { db, nodes, type Node } from '@mantle/db';
 import { and, desc, eq, sql, type SQL } from 'drizzle-orm';
 
+export {
+  searchEntities,
+  entityNeighbors,
+  entityFacts,
+  entityMentions,
+  type EntitySearchOptions,
+  type EntityHit,
+  type NeighborOptions,
+  type Neighbor,
+  type FactsOptions,
+  type MentionsOptions,
+  type EntityMention,
+} from './entities.js';
+
 export interface SearchOptions {
   ownerId: string;
   q?: string;
