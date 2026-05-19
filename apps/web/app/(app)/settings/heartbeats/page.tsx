@@ -1,9 +1,10 @@
 import Link from 'next/link';
 import { asc, eq } from 'drizzle-orm';
 import { db, agents, skills } from '@mantle/db';
+import { formatInProfile, loadProfilePreferences } from '@mantle/content';
 import { requireOwner } from '@/lib/auth';
 import { listHeartbeats } from '@/lib/heartbeats';
-import { HeartbeatsClient } from './heartbeats-client';
+import { HeartbeatsClient, type HeartbeatFormattedTimes } from './heartbeats-client';
 
 /**
  * /settings/heartbeats — proactive Saskia control surface.
@@ -18,7 +19,7 @@ import { HeartbeatsClient } from './heartbeats-client';
  */
 export default async function HeartbeatsPage() {
   const user = await requireOwner();
-  const [rows, agentRows, skillRows] = await Promise.all([
+  const [rows, agentRows, skillRows, prefs] = await Promise.all([
     listHeartbeats(user.id),
     db
       .select({ slug: agents.slug, name: agents.name, role: agents.role })
@@ -30,7 +31,20 @@ export default async function HeartbeatsPage() {
       .from(skills)
       .where(eq(skills.ownerId, user.id))
       .orderBy(asc(skills.slug)),
+    loadProfilePreferences(user.id),
   ]);
+
+  // Pre-format dates server-side using the user's profile tz + locale.
+  // Critical: doing this on the client via toLocaleString() produces a
+  // different string than the Node SSR pass (different tz / locale
+  // defaults), which trips React's hydration check. Same pattern the
+  // detail page uses.
+  const formatted: HeartbeatFormattedTimes = {};
+  for (const h of rows) {
+    formatted[h.id] = {
+      nextFireAt: h.nextFireAt ? formatInProfile(new Date(h.nextFireAt), prefs) : null,
+    };
+  }
 
   return (
     <div className="mx-auto max-w-5xl space-y-6 px-6 py-8">
@@ -53,6 +67,7 @@ export default async function HeartbeatsPage() {
         initial={rows}
         agents={agentRows}
         skills={skillRows}
+        formatted={formatted}
       />
     </div>
   );

@@ -134,14 +134,22 @@ function statusBadgeClass(s: HeartbeatSummary['status']): string {
   }
 }
 
+/** Server-rendered, locale-stable date strings keyed by heartbeat id.
+ *  Avoids the SSR hydration mismatch that toLocaleString() causes when
+ *  the Node process tz/locale differs from the browser's. Computed in
+ *  page.tsx via formatInProfile and threaded through here. */
+export type HeartbeatFormattedTimes = Record<string, { nextFireAt: string | null }>;
+
 export function HeartbeatsClient({
   initial,
   agents,
   skills,
+  formatted,
 }: {
   initial: HeartbeatSummary[];
   agents: AgentOpt[];
   skills: SkillOpt[];
+  formatted: HeartbeatFormattedTimes;
 }) {
   const router = useRouter();
   const [editing, setEditing] = useState<{ mode: 'create' } | { mode: 'edit'; hb: HeartbeatSummary } | null>(null);
@@ -279,8 +287,8 @@ export function HeartbeatsClient({
               <p className="truncate text-xs text-muted-foreground">
                 {h.agentSlug} · {h.skillSlug} · {h.scheduleKind} ·{' '}
                 {h.surface.kind === 'telegram' ? `tg:${h.surface.chat_id}` : 'web'} · fires={h.fireCount}
-                {h.nextFireAt && h.status === 'active' && (
-                  <> · next {new Date(h.nextFireAt).toLocaleString()}</>
+                {h.nextFireAt && h.status === 'active' && formatted[h.id]?.nextFireAt && (
+                  <> · next {formatted[h.id]?.nextFireAt}</>
                 )}
               </p>
             </div>
