@@ -15,10 +15,12 @@
  */
 
 import {
+  findAdapterCatalogDrift,
   registerChatAdapter,
   registerSttAdapter,
   registerTtsAdapter,
 } from './registry';
+import { SUPPORTED_PROVIDERS } from '../providers';
 import { openAiTtsAdapter } from './openai-tts';
 import { openAiSttAdapter } from './openai-stt';
 import { xaiChatAdapter } from './xai-chat';
@@ -41,7 +43,26 @@ registerChatAdapter(huggingfaceChatAdapter);
 registerChatAdapter(anthropicChatAdapter);
 registerChatAdapter(googleChatAdapter);
 
+// Surface drift between registered adapters and the providers catalog
+// at module-load time. The catalog drives UI dropdown filters via
+// providersForCapability; a registered adapter whose catalog entry
+// doesn't declare the capability would invisibly disappear from the
+// worker form (precisely the bug that hit when xai-tts + google-tts
+// shipped — adapters registered, catalog still chat-only). The
+// catalog-consistency.test.ts asserts the same thing at CI time.
+// Warn rather than throw: a single typo shouldn't take down the
+// agent process in production.
+{
+  const drift = findAdapterCatalogDrift(SUPPORTED_PROVIDERS);
+  if (drift.length > 0) {
+    for (const msg of drift) {
+      console.warn(`[mantle/voice] adapter↔catalog drift: ${msg}`);
+    }
+  }
+}
+
 export {
+  findAdapterCatalogDrift,
   registerChatAdapter,
   getChatAdapter,
   listChatAdapters,

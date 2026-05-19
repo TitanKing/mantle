@@ -92,6 +92,65 @@ export function getImageGenAdapter(providerId: string): ImageGenDispatcher | nul
 // ─── Capability check (used by UI to derive `wired` flag) ────────────
 
 /**
+ * Verify the providers catalog and the adapter registry agree on
+ * "what each provider supports". Returns an array of drift problems
+ * (empty when consistent). Each problem is the human-readable
+ * sentence we surface to the dev log or to the failing test.
+ *
+ * The drift we care about: a registered adapter exists for a
+ * (provider, capability) pair that the providers catalog does NOT
+ * declare. Symptom in production: provider dropdown filters in the
+ * worker form (which read the catalog's `capabilities`) hide the
+ * provider for that kind, even though the runtime would happily
+ * accept it. We hit this exact bug when xai-tts + google-tts
+ * shipped — adapters registered, catalog still said chat-only —
+ * and the TTS dropdown wouldn't list either.
+ *
+ * Catalog without adapter is the OTHER direction and is FINE — it
+ * means "we plan to wire this; not yet." That's the documented
+ * "not yet wired" state and isn't a bug.
+ *
+ * Called from `./index.ts` once on module load (dev-log warning) and
+ * exercised explicitly in catalog-consistency.test.ts so a missed
+ * catalog edit fails CI.
+ */
+export function findAdapterCatalogDrift(
+  providers: ReadonlyArray<{ id: string; capabilities: readonly string[] }>,
+): string[] {
+  const problems: string[] = [];
+  const catalogById = new Map(providers.map((p) => [p.id as string, p.capabilities]));
+
+  function check(
+    label: 'chat' | 'tts' | 'stt' | 'vision' | 'image_gen',
+    registry: Map<ProviderId, { adapterName: string }>,
+  ): void {
+    for (const [providerId, adapter] of registry) {
+      const caps = catalogById.get(providerId);
+      if (!caps) {
+        problems.push(
+          `${adapter.adapterName} is registered, but provider id '${providerId}' is not in SUPPORTED_PROVIDERS.`,
+        );
+        continue;
+      }
+      if (!caps.includes(label)) {
+        problems.push(
+          `${adapter.adapterName} is registered, but the providers catalog for '${providerId}' does not list '${label}' in capabilities. ` +
+            `Add '${label}' to the entry in packages/voice/src/providers.ts so the worker-form dropdown surfaces this provider for ${label} workers.`,
+        );
+      }
+    }
+  }
+
+  check('chat', CHAT);
+  check('tts', TTS);
+  check('stt', STT);
+  check('vision', VISION);
+  check('image_gen', IMAGE_GEN);
+
+  return problems;
+}
+
+/**
  * Is the given provider wired (i.e. has a registered adapter) for the
  * given capability? Drives the "wired" / "not yet wired" hint in the
  * settings UI so the catalog stays honest.
