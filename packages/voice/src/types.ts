@@ -89,6 +89,17 @@ export type SynthesizeOptions = {
    *  field. We pass it through unconditionally because the OpenAI
    *  endpoint doesn't error on extra params. */
   instructions?: string;
+  /** Optional BCP-47 language hint (e.g. 'en', 'fr', 'pt-BR') or
+   *  'auto' to let the provider detect. Different providers do
+   *  different things with this:
+   *    - xAI:        forces the voice to speak in this language (so a
+   *                  voice cloned with French audio + language='fr'
+   *                  gets a French accent regardless of input text).
+   *    - Google:     used to bias TTS pronunciation.
+   *    - ElevenLabs: ignored — voice + model carry the language.
+   *    - OpenAI:     ignored — TTS infers from text.
+   *  Defaults to provider-specific auto when omitted. */
+  language?: string;
 };
 
 export type SynthesizeResult = {

@@ -707,7 +707,12 @@ async function handleMessage(messageId: string): Promise<void> {
                 const synth = await ttsAdapter.synthesize({
                   apiKey: ttsApiKey,
                   text: reply,
-                  voice: ttsParams.voice ?? 'nova',
+                  // Cast through unknown — voice is a free-form string
+                  // at the storage layer (xAI / ElevenLabs accept
+                  // custom voice ids like '69smp8rm'), but
+                  // SynthesizeOptions.voice is typed as the OpenAI
+                  // union. Adapter does per-provider validation.
+                  voice: (ttsParams.voice ?? 'nova') as never,
                   // Worker.model wins; ttsParams.model is a redundant
                   // alias on the OpenAI side but other providers may
                   // split voice from model — keep both lookups.
@@ -718,6 +723,11 @@ async function handleMessage(messageId: string): Promise<void> {
                   // older models ignore the field silently, so it's
                   // safe to forward unconditionally.
                   instructions: ttsParams.instructions,
+                  // Language hint — drives accent on xAI custom
+                  // voices (e.g. setting 'fr' to keep a French clone's
+                  // accent regardless of input text). Other providers
+                  // ignore.
+                  language: ttsParams.language,
                 });
                 const voiceMessageId = await sendVoice(
                   account,

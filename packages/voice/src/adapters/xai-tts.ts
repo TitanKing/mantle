@@ -83,10 +83,18 @@ async function xaiTtsSynthesize(opts: SynthesizeOptions): Promise<SynthesizeResu
     typeof opts.voice === 'string' && opts.voice.length > 0 ? opts.voice : 'eve';
   const { codec, mime } = xaiCodecFor(opts.format);
 
+  // Language: honour the per-worker hint if set, else auto-detect.
+  // Operators set this when they want a specific accent — e.g. a
+  // voice cloned in xAI's studio with French samples needs
+  // `language: 'fr'` for the cloned accent to actually come through;
+  // omitting it falls back to whatever the prompt text suggests.
+  const language =
+    typeof opts.language === 'string' && opts.language.length > 0 ? opts.language : 'auto';
+
   const body: Record<string, unknown> = {
     text,
     voice_id: voiceId,
-    language: 'auto',
+    language,
     output_format: { codec },
     // text_normalization is on by default (numbers/abbreviations);
     // leaving it default. The speed knob doesn't exist on Grok TTS.

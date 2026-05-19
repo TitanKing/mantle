@@ -126,9 +126,14 @@ export async function testTtsAction(
     );
   }
   const params = (worker.params ?? {}) as {
-    voice?: TtsVoice;
+    // Voice is a free-form string at the storage layer (see
+    // TtsParams.voice). Cast through unknown so the TtsVoice union
+    // doesn't reject xAI / ElevenLabs custom ids on the way to the
+    // adapter — the adapter is the actual validator.
+    voice?: string;
     speed?: number;
     instructions?: string;
+    language?: string;
   };
   const sample =
     text?.trim() ||
@@ -137,7 +142,7 @@ export async function testTtsAction(
   const synth = await adapter.synthesize({
     apiKey,
     text: sample,
-    voice: params.voice ?? 'nova',
+    voice: (params.voice ?? 'nova') as unknown as TtsVoice,
     model: worker.model || 'gpt-4o-mini-tts',
     speed: params.speed ?? 1.0,
     // mp3 for the browser preview — the <audio> element handles it
@@ -145,6 +150,8 @@ export async function testTtsAction(
     // browsers still need extra mime nudging for opus playback.)
     format: 'mp3',
     instructions: params.instructions,
+    // Language hint — only xAI/Google use it; OpenAI/ElevenLabs ignore.
+    language: params.language,
   });
   return {
     ok: true,
@@ -377,13 +384,19 @@ function parseParamsFromForm(kind: AiWorkerKind, fd: FormData): AiWorkerParams {
   switch (kind) {
     case 'tts': {
       return {
-        voice: (str(fd.get('voice')) as
-          | 'alloy' | 'ash' | 'ballad' | 'cedar' | 'coral' | 'echo'
-          | 'fable' | 'marin' | 'nova' | 'onyx' | 'sage' | 'shimmer'
-          | 'verse' | undefined) ?? undefined,
+        // Voice is a free-form string now — accepts OpenAI preset
+        // names, xAI custom ids (`69smp8rm`), ElevenLabs voice ids,
+        // etc. The adapter handles per-provider validation; storing
+        // it raw means a future provider's new voice naming scheme
+        // doesn't require a schema change.
+        voice: str(fd.get('voice')),
         speed: num(fd.get('speed')),
         format: (str(fd.get('format')) as 'mp3' | 'opus' | undefined) ?? undefined,
         instructions: str(fd.get('instructions')),
+        // Optional BCP-47 language. xAI uses this to force a voice's
+        // accent (necessary for custom French/Spanish/etc. clones);
+        // Google honours it too. OpenAI and ElevenLabs ignore.
+        language: str(fd.get('language')),
       };
     }
     case 'stt': {

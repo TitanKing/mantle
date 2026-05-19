@@ -49,23 +49,17 @@ export type AiWorkerKind = (typeof aiWorkerKind.enumValues)[number];
 
 /** Params for `kind='tts'` workers. */
 export type TtsParams = {
-  /** OpenAI voice name. The full set across all current OpenAI TTS
-   *  models. The runtime + UI narrow this to the subset supported by
-   *  the specific model (see @mantle/voice catalog). */
-  voice?:
-    | 'alloy'
-    | 'ash'
-    | 'ballad'
-    | 'cedar'
-    | 'coral'
-    | 'echo'
-    | 'fable'
-    | 'marin'
-    | 'nova'
-    | 'onyx'
-    | 'sage'
-    | 'shimmer'
-    | 'verse';
+  /** Voice id. For OpenAI this is one of the published names
+   *  (alloy/ash/ballad/cedar/coral/echo/fable/marin/nova/onyx/sage/
+   *  shimmer/verse). For xAI it's either a preset (eve/ara/rex/sal/
+   *  leo) OR a custom-generated id from the xAI console like
+   *  '69smp8rm'. For ElevenLabs it's either a premade voice id or
+   *  one of the user's cloned voice ids. For Google it's a name from
+   *  GOOGLE_TTS_VOICES. Stored as a free-form string so custom ids
+   *  flow through end-to-end; the UI narrows the dropdown to known
+   *  voices but accepts arbitrary input for providers that support
+   *  it. */
+  voice?: string;
   /** Legacy param — model now lives on the worker row's `model` column.
    *  Kept for backward-compat with rows created before the move. */
   model?: 'tts-1' | 'tts-1-hd' | 'gpt-4o-mini-tts';
@@ -76,6 +70,11 @@ export type TtsParams = {
   /** Free-text style hint passed to gpt-4o-mini-tts ("speak warmly",
    *  "calm and slow"). Older models silently ignore it. */
   instructions?: string;
+  /** BCP-47 language hint (e.g. 'en', 'fr', 'pt-BR') or 'auto'.
+   *  Forces xAI/Google TTS to speak in that language — required when
+   *  a cloned voice should keep its native accent regardless of
+   *  what's in the text. OpenAI and ElevenLabs ignore this. */
+  language?: string;
 };
 
 /** Params for `kind='stt'` workers (speech-to-text). */

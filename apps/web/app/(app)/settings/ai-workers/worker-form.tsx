@@ -591,15 +591,49 @@ function TtsFields({
         [OpenAiVoice, string]
       >).map(([id, description]) => ({ id, description }));
 
-  // Pick a sensible default voice: keep the stored one if it's still
-  // valid for the selected model; otherwise fall back to nova (if
-  // available) or the first voice in the list.
+  // xAI and ElevenLabs both let operators use voice IDs that AREN'T in
+  // the preset list — xAI's console generates opaque ids like
+  // "69smp8rm" for custom-tuned voices; ElevenLabs returns user-cloned
+  // voice ids alongside premades. Other providers (OpenAI, Google)
+  // have closed rosters and reject arbitrary ids. We surface an extra
+  // "Custom voice ID" input on the two that accept it.
+  const supportsCustomVoiceId = provider === 'xai' || provider === 'elevenlabs';
+
+  // Pick a sensible default voice. Logic per provider:
+  //   - If the stored voice matches a preset, use it.
+  //   - Else, if the provider accepts custom ids, KEEP the stored
+  //     value verbatim (operator typed a custom id; don't clobber it).
+  //   - Else, fall back to nova (preferred) or the first available
+  //     voice (existing OpenAI-style behaviour).
   const storedVoice = (params.voice as string | undefined) ?? 'nova';
-  const validVoice = availableVoices.find((v) => v.id === storedVoice)
+  const presetIds = new Set(availableVoices.map((v) => v.id));
+  const validVoice = presetIds.has(storedVoice)
+    ? storedVoice
+    : supportsCustomVoiceId && storedVoice.length > 0
     ? storedVoice
     : availableVoices.find((v) => v.id === 'nova')?.id ??
       availableVoices[0]?.id ??
       storedVoice;
+
+  // Controlled state for the voice field so the dropdown and the
+  // custom-id input can stay in sync. Re-seeded when the worker model
+  // changes (handled by the useEffect below) so switching to a model
+  // with a disjoint voice list doesn't leave the form in a bad state.
+  const [voiceValue, setVoiceValue] = useState<string>(validVoice);
+  // When availableVoices loads asynchronously (ElevenLabs/xAI/Google
+  // live discovery) the validVoice recomputes — sync it into state so
+  // the dropdown reflects the freshly-discovered list. Only resync
+  // when the chosen voice ISN'T already valid; otherwise typing into
+  // the custom input would get stomped on each re-render.
+  useEffect(() => {
+    if (presetIds.has(voiceValue)) return;
+    // For providers that accept custom ids, keep whatever the user
+    // typed even if it's not in the preset list.
+    if (supportsCustomVoiceId && voiceValue.length > 0) return;
+    setVoiceValue(validVoice);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [model, availableVoices.length]);
+  const isCustomVoice = voiceValue.length > 0 && !presetIds.has(voiceValue);
 
   // Style instructions are honoured by gpt-4o-mini-tts; tts-1 and
   // tts-1-hd ignore the field. ElevenLabs has its own steering
@@ -623,13 +657,21 @@ function TtsFields({
     <div className="space-y-4">
       <div className="space-y-1.5">
         <Label htmlFor="voice">Voice</Label>
+        {/* Hidden input carries the canonical voice value on submit.
+            The dropdown and custom-id input both write to `voiceValue`
+            — this is what FormData picks up. */}
+        <input type="hidden" name="voice" value={voiceValue} />
         <select
           id="voice"
-          name="voice"
-          // `key` forces a remount when the model changes so the
-          // selected option reflects the new validVoice default.
-          key={`voice-${model}-${availableVoices.length}`}
-          defaultValue={validVoice}
+          // No `name` — the hidden input above owns submission. This
+          // is just the preset picker UI.
+          value={isCustomVoice ? '__custom__' : voiceValue}
+          onChange={(e) => {
+            // The "Custom voice ID" sentinel is a no-op selection —
+            // the actual custom value lives in the text input below.
+            if (e.target.value === '__custom__') return;
+            setVoiceValue(e.target.value);
+          }}
           className="flex h-9 w-full rounded-md border border-input bg-transparent px-3 py-1 text-sm shadow-sm"
         >
           {availableVoices.map((v) => (
@@ -637,7 +679,40 @@ function TtsFields({
               {v.id} — {v.description}
             </option>
           ))}
+          {supportsCustomVoiceId && (
+            <option value="__custom__">
+              {isCustomVoice ? `Custom: ${voiceValue}` : 'Custom voice ID…'}
+            </option>
+          )}
         </select>
+        {supportsCustomVoiceId && (
+          <div className="space-y-1">
+            <Input
+              id="voice-custom"
+              value={isCustomVoice ? voiceValue : ''}
+              onChange={(e) => {
+                const next = e.target.value.trim();
+                if (next.length === 0) {
+                  // Cleared — snap back to the first preset so the
+                  // dropdown has a meaningful selection again.
+                  setVoiceValue(availableVoices[0]?.id ?? '');
+                } else {
+                  setVoiceValue(next);
+                }
+              }}
+              placeholder={
+                provider === 'xai'
+                  ? 'Custom voice ID from console.x.ai (e.g. 69smp8rm) — overrides the preset'
+                  : 'Custom voice ID from your ElevenLabs library — overrides the preset'
+              }
+            />
+            <p className="text-xs text-muted-foreground">
+              {provider === 'xai'
+                ? "Use this for voices generated in xAI's voice studio. The console assigns each one an id like 69smp8rm — paste it here to use it from this worker."
+                : "Use this for ElevenLabs voices that aren't auto-discovered (e.g. shared voices, IDs from your library)."}
+            </p>
+          </div>
+        )}
         {model && availableVoices.length > 0 && (
           <p className="text-xs text-muted-foreground">
             {availableVoices.length} voice{availableVoices.length === 1 ? '' : 's'}{' '}
@@ -648,7 +723,7 @@ function TtsFields({
               : provider === 'google'
               ? 'available for Gemini TTS'
               : `available for ${model}`}
-            .
+            {supportsCustomVoiceId ? '; custom ids accepted above.' : '.'}
           </p>
         )}
         {providerWithLiveVoices && !apiKeyId && (
@@ -705,6 +780,30 @@ function TtsFields({
             : 'Switch to gpt-4o-mini-tts to use style instructions.'}
         </p>
       </div>
+
+      {/* Language hint — only the xAI TTS endpoint has a structured
+          `language` body field today. Critical for xAI custom voices:
+          a clone trained on French audio needs language='fr' to keep
+          its accent regardless of the text it's reading. OpenAI and
+          ElevenLabs derive language from the text/voice; Google
+          biases pronunciation via natural-language phrasing in the
+          prompt rather than a structured code. */}
+      {provider === 'xai' && (
+        <div className="space-y-1.5">
+          <Label htmlFor="language">Language hint</Label>
+          <Input
+            id="language"
+            name="language"
+            defaultValue={(params.language as string) ?? ''}
+            placeholder="BCP-47 (e.g. 'en', 'fr', 'pt-BR') or 'auto' / blank to detect."
+          />
+          <p className="text-xs text-muted-foreground">
+            Required when using a custom voice cloned in a non-English language — set this to the
+            voice&apos;s native language (e.g. <code className="font-mono">fr</code> for a French
+            clone) so the accent stays in character. Leave blank to let Grok auto-detect.
+          </p>
+        </div>
+      )}
 
       <div className="grid grid-cols-2 gap-4">
         <div className="space-y-1.5">
