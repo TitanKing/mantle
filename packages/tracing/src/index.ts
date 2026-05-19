@@ -15,3 +15,4 @@ export {
 } from './store';
 
 export { fallbackCostMicroUsd } from './pricing';
+export { contextLimitFor } from './model-context';

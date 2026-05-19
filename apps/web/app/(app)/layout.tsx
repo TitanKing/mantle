@@ -7,6 +7,7 @@ import { requireOwner } from '@/lib/auth';
 import { TreeRail } from '@/components/tree-rail';
 import { TopBar } from '@/components/top-bar';
 import { AppShell } from '@/components/app-shell';
+import { UsageCard } from '@/components/usage-card';
 
 /**
  * App shell: tree rail on the left, top bar on top, content in the middle.
@@ -31,6 +32,7 @@ export default async function AppLayout({ children }: { children: React.ReactNod
         <TreePine className="size-4" aria-hidden />
         <span className="text-sm font-semibold">Mantle</span>
       </div>
+      <UsageCard ownerId={user.id} />
       <nav className="flex flex-col gap-px p-2 text-sm">
         <Link href="/" className="flex items-center gap-2 rounded px-2 py-1.5 hover:bg-accent">
           <Inbox className="size-4" aria-hidden /> Inbox

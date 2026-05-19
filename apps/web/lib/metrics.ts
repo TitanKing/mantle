@@ -1,5 +1,6 @@
 import { and, desc, eq, gte, sql } from 'drizzle-orm';
 import { agents, db, traceSteps, traces } from '@mantle/db';
+import { contextLimitFor } from '@mantle/tracing';
 
 /**
  * Aggregate metrics computed over the traces + trace_steps tables.
@@ -15,6 +16,113 @@ export type Traffic = {
   tokensOut: number;
   tokensCacheRead: number;
 };
+
+export type SpendRange = 'day' | 'week' | 'month';
+
+export type SpendSummary = {
+  range: SpendRange;
+  costMicroUsd: number;
+  runs: number;
+};
+
+const RANGE_HOURS: Record<SpendRange, number> = {
+  day: 24,
+  week: 24 * 7,
+  month: 24 * 30,
+};
+
+export async function spendInRange(userId: string, range: SpendRange): Promise<SpendSummary> {
+  const since = new Date(Date.now() - RANGE_HOURS[range] * 3600_000);
+  const rows = await db
+    .select({
+      costMicroUsd: sql<number>`coalesce(sum(${traces.costMicroUsd}), 0)::bigint`,
+      runs: sql<number>`count(*)::int`,
+    })
+    .from(traces)
+    .where(and(eq(traces.ownerId, userId), gte(traces.startedAt, since)));
+  const r = rows[0];
+  return {
+    range,
+    costMicroUsd: Number(r?.costMicroUsd ?? 0),
+    runs: r?.runs ?? 0,
+  };
+}
+
+export type AgentContext = {
+  agentId: string;
+  agentName: string | null;
+  agentSlug: string | null;
+  modelSlug: string;
+  lastTokensIn: number;
+  contextLimit: number | null;
+  pct: number | null;
+  lastRunAt: string;
+};
+
+type AgentContextRow = {
+  agent_id: string;
+  agent_name: string | null;
+  agent_slug: string | null;
+  model: string;
+  started_at: string;
+  max_tokens_in: number;
+};
+
+/**
+ * For each agent that ran a responder_turn in the last 24h, return the
+ * MAX prompt-token count across that turn's llm_call steps as a proxy
+ * for "context fill" — tool-loop turns have multiple llm_calls, each
+ * with its own (independent) prompt; the biggest single one is what
+ * actually had to fit in the model's context window.
+ *
+ * Model comes from agents.model (the currently-configured slug), which
+ * is correct as long as the model wasn't swapped between the last turn
+ * and now. For an unknown model, contextLimit + pct stay null and the
+ * UI shows a greyed-out bar.
+ */
+export async function recentAgentContext(userId: string): Promise<AgentContext[]> {
+  const since = new Date(Date.now() - 24 * 3600_000);
+  const result = await db.execute<AgentContextRow>(sql`
+    WITH latest_trace AS (
+      SELECT DISTINCT ON (agent_id) id, agent_id, started_at
+      FROM traces
+      WHERE owner_id = ${userId}
+        AND kind = 'responder_turn'
+        AND agent_id IS NOT NULL
+        AND started_at >= ${since.toISOString()}
+      ORDER BY agent_id, started_at DESC
+    )
+    SELECT
+      lt.agent_id,
+      a.name AS agent_name,
+      a.slug AS agent_slug,
+      a.model,
+      lt.started_at,
+      COALESCE((
+        SELECT MAX((meta->>'tokens_in')::int)
+        FROM trace_steps
+        WHERE trace_id = lt.id AND kind = 'llm_call'
+      ), 0) AS max_tokens_in
+    FROM latest_trace lt
+    JOIN agents a ON a.id = lt.agent_id
+    ORDER BY lt.started_at DESC
+  `);
+  const rows = (Array.isArray(result) ? result : (result as { rows?: AgentContextRow[] }).rows ?? []) as AgentContextRow[];
+  return rows.map((r) => {
+    const limit = contextLimitFor(r.model);
+    const tokensIn = Number(r.max_tokens_in);
+    return {
+      agentId: r.agent_id,
+      agentName: r.agent_name,
+      agentSlug: r.agent_slug,
+      modelSlug: r.model,
+      lastTokensIn: tokensIn,
+      contextLimit: limit,
+      pct: limit ? Math.min(1, tokensIn / limit) : null,
+      lastRunAt: new Date(r.started_at).toISOString(),
+    };
+  });
+}
 
 export async function trafficWindow(userId: string, hoursBack: number): Promise<Traffic> {
   const since = new Date(Date.now() - hoursBack * 3600_000);
