@@ -678,6 +678,85 @@ Failure modes degrade gracefully:
   meta on the trace step.
 - Voice clip > 3 min cap → polite text refusal, no transcription bill.
 
+## 9f. Vision + image generation
+
+The agent + assistant both speak the multimedia adapter surface for
+images:
+
+- **Vision in (Telegram photo):** photo attachment → default vision
+  worker → note with extracted text → biography page picks it up. See
+  `photo_ingest` trace kind. Short-circuit: responder LLM doesn't run.
+- **Vision in (/assistant image upload):** image attached to a web
+  turn → save under `/files/assistant-uploads/<date>/` → vision worker
+  runs synchronously → LLM-visible message gets the transcript
+  appended. User's bubble shows the original image; Saskia sees
+  transcript.
+- **Vision on demand (Saskia tool):** `extract_from_image(node_id |
+  telegram_file_id, prompt?)` — Saskia can re-read a previously-sent
+  photo or any image-typed file node.
+- **Image gen (Saskia tool):** `generate_image(prompt, size?, style?,
+  quality?, negative_prompt?)` — runs the default image_gen worker,
+  saves to `/files/generated-images/<date>/`, delivers inline
+  (`sendPhoto` on Telegram, base64 artifact on web).
+
+All routed through the same adapter framework as TTS/STT. 4 vision
+providers wired (OpenAI, Anthropic, Google, xAI); 4 image-gen
+providers (OpenAI, xAI, Google, Hugging Face). See
+[`ai-workers.md`](./ai-workers.md) for the full matrix.
+
+## 9g. Web /assistant — full multimedia parity with Telegram
+
+The `/assistant` chat (web) reaches Telegram-equivalent capability:
+
+- **Mic input** — `MediaRecorder` → `POST /api/assistant/transcribe`
+  → STT worker → fills the input box. User reviews + sends; no
+  auto-send (Whisper mishearings would cost an LLM round-trip).
+- **Voice output** — Saskia's `synthesize_speech` tool emits an
+  audio artifact via the tool-loop sidecar mechanism; the chat
+  renders `<audio controls>` inline in the reply bubble.
+- **Image upload** — paperclip in the input row attaches an image;
+  multipart submit; vision worker runs synchronously; image renders
+  in the user's bubble.
+- **Image gen** — `generate_image` artifact renders as a
+  click-to-zoom preview in the reply bubble.
+
+Artifacts ride the `runToolLoop` result via a sidecar array — see
+[`ai-workers.md §5d`](./ai-workers.md) for the artifact convention.
+
+## 9h. Profile preferences + time-aware agent
+
+Two per-user preferences live in `profiles.preferences` jsonb:
+
+- `timezone` (IANA, e.g. `Africa/Johannesburg`)
+- `locale` (BCP-47, e.g. `en-GB`)
+
+Set at `/settings/profile`. The responder turn prefixes Saskia's
+system prompt with a one-line **time context**: `Current time:
+<full local date + time> (<tz>). UTC instant: <ISO>. User locale:
+<bcp47>.` So Saskia resolves "tomorrow at 3pm" → UTC ISO before
+calling `event_create`. Costs ~30 prompt tokens per turn; broadly
+useful so it's unconditional (not gated on the event tools being
+attached).
+
+Saskia gets 5 event tools (`event_list`, `event_get`, `event_create`,
+`event_update`, `event_delete`) mirroring the MCP shapes. None
+require_confirm — operator can flip per-row in `/settings/tools` if
+approval gates are wanted. `event_create` defaults the event's
+timezone to the owner's profile when the caller doesn't specify.
+
+## 9i. End-to-end traceability
+
+Companion doc: [`observability.md`](./observability.md). Every data
+entry point opens a `content_ingest` trace; every pipeline decision
+(including "I considered this but chose not to run") opens a trace
+with a disposition string. The node-biography page at
+`/nodes/<id>/history` joins all traces tied to a node into a single
+operator-facing timeline. The hard rule: **nothing happens to your
+data without a trace row showing it.** See observability.md for the
+full disposition catalog and the two real-world tracing bugs that
+informed this design (FK enum-mismatch + Drizzle journal-skipped
+migration).
+
 ## 10. The MCP server
 
 `apps/mcp/src/server.ts`, ~340 LOC. Exposes Claude's tools over stdio

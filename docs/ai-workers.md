@@ -163,14 +163,23 @@ in the UI dropdown.
 | Provider | Chat | TTS | STT | Vision | Image-gen |
 |---|---|---|---|---|---|
 | OpenRouter | ✅ (direct SDK, not via registry) | — | — | — | — |
-| OpenAI | (via OpenRouter) | ✅ openai-tts | ✅ openai-stt | (planned) | (planned) |
-| xAI (Grok) | ✅ xai-chat | — | — | — | — |
-| Hugging Face | ✅ huggingface-chat | — | — | — | — |
-| Anthropic (direct) | ✅ anthropic-chat | — | — | — | — |
-| Google (Gemini) | ✅ google-chat | — | — | — | — |
-| ElevenLabs | — | ✅ elevenlabs-tts | — | — | — |
-| Deepgram | — | — | (planned) | — | — |
-| AssemblyAI | — | — | (planned) | — | — |
+| OpenAI | (via OpenRouter) | ✅ openai-tts | ✅ openai-stt | ✅ openai-vision | ✅ openai-image (gpt-image-1 / DALL-E 3 / DALL-E 2) |
+| xAI (Grok) | ✅ xai-chat | ✅ xai-tts | ✅ xai-stt | ✅ xai-vision | ✅ xai-image (grok-imagine-image) |
+| Hugging Face | ✅ huggingface-chat | — | — | — | ✅ huggingface-image (FLUX-1, SDXL, SD 3.5) |
+| Anthropic (direct) | ✅ anthropic-chat | — | — | ✅ anthropic-vision | — *(provider doesn't ship image-gen)* |
+| Google (Gemini) | ✅ google-chat | ✅ google-tts | ✅ google-stt (via generateContent) | ✅ google-vision | ✅ google-image (Imagen 3 / 4) |
+| ElevenLabs | — | ✅ elevenlabs-tts | ✅ elevenlabs-stt (Scribe v1) | — | — |
+| Deepgram | — | — | ✅ deepgram-stt | — | — |
+| AssemblyAI | — | — | ✅ assemblyai-stt | — | — |
+
+Vision providers also power the **Telegram photo ingest** pipeline
+(photo → default vision worker → note in `/files`) and Saskia's
+`extract_from_image` tool for on-demand OCR.
+
+Image-gen providers power **Saskia's `generate_image` tool** —
+generated images land both inline in the chat (Telegram `sendPhoto`
+on Telegram, base64 artifact in /assistant) and as a file node under
+`/files/generated-images/<yyyy-mm-dd>/`.
 
 ### 3.4 The provider catalogue
 
@@ -295,6 +304,108 @@ where that lives.
 
 ---
 
+## 5b. Vision in — photo ingest
+
+When a Telegram message arrives with a photo attachment OR a user
+attaches an image to a `/assistant` web turn, the agent runs the
+**default vision worker** synchronously and folds the result into the
+conversation:
+
+### Telegram path
+
+```
+1. Telegram message arrives with attachment kind='photo'
+2. handleMessage detects the photo, opens a photo_ingest trace
+3. Resolve default vision worker via getDefaultWorker(ownerId, 'vision')
+4. downloadTelegramFile → bytes
+5. adapter.extract(bytes, {apiKey, mimeType, prompt, model, maxTokens})
+6. createNote(ownerId, {title, content: extracted_text, tags: ['telegram','photo','vision']})
+7. recordIngest({source: 'telegram_photo', nodeId: note.id, ...}) — picked up
+   by the biography page
+8. Send Telegram ack: "Saved your photo as a note: '<title>' (X chars
+   extracted via <adapter>)."
+```
+
+This is a SHORT-CIRCUIT — the responder LLM is NOT invoked. Photos
+become searchable notes; conversational photo replies are a separate
+follow-up if needed (operator can re-route by editing the worker's
+prompt).
+
+### Web /assistant path
+
+```
+1. POST /api/assistant/turn (multipart, text + image)
+2. Save image to /files/assistant-uploads/<yyyy-mm-dd>/
+3. recordIngest({source: 'assistant_upload', nodeId: file.id, ...})
+4. Run default vision worker over the image bytes
+5. Compose the LLM-visible message:
+   `${user_text}\n\n[Attached image — vision worker transcript:]\n${extracted_text}`
+6. runToolLoop with the augmented prompt — Saskia sees what was in the photo
+7. Return reply + inbound artifact (so the user's bubble renders the image)
+```
+
+The user's bubble shows the original image; Saskia sees the
+vision-extracted transcript appended to the typed text. Vision worker
+failures fall back to a `[Image attached but couldn't be read:
+<reason>]` marker so the LLM at least sees the user TRIED to share
+something.
+
+---
+
+## 5c. Image generation — out
+
+Saskia generates images via the `generate_image` builtin tool. The
+tool resolves the default image_gen worker, calls the adapter, and:
+
+- Saves the bytes to `/files/generated-images/<yyyy-mm-dd>/<unix-ms>-<slug>.<ext>`
+  (auto-creates the folders, idempotent on race).
+- On Telegram surface: `sendPhoto` with the prompt as caption.
+- On /assistant surface: emits an image artifact the chat page renders
+  inline in the reply bubble.
+- Returns to the LLM: `{nodeId, storagePath, model, adapter, mimeType,
+  bytes, revisedPrompt?}` — enough metadata for Saskia to mention what
+  she sent.
+
+DALL-E 3 surfaces a `revised_prompt` field when the model rewrites
+the prompt for safety/quality; this rides through as
+`artifact.caption` so the operator sees what the model actually
+rendered against.
+
+---
+
+## 5d. Tool-delegation surface — Saskia can call workers explicitly
+
+Workers have **three invocation paths**, deliberately:
+
+1. **Automatic pipeline** — modality-matched (voice-in → voice-out,
+   photo → vision ingest, node-save → extractor).
+2. **Tool-mediated** — Saskia chooses to invoke a worker mid-turn via
+   one of these builtins:
+     - `synthesize_speech(text)` — TTS for explicit "send me a voice
+       note" requests. Telegram → `sendVoice`; web → audio artifact
+       rendered as `<audio controls>` in the reply.
+     - `extract_from_image(node_id | telegram_file_id, prompt?)` —
+       run vision on a previously-uploaded image or a Telegram file
+       reference.
+     - `summarize_text(text | node_id, focus?, max_words?)` — run the
+       default summarizer worker over inline text or a note body.
+     - `generate_image(prompt, size?, style?, quality?, negative_prompt?)`
+       — image generation as documented above.
+3. **UI test buttons** — `/settings/ai-workers/<id>` has per-kind
+   test surfaces (record mic, pick image, type prompt) so operators
+   can verify config without invoking Saskia.
+
+Each tool returns structured `{ok: false, error}` when its worker
+isn't configured, so the LLM tells the user "I'd love to but the
+default vision worker isn't set up" rather than silently failing.
+
+The mental model: **workers are services; tools are agent-callable
+interfaces to those services; pipelines are event-driven invocations
+of those same services.** All three paths can run for the same
+worker without conflicting.
+
+---
+
 ## 6. Testing affordances
 
 Each worker kind has a test button in `/settings/ai-workers/<id>`:
@@ -304,6 +415,14 @@ Each worker kind has a test button in `/settings/ai-workers/<id>`:
   a Telegram message.
 - **STT:** records from the browser mic via MediaRecorder, sends to
   the adapter, shows transcript + detected language + duration.
+- **Vision:** pick an image from disk; runs through the worker's
+  vision adapter and shows the extracted text, the model that ran it,
+  token counts, and the model's revised prompt (when applicable).
+  Doesn't persist — for iterating on the per-image prompt before
+  pointing the ingest pipeline at it.
+- **Image-gen:** type a prompt; renders the generated image inline
+  with model + adapter info. Also doesn't persist; the production
+  `generate_image` tool is the one that saves to Files.
 - **Chat (reflector/extractor/summarizer with non-OpenRouter
   provider):** sends a one-shot prompt through the worker's adapter,
   shows reply + model that served it + token counts. Useful for
@@ -312,6 +431,10 @@ Each worker kind has a test button in `/settings/ai-workers/<id>`:
 
 All test buttons route through the same adapter the runtime uses, so
 a successful test means production will also work.
+
+`/settings/api-keys` also has a per-key **Test** button that runs the
+adapter's `discoverModels` as an auth probe — instant green/red on
+whether the key is alive without needing to also configure a worker.
 
 ---
 
@@ -334,11 +457,12 @@ provider failover, capabilities OpenRouter doesn't expose). The
 adapter framework is the boundary; flipping the responder to use it
 is a one-day change.
 
-Vision and image-gen interfaces are defined but no built-in adapters
-exist yet. When whiteboard-photo ingestion lands, we wire a vision
-adapter (probably OpenAI or Google as the first since both are
-already wired for chat) and the ingest pipeline gets a new hook on
-image attachments.
+**Update (May 2026):** Vision and image-gen adapters are now live —
+see §3.3 for the matrix. Vision plugs into both Telegram photo ingest
+(automatic) and Saskia's `extract_from_image` tool (on-demand).
+Image-gen plugs into Saskia's `generate_image` tool. Both are wired
+for OpenAI, xAI, Google, and (image-gen only) Hugging Face.
+Anthropic ships vision but no image generation.
 
 ---
 
