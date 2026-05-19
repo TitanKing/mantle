@@ -22,6 +22,7 @@ export type TraceKind =
   | 'reflector_run'
   | 'photo_ingest'
   | 'content_ingest'
+  | 'heartbeat_fire'
   | 'manual';
 
 export type TraceStepKind =

@@ -375,7 +375,7 @@ rendered against.
 
 ## 5d. Tool-delegation surface — Saskia can call workers explicitly
 
-Workers have **three invocation paths**, deliberately:
+Workers have **four invocation paths**, deliberately:
 
 1. **Automatic pipeline** — modality-matched (voice-in → voice-out,
    photo → vision ingest, node-save → extractor).
@@ -394,15 +394,22 @@ Workers have **three invocation paths**, deliberately:
 3. **UI test buttons** — `/settings/ai-workers/<id>` has per-kind
    test surfaces (record mic, pick image, type prompt) so operators
    can verify config without invoking Saskia.
+4. **Heartbeat-driven** — a [heartbeat](./heartbeats.md) fires on
+   schedule and runs the agent's normal tool loop. The agent then
+   freely calls any of the above tools (TTS, image-gen, summarizer)
+   from inside the synthetic-prompt fire. The 5 extra
+   `heartbeat_*` control tools (complete / snooze / update_state /
+   list / fire) live alongside, available only inside a heartbeat
+   context (enforced via AsyncLocalStorage).
 
 Each tool returns structured `{ok: false, error}` when its worker
 isn't configured, so the LLM tells the user "I'd love to but the
 default vision worker isn't set up" rather than silently failing.
 
 The mental model: **workers are services; tools are agent-callable
-interfaces to those services; pipelines are event-driven invocations
-of those same services.** All three paths can run for the same
-worker without conflicting.
+interfaces to those services; pipelines + heartbeats are
+event-driven invocations of those same services.** All four paths
+can run for the same worker without conflicting.
 
 ---
 

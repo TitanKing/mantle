@@ -23,6 +23,10 @@ export const traceKind = pgEnum('trace_kind', [
   // view can answer "where did this come from?" — see
   // recordIngest() in @mantle/tracing.
   'content_ingest',
+  // One per heartbeat fire that actually ran (gate-skipped fires
+  // record to heartbeat_fires only, no trace row). subject_kind
+  // = 'heartbeat', subject_id = heartbeat row id.
+  'heartbeat_fire',
   'manual',
 ]);
 

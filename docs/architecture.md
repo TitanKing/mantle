@@ -757,6 +757,47 @@ full disposition catalog and the two real-world tracing bugs that
 informed this design (FK enum-mismatch + Drizzle journal-skipped
 migration).
 
+## 9j. Heartbeats — proactive agent loop
+
+Full doc: [`heartbeats.md`](./heartbeats.md). Heartbeats turn Saskia
+from passive to proactive: a `heartbeats` row schedules a
+**skill→agent→surface** invocation on a recurring/once/manual
+schedule, carries persistent `state jsonb` across fires, and
+self-terminates via the `heartbeat_complete` tool.
+
+The fire loop lives in `apps/agent/src/main.ts` as a per-minute
+`setInterval` (same backoff pattern as the reflector). Each tick:
+
+1. SELECT active heartbeats where `next_fire_at <= now()`
+2. For each: gate-check (idle / quiet hours / cooldown / earliest)
+3. On pass: open `trace_kind='heartbeat_fire'`, build synthetic
+   "you have a heartbeat to do" prompt, run the agent's tool loop
+   under `withHeartbeatContext`, deliver reply to surface, update
+   `state` + `next_fire_at`
+4. On gate fail: append to `heartbeat_fires` audit log, bump
+   `next_fire_at` to retry soon. No trace row burned per skip.
+
+Key separation: **heartbeat skills are NOT loaded into the agent's
+persistent prompt**. They're injected ONLY into the synthetic
+user-role prompt at fire time. The responder's normal turn queries
+`open_heartbeats_for_surface` and appends a small "you have an open
+heartbeat expecting a reply" awareness block — this keeps
+conversation continuity across the outbound/inbound boundary
+without polluting every regular turn with heartbeat instructions.
+
+Gates are nullable (per-heartbeat-only policy, no system-wide
+defaults). The form offers a "sensible defaults" preset (15min
+idle / 22:00–07:00 quiet / 30min cooldown) but the DB itself
+applies no fallback — blank = no gate of that kind.
+
+5 builtin control tools live in `@mantle/heartbeats/src/tools.ts`
+(not `@mantle/tools` — would create a dep cycle since heartbeats
+already depends on tools): `heartbeat_complete`, `heartbeat_snooze`,
+`heartbeat_update_state`, `heartbeat_list`, `heartbeat_fire`. The
+first three refuse cleanly when called outside a heartbeat fire
+context (they read `currentHeartbeat()` from
+`AsyncLocalStorage`); the latter two are surface-agnostic.
+
 ## 10. The MCP server
 
 `apps/mcp/src/server.ts`, ~340 LOC. Exposes Claude's tools over stdio

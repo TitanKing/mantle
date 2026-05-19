@@ -211,6 +211,13 @@
       "when": 1747701600000,
       "tag": "0029_tracing_skipped_and_ingest",
       "breakpoints": false
+    },
+    {
+      "idx": 30,
+      "version": "7",
+      "when": 1747701700000,
+      "tag": "0030_heartbeats",
+      "breakpoints": false
     }
   ]
 }

@@ -1,0 +1,174 @@
+/**
+ * Seeds the demo "get to know the user" skill + heartbeat so the
+ * heartbeats engine has something real to fire against immediately
+ * after the 0030 migration runs.
+ *
+ * Usage:
+ *   ALLOWED_USER_ID=<uuid> TG_CHAT_ID=<numeric> pnpm tsx scripts/seed-get-to-know-user.ts
+ *
+ * Idempotent: re-running upserts the skill + heartbeat by slug.
+ *
+ * What it creates:
+ *   skill: profile_interview — interview-style instructions for the
+ *     get-to-know-user flow, including the heartbeat_update_state /
+ *     heartbeat_complete tool usage rules.
+ *   heartbeat: get_to_know_user — fires every 24h ±60min via Telegram,
+ *     with conservative gates (15min idle, 22:00–07:00 quiet, 30min
+ *     cooldown) and a 6h earliest_at so a freshly-installed system
+ *     doesn't immediately barge in.
+ */
+
+import { and, eq } from 'drizzle-orm';
+import { db, heartbeats, skills } from '@mantle/db';
+import { computeNextFireAt } from '@mantle/heartbeats';
+
+const USER_ID = process.env.ALLOWED_USER_ID;
+const TG_CHAT_ID = process.env.TG_CHAT_ID;
+
+if (!USER_ID) {
+  console.error('ALLOWED_USER_ID env var required');
+  process.exit(1);
+}
+if (!TG_CHAT_ID) {
+  console.error('TG_CHAT_ID env var required (the numeric Telegram chat to talk on)');
+  process.exit(1);
+}
+
+const SKILL_SLUG = 'profile_interview';
+const HEARTBEAT_SLUG = 'get_to_know_user';
+
+const SKILL_INSTRUCTIONS = `You are helping the system get to know the user better
+over time. Each fire of this heartbeat, ask ONE thoughtful question on
+a topic the state says you haven't covered yet.
+
+Topics in order (cover roughly this sequence; skip naturally if a
+previous answer made one redundant):
+
+1. family — who lives at home? names + relations.
+2. work_role — what do they do for work? company, team if relevant.
+3. work_rhythms — typical working hours? remote/office/hybrid?
+4. hobbies — what do they do outside work that energises them?
+5. health_signals — what does a good day vs. a bad day look like physically?
+6. stress_signals — what does stress tend to look like for them?
+7. weekend_rhythms — Sat/Sun typical shape? church/sport/family/hobby blocks?
+8. goals_short — anything they're actively working towards this month?
+
+Rules:
+- ASK ONE QUESTION PER FIRE. Don't pile up multiple at once.
+- Be warm, concise, conversational. Match the user's register.
+- After asking, set state.expecting_reply=true and
+  state.last_question_topic='<topic>' via heartbeat_update_state.
+- The user's reply will come in via a normal Telegram turn (not a
+  heartbeat fire). You'll see "Open heartbeats" context — that's
+  when you process the reply: call heartbeat_update_state with
+  { answered: [...current, '<topic>'], expecting_reply: false }.
+- When all 8 topics are answered, call heartbeat_complete with
+  reason='all_topics_covered'.
+
+State shape you should maintain:
+  {
+    answered: string[],          // topics covered
+    last_question_topic: string, // most recent topic asked
+    expecting_reply: boolean     // true after asking, false after processing
+  }
+`;
+
+async function upsertSkill(): Promise<void> {
+  const [existing] = await db
+    .select({ id: skills.id })
+    .from(skills)
+    .where(and(eq(skills.ownerId, USER_ID!), eq(skills.slug, SKILL_SLUG)))
+    .limit(1);
+
+  if (existing) {
+    await db
+      .update(skills)
+      .set({
+        name: 'Profile interview',
+        description:
+          "Ask one topical question at a time to build a profile of the user. Self-terminates when all topics are answered.",
+        instructions: SKILL_INSTRUCTIONS,
+        toolSlugs: ['heartbeat_update_state', 'heartbeat_complete'],
+        enabled: true,
+        updatedAt: new Date(),
+      })
+      .where(eq(skills.id, existing.id));
+    console.log(`[seed] updated skill ${SKILL_SLUG}`);
+  } else {
+    await db.insert(skills).values({
+      ownerId: USER_ID!,
+      slug: SKILL_SLUG,
+      name: 'Profile interview',
+      description:
+        "Ask one topical question at a time to build a profile of the user. Self-terminates when all topics are answered.",
+      instructions: SKILL_INSTRUCTIONS,
+      toolSlugs: ['heartbeat_update_state', 'heartbeat_complete'],
+      enabled: true,
+    });
+    console.log(`[seed] inserted skill ${SKILL_SLUG}`);
+  }
+}
+
+async function upsertHeartbeat(): Promise<void> {
+  const earliestAt = new Date(Date.now() + 6 * 3600_000); // 6h grace
+  const schedule = {
+    kind: 'interval' as const,
+    every_minutes: 1440, // 24h
+    jitter_minutes: 60,
+  };
+  const nextFireAt = computeNextFireAt({
+    schedule,
+    anchor: earliestAt,
+    seed: `${HEARTBEAT_SLUG}:1`,
+    notBefore: earliestAt,
+  });
+
+  const [existing] = await db
+    .select({ id: heartbeats.id })
+    .from(heartbeats)
+    .where(and(eq(heartbeats.ownerId, USER_ID!), eq(heartbeats.slug, HEARTBEAT_SLUG)))
+    .limit(1);
+
+  const common = {
+    name: 'Get to know the user',
+    description:
+      'Daily one-question interview that builds a profile across family / work / hobbies / health / goals. Self-terminates when all topics covered.',
+    agentSlug: 'saskia',
+    skillSlug: SKILL_SLUG,
+    scheduleKind: 'interval' as const,
+    schedule,
+    surface: { kind: 'telegram' as const, chat_id: TG_CHAT_ID! },
+    minIdleMinutes: 15,
+    quietHours: { from: '22:00', to: '07:00', tz: null },
+    cooldownMinutes: 30,
+    earliestAt,
+    maxFires: null,
+    nextFireAt,
+    state: { answered: [], expecting_reply: false } as Record<string, unknown>,
+  };
+
+  if (existing) {
+    await db.update(heartbeats).set({ ...common, updatedAt: new Date() }).where(eq(heartbeats.id, existing.id));
+    console.log(`[seed] updated heartbeat ${HEARTBEAT_SLUG} (next fire ${nextFireAt?.toISOString()})`);
+  } else {
+    await db.insert(heartbeats).values({
+      ownerId: USER_ID!,
+      slug: HEARTBEAT_SLUG,
+      ...common,
+    });
+    console.log(`[seed] inserted heartbeat ${HEARTBEAT_SLUG} (next fire ${nextFireAt?.toISOString()})`);
+  }
+}
+
+async function main() {
+  await upsertSkill();
+  await upsertHeartbeat();
+  console.log('[seed] done — heartbeat will fire after the 6h earliest_at gate passes.');
+  console.log('[seed] use the /heartbeats page or the heartbeat_fire tool to test sooner.');
+  process.exit(0);
+}
+
+main().catch((err) => {
+  console.error('[seed] error:', err);
+  process.exit(1);
+});

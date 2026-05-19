@@ -1,0 +1,569 @@
+'use client';
+
+import { useState, useTransition } from 'react';
+import { useRouter } from 'next/navigation';
+import Link from 'next/link';
+import { HeartPulse, Pencil, Play, Pause, Trash2, Zap } from 'lucide-react';
+import { Button } from '@/components/ui/button';
+import { Input } from '@/components/ui/input';
+import { Label } from '@/components/ui/label';
+import {
+  createHeartbeatAction,
+  deleteHeartbeatAction,
+  fireNowAction,
+  toggleHeartbeatAction,
+  updateHeartbeatAction,
+} from './actions';
+import type { HeartbeatSummary } from '@/lib/heartbeats';
+
+type AgentOpt = { slug: string; name: string; role: string };
+type SkillOpt = { slug: string; name: string };
+
+type GatePreset = 'none' | 'sensible' | 'custom';
+
+type FormState = {
+  id?: string;
+  slug: string;
+  name: string;
+  description: string;
+  agent_slug: string;
+  skill_slug: string;
+  schedule_kind: 'once' | 'interval' | 'manual';
+  schedule_at: string; // datetime-local
+  schedule_every_minutes: string;
+  schedule_jitter_minutes: string;
+  surface_kind: 'telegram' | 'web';
+  surface_chat_id: string;
+  earliest_at: string;
+  max_fires: string;
+  gate_preset: GatePreset;
+  min_idle_minutes: string;
+  quiet_from: string;
+  quiet_to: string;
+  quiet_tz: string;
+  cooldown_minutes: string;
+};
+
+const SENSIBLE_DEFAULTS = {
+  min_idle_minutes: '15',
+  quiet_from: '22:00',
+  quiet_to: '07:00',
+  quiet_tz: '',
+  cooldown_minutes: '30',
+};
+
+function emptyForm(): FormState {
+  return {
+    slug: '',
+    name: '',
+    description: '',
+    agent_slug: '',
+    skill_slug: '',
+    schedule_kind: 'interval',
+    schedule_at: '',
+    schedule_every_minutes: '1440',
+    schedule_jitter_minutes: '60',
+    surface_kind: 'telegram',
+    surface_chat_id: '',
+    earliest_at: '',
+    max_fires: '',
+    gate_preset: 'sensible',
+    ...SENSIBLE_DEFAULTS,
+  };
+}
+
+function isoToLocalInput(iso: string | null): string {
+  if (!iso) return '';
+  // datetime-local needs YYYY-MM-DDTHH:MM (no seconds, no tz).
+  const d = new Date(iso);
+  const pad = (n: number) => String(n).padStart(2, '0');
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`;
+}
+
+function fromHeartbeat(h: HeartbeatSummary): FormState {
+  const surface_chat_id = h.surface.kind === 'telegram' ? h.surface.chat_id : '';
+  const isCustomGates = !!(
+    h.minIdleMinutes != null ||
+    h.quietHours != null ||
+    h.cooldownMinutes != null
+  );
+  return {
+    id: h.id,
+    slug: h.slug,
+    name: h.name,
+    description: h.description ?? '',
+    agent_slug: h.agentSlug,
+    skill_slug: h.skillSlug,
+    schedule_kind: h.scheduleKind === 'cron' ? 'manual' : (h.scheduleKind as FormState['schedule_kind']),
+    schedule_at: h.schedule.kind === 'once' ? isoToLocalInput(h.schedule.at) : '',
+    schedule_every_minutes:
+      h.schedule.kind === 'interval' ? String(h.schedule.every_minutes) : '',
+    schedule_jitter_minutes:
+      h.schedule.kind === 'interval' ? String(h.schedule.jitter_minutes ?? '') : '',
+    surface_kind: h.surface.kind,
+    surface_chat_id,
+    earliest_at: isoToLocalInput(h.earliestAt),
+    max_fires: h.maxFires != null ? String(h.maxFires) : '',
+    gate_preset: isCustomGates ? 'custom' : 'none',
+    min_idle_minutes: h.minIdleMinutes != null ? String(h.minIdleMinutes) : '',
+    quiet_from: h.quietHours?.from ?? '',
+    quiet_to: h.quietHours?.to ?? '',
+    quiet_tz: h.quietHours?.tz ?? '',
+    cooldown_minutes: h.cooldownMinutes != null ? String(h.cooldownMinutes) : '',
+  };
+}
+
+function slugify(s: string): string {
+  return s
+    .toLowerCase()
+    .replace(/[^a-z0-9_-]+/g, '-')
+    .replace(/^-+|-+$/g, '')
+    .slice(0, 64);
+}
+
+function statusBadgeClass(s: HeartbeatSummary['status']): string {
+  switch (s) {
+    case 'active':
+      return 'bg-emerald-100 text-emerald-900 dark:bg-emerald-900/40 dark:text-emerald-100';
+    case 'paused':
+      return 'bg-amber-100 text-amber-900 dark:bg-amber-900/40 dark:text-amber-100';
+    case 'completed':
+      return 'bg-sky-100 text-sky-900 dark:bg-sky-900/40 dark:text-sky-100';
+    case 'cancelled':
+      return 'bg-zinc-200 text-zinc-700 dark:bg-zinc-800 dark:text-zinc-300';
+  }
+}
+
+export function HeartbeatsClient({
+  initial,
+  agents,
+  skills,
+}: {
+  initial: HeartbeatSummary[];
+  agents: AgentOpt[];
+  skills: SkillOpt[];
+}) {
+  const router = useRouter();
+  const [editing, setEditing] = useState<{ mode: 'create' } | { mode: 'edit'; hb: HeartbeatSummary } | null>(null);
+  const [form, setForm] = useState<FormState>(emptyForm());
+  const [slugTouched, setSlugTouched] = useState(false);
+  const [error, setError] = useState<string>();
+  const [pending, startTransition] = useTransition();
+
+  const openCreate = () => {
+    setError(undefined);
+    setForm(emptyForm());
+    setSlugTouched(false);
+    setEditing({ mode: 'create' });
+  };
+  const openEdit = (hb: HeartbeatSummary) => {
+    setError(undefined);
+    setForm(fromHeartbeat(hb));
+    setSlugTouched(true);
+    setEditing({ mode: 'edit', hb });
+  };
+  const close = () => setEditing(null);
+
+  const onName = (v: string) =>
+    setForm((f) => ({ ...f, name: v, slug: slugTouched ? f.slug : slugify(v) }));
+
+  const applyPreset = (preset: GatePreset) =>
+    setForm((f) => {
+      if (preset === 'sensible') return { ...f, gate_preset: preset, ...SENSIBLE_DEFAULTS };
+      if (preset === 'none')
+        return {
+          ...f,
+          gate_preset: preset,
+          min_idle_minutes: '',
+          quiet_from: '',
+          quiet_to: '',
+          quiet_tz: '',
+          cooldown_minutes: '',
+        };
+      return { ...f, gate_preset: preset };
+    });
+
+  const submit = async () => {
+    setError(undefined);
+    const fd = new FormData();
+    if (editing?.mode === 'edit') fd.set('id', editing.hb.id);
+    fd.set('slug', form.slug);
+    fd.set('name', form.name);
+    fd.set('description', form.description);
+    fd.set('agent_slug', form.agent_slug);
+    fd.set('skill_slug', form.skill_slug);
+    fd.set('schedule_kind', form.schedule_kind);
+    fd.set('schedule_at', form.schedule_at);
+    fd.set('schedule_every_minutes', form.schedule_every_minutes);
+    fd.set('schedule_jitter_minutes', form.schedule_jitter_minutes);
+    fd.set('surface_kind', form.surface_kind);
+    fd.set('surface_chat_id', form.surface_chat_id);
+    fd.set('earliest_at', form.earliest_at);
+    fd.set('max_fires', form.max_fires);
+    fd.set('min_idle_minutes', form.min_idle_minutes);
+    fd.set('quiet_from', form.quiet_from);
+    fd.set('quiet_to', form.quiet_to);
+    fd.set('quiet_tz', form.quiet_tz);
+    fd.set('cooldown_minutes', form.cooldown_minutes);
+    try {
+      if (editing?.mode === 'edit') {
+        await updateHeartbeatAction(fd);
+      } else {
+        await createHeartbeatAction(fd);
+      }
+      close();
+      router.refresh();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    }
+  };
+
+  const onDelete = (id: string) => {
+    if (!confirm('Delete this heartbeat? Its fire history (heartbeat_fires) goes with it.')) return;
+    startTransition(async () => {
+      const fd = new FormData();
+      fd.set('id', id);
+      await deleteHeartbeatAction(fd);
+      router.refresh();
+    });
+  };
+
+  const onToggle = (h: HeartbeatSummary) => {
+    const desired = h.status === 'active' ? 'paused' : 'active';
+    startTransition(async () => {
+      const fd = new FormData();
+      fd.set('id', h.id);
+      fd.set('status', desired);
+      await toggleHeartbeatAction(fd);
+      router.refresh();
+    });
+  };
+
+  const onFireNow = (id: string) => {
+    if (!confirm('Force-fire now? Gates (idle/quiet/cooldown) are bypassed.')) return;
+    startTransition(async () => {
+      const fd = new FormData();
+      fd.set('id', id);
+      await fireNowAction(fd);
+      router.refresh();
+    });
+  };
+
+  return (
+    <div className="space-y-4">
+      <div className="flex items-center justify-between">
+        <p className="text-sm text-muted-foreground">{initial.length} configured</p>
+        <Button onClick={openCreate} size="sm">
+          <HeartPulse className="mr-2 size-4" /> New heartbeat
+        </Button>
+      </div>
+
+      <ul className="divide-y rounded-md border">
+        {initial.length === 0 && (
+          <li className="px-4 py-6 text-sm text-muted-foreground">
+            No heartbeats yet. Click &quot;New heartbeat&quot; to create one.
+          </li>
+        )}
+        {initial.map((h) => (
+          <li key={h.id} className="flex items-center gap-3 px-4 py-3">
+            <div className="min-w-0 flex-1">
+              <div className="flex flex-wrap items-baseline gap-2">
+                <Link href={`/heartbeats/${h.id}`} className="font-medium hover:underline">
+                  {h.name}
+                </Link>
+                <code className="text-xs text-muted-foreground">{h.slug}</code>
+                <span className={`rounded px-1.5 py-0.5 text-[10px] font-medium ${statusBadgeClass(h.status)}`}>
+                  {h.status}
+                </span>
+              </div>
+              <p className="truncate text-xs text-muted-foreground">
+                {h.agentSlug} · {h.skillSlug} · {h.scheduleKind} ·{' '}
+                {h.surface.kind === 'telegram' ? `tg:${h.surface.chat_id}` : 'web'} · fires={h.fireCount}
+                {h.nextFireAt && h.status === 'active' && (
+                  <> · next {new Date(h.nextFireAt).toLocaleString()}</>
+                )}
+              </p>
+            </div>
+            <div className="flex items-center gap-1">
+              <Button
+                size="sm"
+                variant="ghost"
+                onClick={() => onFireNow(h.id)}
+                disabled={pending || h.status !== 'active'}
+                title="Fire now (bypass gates)"
+              >
+                <Zap className="size-4" />
+              </Button>
+              <Button
+                size="sm"
+                variant="ghost"
+                onClick={() => onToggle(h)}
+                disabled={pending || h.status === 'completed' || h.status === 'cancelled'}
+                title={h.status === 'active' ? 'Pause' : 'Resume'}
+              >
+                {h.status === 'active' ? <Pause className="size-4" /> : <Play className="size-4" />}
+              </Button>
+              <Button size="sm" variant="ghost" onClick={() => openEdit(h)} title="Edit">
+                <Pencil className="size-4" />
+              </Button>
+              <Button
+                size="sm"
+                variant="ghost"
+                onClick={() => onDelete(h.id)}
+                disabled={pending}
+                title="Delete"
+              >
+                <Trash2 className="size-4" />
+              </Button>
+            </div>
+          </li>
+        ))}
+      </ul>
+
+      {editing && (
+        <div className="rounded-md border bg-card p-6">
+          <h2 className="mb-4 text-lg font-semibold">
+            {editing.mode === 'edit' ? `Edit ${editing.hb.name}` : 'New heartbeat'}
+          </h2>
+          {error && <p className="mb-3 text-sm text-rose-600">{error}</p>}
+
+          <div className="grid gap-4">
+            <div className="grid gap-3 sm:grid-cols-2">
+              <div className="space-y-1">
+                <Label>Name</Label>
+                <Input value={form.name} onChange={(e) => onName(e.target.value)} />
+              </div>
+              <div className="space-y-1">
+                <Label>Slug</Label>
+                <Input
+                  value={form.slug}
+                  disabled={editing.mode === 'edit'}
+                  onChange={(e) => {
+                    setSlugTouched(true);
+                    setForm((f) => ({ ...f, slug: slugify(e.target.value) }));
+                  }}
+                />
+              </div>
+            </div>
+
+            <div className="space-y-1">
+              <Label>Description (optional)</Label>
+              <Input
+                value={form.description}
+                onChange={(e) => setForm((f) => ({ ...f, description: e.target.value }))}
+              />
+            </div>
+
+            <div className="grid gap-3 sm:grid-cols-2">
+              <div className="space-y-1">
+                <Label>Agent</Label>
+                <select
+                  className="w-full rounded-md border bg-background px-3 py-2 text-sm"
+                  value={form.agent_slug}
+                  onChange={(e) => setForm((f) => ({ ...f, agent_slug: e.target.value }))}
+                >
+                  <option value="">— choose —</option>
+                  {agents.map((a) => (
+                    <option key={a.slug} value={a.slug}>
+                      {a.name} ({a.slug}, {a.role})
+                    </option>
+                  ))}
+                </select>
+              </div>
+              <div className="space-y-1">
+                <Label>Skill</Label>
+                <select
+                  className="w-full rounded-md border bg-background px-3 py-2 text-sm"
+                  value={form.skill_slug}
+                  onChange={(e) => setForm((f) => ({ ...f, skill_slug: e.target.value }))}
+                >
+                  <option value="">— choose —</option>
+                  {skills.map((s) => (
+                    <option key={s.slug} value={s.slug}>
+                      {s.name} ({s.slug})
+                    </option>
+                  ))}
+                </select>
+              </div>
+            </div>
+
+            <fieldset className="space-y-3 rounded-md border p-4">
+              <legend className="px-1 text-sm font-medium">Schedule</legend>
+              <div className="flex flex-wrap gap-3">
+                {(['interval', 'once', 'manual'] as const).map((k) => (
+                  <label key={k} className="flex items-center gap-2 text-sm">
+                    <input
+                      type="radio"
+                      checked={form.schedule_kind === k}
+                      onChange={() => setForm((f) => ({ ...f, schedule_kind: k }))}
+                    />
+                    {k}
+                  </label>
+                ))}
+              </div>
+              {form.schedule_kind === 'interval' && (
+                <div className="grid gap-3 sm:grid-cols-2">
+                  <div className="space-y-1">
+                    <Label>Every (minutes)</Label>
+                    <Input
+                      type="number"
+                      min="1"
+                      value={form.schedule_every_minutes}
+                      onChange={(e) => setForm((f) => ({ ...f, schedule_every_minutes: e.target.value }))}
+                    />
+                  </div>
+                  <div className="space-y-1">
+                    <Label>Jitter ± (minutes)</Label>
+                    <Input
+                      type="number"
+                      min="0"
+                      value={form.schedule_jitter_minutes}
+                      onChange={(e) => setForm((f) => ({ ...f, schedule_jitter_minutes: e.target.value }))}
+                    />
+                  </div>
+                </div>
+              )}
+              {form.schedule_kind === 'once' && (
+                <div className="space-y-1">
+                  <Label>Fire at</Label>
+                  <Input
+                    type="datetime-local"
+                    value={form.schedule_at}
+                    onChange={(e) => setForm((f) => ({ ...f, schedule_at: e.target.value }))}
+                  />
+                </div>
+              )}
+              {form.schedule_kind === 'manual' && (
+                <p className="text-xs text-muted-foreground">
+                  Only fires via the &quot;Fire now&quot; button or the heartbeat_fire tool. No auto-schedule.
+                </p>
+              )}
+            </fieldset>
+
+            <fieldset className="space-y-3 rounded-md border p-4">
+              <legend className="px-1 text-sm font-medium">Surface (where the reply goes)</legend>
+              <div className="flex gap-4">
+                {(['telegram', 'web'] as const).map((k) => (
+                  <label key={k} className="flex items-center gap-2 text-sm">
+                    <input
+                      type="radio"
+                      checked={form.surface_kind === k}
+                      onChange={() => setForm((f) => ({ ...f, surface_kind: k }))}
+                    />
+                    {k}
+                  </label>
+                ))}
+              </div>
+              {form.surface_kind === 'telegram' && (
+                <div className="space-y-1">
+                  <Label>Telegram chat_id</Label>
+                  <Input
+                    value={form.surface_chat_id}
+                    onChange={(e) => setForm((f) => ({ ...f, surface_chat_id: e.target.value }))}
+                    placeholder="e.g. 123456789"
+                  />
+                </div>
+              )}
+            </fieldset>
+
+            <fieldset className="space-y-3 rounded-md border p-4">
+              <legend className="px-1 text-sm font-medium">
+                Gates — when is it appropriate to fire?
+              </legend>
+              <div className="flex flex-wrap gap-3 text-sm">
+                {(['none', 'sensible', 'custom'] as const).map((p) => (
+                  <label key={p} className="flex items-center gap-2">
+                    <input
+                      type="radio"
+                      checked={form.gate_preset === p}
+                      onChange={() => applyPreset(p)}
+                    />
+                    {p === 'sensible' ? 'sensible defaults' : p}
+                  </label>
+                ))}
+              </div>
+              <p className="text-xs text-muted-foreground">
+                No system-wide defaults. Blank fields mean &quot;no gate of this kind&quot;.
+                &quot;Sensible defaults&quot; fills in 15min idle, 22:00–07:00 quiet hours (profile tz),
+                30min cooldown.
+              </p>
+              <div className="grid gap-3 sm:grid-cols-2">
+                <div className="space-y-1">
+                  <Label>Min idle (minutes)</Label>
+                  <Input
+                    type="number"
+                    min="0"
+                    value={form.min_idle_minutes}
+                    onChange={(e) => setForm((f) => ({ ...f, min_idle_minutes: e.target.value }))}
+                  />
+                </div>
+                <div className="space-y-1">
+                  <Label>Cooldown (minutes)</Label>
+                  <Input
+                    type="number"
+                    min="0"
+                    value={form.cooldown_minutes}
+                    onChange={(e) => setForm((f) => ({ ...f, cooldown_minutes: e.target.value }))}
+                  />
+                </div>
+                <div className="space-y-1">
+                  <Label>Quiet from (HH:MM)</Label>
+                  <Input
+                    value={form.quiet_from}
+                    placeholder="22:00"
+                    onChange={(e) => setForm((f) => ({ ...f, quiet_from: e.target.value }))}
+                  />
+                </div>
+                <div className="space-y-1">
+                  <Label>Quiet to (HH:MM)</Label>
+                  <Input
+                    value={form.quiet_to}
+                    placeholder="07:00"
+                    onChange={(e) => setForm((f) => ({ ...f, quiet_to: e.target.value }))}
+                  />
+                </div>
+                <div className="space-y-1 sm:col-span-2">
+                  <Label>Quiet tz (IANA, blank = profile tz)</Label>
+                  <Input
+                    value={form.quiet_tz}
+                    placeholder="Africa/Johannesburg"
+                    onChange={(e) => setForm((f) => ({ ...f, quiet_tz: e.target.value }))}
+                  />
+                </div>
+              </div>
+            </fieldset>
+
+            <div className="grid gap-3 sm:grid-cols-2">
+              <div className="space-y-1">
+                <Label>Earliest at (optional)</Label>
+                <Input
+                  type="datetime-local"
+                  value={form.earliest_at}
+                  onChange={(e) => setForm((f) => ({ ...f, earliest_at: e.target.value }))}
+                />
+              </div>
+              <div className="space-y-1">
+                <Label>Max fires (blank = unbounded)</Label>
+                <Input
+                  type="number"
+                  min="1"
+                  value={form.max_fires}
+                  onChange={(e) => setForm((f) => ({ ...f, max_fires: e.target.value }))}
+                />
+              </div>
+            </div>
+          </div>
+
+          <div className="mt-4 flex justify-end gap-2">
+            <Button variant="outline" onClick={close} disabled={pending}>
+              Cancel
+            </Button>
+            <Button onClick={submit} disabled={pending}>
+              {editing.mode === 'edit' ? 'Save' : 'Create'}
+            </Button>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}

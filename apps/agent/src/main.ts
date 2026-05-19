@@ -67,11 +67,24 @@ import {
   type HistoryTurn,
 } from '@mantle/agent-runtime';
 import { registerAgentInvoker, seedBuiltinTools } from '@mantle/tools';
+import {
+  openHeartbeatsForSurface,
+  registerHeartbeatTools,
+  tickHeartbeats,
+} from '@mantle/heartbeats';
 
 // Register the cross-package bridge so the `invoke_agent` builtin (in
 // @mantle/tools) can synchronously delegate to another agent through
 // the runtime here. Idempotent; safe to call once at boot.
 registerAgentInvoker(invokeAgent);
+
+// Register the 5 heartbeat-control builtins (heartbeat_complete,
+// heartbeat_snooze, heartbeat_update_state, heartbeat_list,
+// heartbeat_fire). These live in @mantle/heartbeats rather than
+// @mantle/tools to avoid an import cycle (heartbeats already depends
+// on tools). Must run BEFORE seedBuiltinTools() — the seed reads
+// from the in-memory registry. Idempotent.
+registerHeartbeatTools();
 import { summarizeChat } from './summarizer.js';
 import { extractNode } from './extractor.js';
 import { reflect } from './reflector.js';
@@ -778,6 +791,43 @@ async function handleMessage(messageId: string): Promise<void> {
           attachedSkills,
         );
 
+        // Open-heartbeat awareness: if there are active heartbeats
+        // for this Telegram chat with state.expecting_reply truthy,
+        // append a small block so Saskia knows she's mid-conversation
+        // with one of her own proactive tasks and should call
+        // heartbeat_update_state after acting on the user's reply.
+        // Heartbeat skills themselves are NOT loaded here (they're
+        // only active during a heartbeat fire); this is just the
+        // awareness layer that keeps continuity across the
+        // outbound/inbound boundary. Best-effort: a DB failure here
+        // shouldn't kill the turn.
+        let openHeartbeatBlock = '';
+        try {
+          const open = await openHeartbeatsForSurface(USER_ID!, {
+            kind: 'telegram',
+            chatId: row.telegramChatId,
+          });
+          if (open.length > 0) {
+            const lines = open.map((h) => {
+              const s = JSON.stringify(h.state ?? {});
+              return `- ${h.slug} (${h.name}): expecting a reply. Current state: ${s}`;
+            });
+            openHeartbeatBlock =
+              `\n\n## Open heartbeats\n\n` +
+              `You have one or more proactive tasks in-flight on this surface. ` +
+              `The user's latest message may be replying to a question you asked. ` +
+              `After responding naturally, call heartbeat_update_state to capture ` +
+              `what they told you and (if appropriate) flip expecting_reply to false ` +
+              `or call heartbeat_complete if the skill's goal is met.\n\n` +
+              lines.join('\n');
+          }
+        } catch (err) {
+          console.error(
+            '[agent] open-heartbeat context skipped:',
+            err instanceof Error ? err.message : err,
+          );
+        }
+
         // Tell Saskia which inline audio tags her configured TTS will
         // honour (e.g. ElevenLabs v3 supports [laughs] / [whispers] /
         // [sighs]; OpenAI doesn't). Looked up once per turn so the
@@ -801,7 +851,8 @@ async function handleMessage(messageId: string): Promise<void> {
             err instanceof Error ? err.message : err,
           );
         }
-        const effectiveSystemPrompt = promptWithSkills + audioTagInstructions;
+        const effectiveSystemPrompt =
+          promptWithSkills + openHeartbeatBlock + audioTagInstructions;
 
         const messages = await step(
           { name: 'build_messages', kind: 'compute' },
@@ -1266,6 +1317,41 @@ async function main() {
       });
   }, REFLECTOR_INTERVAL_MS);
   console.log(`[agent] reflector tick every ${REFLECTOR_INTERVAL_MS / 1000}s (with failure backoff up to 1h)`);
+
+  // Heartbeat tick: every minute, look for active heartbeats whose
+  // next_fire_at has passed, gate-check each, fire if all gates pass.
+  // Mirrors the reflector backoff so a flaky DB / OpenRouter doesn't
+  // tight-loop the loop. See packages/heartbeats/src/tick.ts.
+  const HEARTBEAT_TICK_MS = 60 * 1000;
+  const HEARTBEAT_BACKOFF_CAP_MS = 30 * 60 * 1000;
+  let hbBackoffMs = 0;
+  let hbSkipUntil = 0;
+  setInterval(() => {
+    if (Date.now() < hbSkipUntil) return;
+    tickHeartbeats(USER_ID!)
+      .then((report) => {
+        if (hbBackoffMs > 0) console.log('[agent] heartbeat tick recovered; clearing backoff');
+        hbBackoffMs = 0;
+        hbSkipUntil = 0;
+        if (report.considered > 0) {
+          console.log(
+            `[agent] heartbeat tick: considered=${report.considered} fired=${report.fired} skipped=${report.skipped} errored=${report.errored}`,
+          );
+        }
+      })
+      .catch((err) => {
+        hbBackoffMs = Math.min(
+          HEARTBEAT_BACKOFF_CAP_MS,
+          hbBackoffMs === 0 ? HEARTBEAT_TICK_MS : hbBackoffMs * 2,
+        );
+        hbSkipUntil = Date.now() + hbBackoffMs;
+        console.error(
+          `[agent] heartbeat tick error (next try in ${Math.round(hbBackoffMs / 1000)}s):`,
+          err instanceof Error ? err.message : err,
+        );
+      });
+  }, HEARTBEAT_TICK_MS);
+  console.log(`[agent] heartbeat tick every ${HEARTBEAT_TICK_MS / 1000}s (with failure backoff up to 30min)`);
 
   await drainPending();
   await drainUnextractedNodes();

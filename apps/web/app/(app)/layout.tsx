@@ -1,6 +1,6 @@
 import Link from 'next/link';
 import { and, eq, sql } from 'drizzle-orm';
-import { Activity, Bot, CalendarDays, CheckSquare, ClipboardCheck, Cpu, FileText, FolderTree, Hammer, Inbox, Key, KeyRound, Lock, MessageCircle, Settings, Sparkles, TreePine, User, UserCheck, Workflow } from 'lucide-react';
+import { Activity, Bot, CalendarDays, CheckSquare, ClipboardCheck, Cpu, FileText, FolderTree, Hammer, HeartPulse, Inbox, Key, KeyRound, Lock, MessageCircle, Settings, Sparkles, TreePine, User, UserCheck, Workflow } from 'lucide-react';
 import { db, emailSenders } from '@mantle/db';
 import { countPending } from '@mantle/tools';
 import { requireOwner } from '@/lib/auth';
@@ -82,6 +82,9 @@ export default async function AppLayout({ children }: { children: React.ReactNod
         </Link>
         <Link href="/settings/skills" className="flex items-center gap-2 rounded px-2 py-1.5 hover:bg-accent">
           <Sparkles className="size-4" aria-hidden /> Skills
+        </Link>
+        <Link href="/settings/heartbeats" className="flex items-center gap-2 rounded px-2 py-1.5 hover:bg-accent">
+          <HeartPulse className="size-4" aria-hidden /> Heartbeats
         </Link>
         <Link href="/pending" className="flex items-center gap-2 rounded px-2 py-1.5 hover:bg-accent">
           <ClipboardCheck className="size-4" aria-hidden />
