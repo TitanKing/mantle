@@ -245,11 +245,18 @@ const heartbeat_update_state: BuiltinToolDef = {
   },
 };
 
+/** Default cap on heartbeat_list output. The full state jsonb can
+ *  be sizable for skills that accumulate (interview answers, daily
+ *  log entries, …) — multiplied by N rows it'd blow context.
+ *  P2-3 from the v1 audit. */
+const HEARTBEAT_LIST_DEFAULT_LIMIT = 20;
+const HEARTBEAT_LIST_MAX_LIMIT = 100;
+
 const heartbeat_list: BuiltinToolDef = {
   slug: 'heartbeat_list',
   name: 'List the user heartbeats',
   description:
-    "List all of the user's heartbeats with their status, schedule, current state, and next fire time. Useful when the user asks 'what are you keeping track of for me?' or when deciding whether to spawn a related heartbeat. Returns full rows.",
+    "List the user's heartbeats with status, schedule, agent/skill slugs, and next-fire time. By default returns up to 20 rows with a SLIM projection (no state jsonb) — that's enough for the user-facing question 'what are you tracking for me?'. Pass `include_state: true` to get each heartbeat's full state (useful when the model needs to reason about progress). Pass `limit` to override (max 100). Pass `status` to filter.",
   inputSchema: {
     type: 'object',
     properties: {
@@ -258,23 +265,72 @@ const heartbeat_list: BuiltinToolDef = {
         enum: ['active', 'paused', 'completed', 'cancelled'],
         description: 'Filter to a single status. Omit for all.',
       },
+      limit: {
+        type: 'number',
+        description: `Max rows to return. Default ${HEARTBEAT_LIST_DEFAULT_LIMIT}, hard cap ${HEARTBEAT_LIST_MAX_LIMIT}.`,
+      },
+      include_state: {
+        type: 'boolean',
+        description:
+          'Include each heartbeat\'s full state jsonb. Off by default to keep the LLM\'s context lean — flip on when reasoning about progress / answered topics / etc.',
+      },
     },
   },
   handler: async (input, ctx): Promise<ToolHandlerResult> => {
     const status = typeof input.status === 'string' ? input.status : null;
+    const includeState = input.include_state === true;
+    let limit =
+      typeof input.limit === 'number' && Number.isFinite(input.limit) && input.limit > 0
+        ? Math.floor(input.limit)
+        : HEARTBEAT_LIST_DEFAULT_LIMIT;
+    if (limit > HEARTBEAT_LIST_MAX_LIMIT) limit = HEARTBEAT_LIST_MAX_LIMIT;
+
+    // Project the column set based on include_state. Saves bytes
+    // on the wire AND in the LLM tool_result. Always include the
+    // identity + status + scheduling fields — those are tiny and
+    // useful regardless.
+    const baseColumns = {
+      id: heartbeats.id,
+      slug: heartbeats.slug,
+      name: heartbeats.name,
+      description: heartbeats.description,
+      agentSlug: heartbeats.agentSlug,
+      skillSlug: heartbeats.skillSlug,
+      status: heartbeats.status,
+      scheduleKind: heartbeats.scheduleKind,
+      nextFireAt: heartbeats.nextFireAt,
+      lastFiredAt: heartbeats.lastFiredAt,
+      fireCount: heartbeats.fireCount,
+    };
+    const columns = includeState ? { ...baseColumns, state: heartbeats.state } : baseColumns;
+
+    const baseQuery = db.select(columns).from(heartbeats);
     const rows = status
-      ? await db
-          .select()
-          .from(heartbeats)
+      ? await baseQuery
           .where(
             and(
               eq(heartbeats.ownerId, ctx.ownerId),
               eq(heartbeats.status, status as 'active' | 'paused' | 'completed' | 'cancelled'),
             ),
           )
-      : await db.select().from(heartbeats).where(eq(heartbeats.ownerId, ctx.ownerId));
-    ctx.step?.setMeta({ count: rows.length });
-    return { ok: true, output: { heartbeats: rows, count: rows.length } };
+          .limit(limit)
+      : await baseQuery.where(eq(heartbeats.ownerId, ctx.ownerId)).limit(limit);
+
+    ctx.step?.setMeta({
+      count: rows.length,
+      limit,
+      include_state: includeState,
+      ...(status ? { status_filter: status } : {}),
+    });
+    return {
+      ok: true,
+      output: {
+        heartbeats: rows,
+        count: rows.length,
+        limit,
+        truncated: rows.length === limit,
+      },
+    };
   },
 };
 

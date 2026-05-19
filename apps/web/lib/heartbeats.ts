@@ -27,7 +27,7 @@ import {
   type HeartbeatScheduleSpec,
   type HeartbeatSurface,
 } from '@mantle/db';
-import { computeNextFireAt, validateSchedule } from '@mantle/heartbeats';
+import { computeNextFireAt, notifyHeartbeatDue, validateSchedule } from '@mantle/heartbeats';
 
 export type HeartbeatSummary = {
   id: string;
@@ -172,6 +172,10 @@ export async function createHeartbeat(
     })
     .returning();
   if (!row) throw new Error('failed to insert heartbeat');
+  // Wake the agent's tick loop so a near-term next_fire_at lands
+  // within seconds, not up to 60. Soft-fail; the next regular tick
+  // recovers anyway. (NEW-7.)
+  void notifyHeartbeatDue(ownerId);
   return toSummary(row);
 }
 
@@ -232,6 +236,10 @@ export async function updateHeartbeat(
     .set(next)
     .where(and(eq(heartbeats.id, id), eq(heartbeats.ownerId, ownerId)))
     .returning();
+  // Wake the tick — covers schedule edits, resume-from-paused, and
+  // explicit state changes that might have re-armed the row. Soft-
+  // fail; the regular tick recovers. (NEW-7.)
+  if (row) void notifyHeartbeatDue(ownerId);
   return row ? toSummary(row) : null;
 }
 

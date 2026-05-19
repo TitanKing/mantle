@@ -69,6 +69,7 @@ import {
 import { registerAgentInvoker, seedBuiltinTools } from '@mantle/tools';
 import {
   buildOpenHeartbeatContext,
+  HEARTBEAT_DUE_CHANNEL,
   HEARTBEAT_RESPONDER_TOOLS,
   hasActiveHeartbeatsOnSurface,
   openHeartbeatsForSurface,
@@ -1314,6 +1315,29 @@ async function main() {
     scheduleExtract(payload);
   });
   console.log('[agent] LISTENing on node_ingested');
+
+  // NEW-7: low-latency heartbeat wake. createHeartbeat + force-fire
+  // paths fire pg_notify('heartbeat_due', ownerId). When we get one,
+  // call tickHeartbeats(USER_ID) immediately — same code path as the
+  // 60s setInterval, just kicked early so an operator's "Create
+  // heartbeat" click reflects in the trace within a couple seconds.
+  //
+  // Errors swallowed (notify is fire-and-forget at the producer
+  // side too): worst case is a missed wake, which the next regular
+  // tick recovers from within 60s. Same soft-fail discipline as the
+  // reflector tick.
+  await pg.listen(HEARTBEAT_DUE_CHANNEL, (payload: string) => {
+    if (!payload) return;
+    // The payload is the owner id. In single-user mode that's
+    // always USER_ID; we still pass it through for cleanliness.
+    tickHeartbeats(payload).catch((err) =>
+      console.error(
+        `[agent] heartbeat_due wake error:`,
+        err instanceof Error ? err.message : err,
+      ),
+    );
+  });
+  console.log(`[agent] LISTENing on ${HEARTBEAT_DUE_CHANNEL}`);
 
   // Reflector: slow background pass every REFLECTOR_INTERVAL_MS that
   // checks for new outbound activity and appends to persona_notes when

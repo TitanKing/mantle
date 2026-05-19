@@ -78,12 +78,21 @@ function slugify(s: string): string {
     .slice(0, 64);
 }
 
+/** Heartbeat back-references per skill slug. Empty array OR missing
+ *  key both mean "no heartbeats reference this skill". */
+type HeartbeatBackrefs = Record<
+  string,
+  Array<{ slug: string; name: string; status: string }>
+>;
+
 export function SkillsClient({
   initialSkills,
   availableTools,
+  heartbeatBackrefs,
 }: {
   initialSkills: SkillSummary[];
   availableTools: ToolOption[];
+  heartbeatBackrefs: HeartbeatBackrefs;
 }) {
   const router = useRouter();
   const [skills, setSkills] = useState<SkillSummary[]>(initialSkills);
@@ -167,7 +176,24 @@ export function SkillsClient({
   };
 
   const onDelete = async (s: SkillSummary) => {
-    if (!window.confirm(`Delete skill "${s.name}"?`)) return;
+    // Surface heartbeat back-refs in the confirm so deleting a skill
+    // that's actively bound to a heartbeat is a deliberate choice.
+    // The heartbeat won't crash — it'll auto-pause on the next fire
+    // because skill resolution fails — but it's a worse operator
+    // experience than catching it here. NEW-1 from the v1 audit.
+    const refs = heartbeatBackrefs[s.slug] ?? [];
+    const activeRefs = refs.filter((r) => r.status === 'active');
+    let msg = `Delete skill "${s.name}"?`;
+    if (refs.length > 0) {
+      msg += `\n\nThis skill is referenced by ${refs.length} heartbeat${refs.length === 1 ? '' : 's'}`;
+      if (activeRefs.length > 0) {
+        msg += ` (${activeRefs.length} active — they'll auto-pause on next fire):`;
+      } else {
+        msg += ' (none active — all completed/paused/cancelled):';
+      }
+      msg += '\n  ' + refs.map((r) => `${r.slug} [${r.status}]`).join('\n  ');
+    }
+    if (!window.confirm(msg)) return;
     const res = await fetch(`/api/skills/${s.id}`, { method: 'DELETE' });
     if (!res.ok) {
       const b = (await res.json().catch(() => ({}))) as { error?: string };
@@ -223,6 +249,26 @@ export function SkillsClient({
                       disabled
                     </span>
                   )}
+                  {(() => {
+                    // Back-ref badge: how many heartbeats reference this skill.
+                    // Surfaces what would break if the operator deleted/disabled
+                    // it. Active-vs-total breakdown when both exist; just the
+                    // total when none active.
+                    const refs = heartbeatBackrefs[s.slug] ?? [];
+                    if (refs.length === 0) return null;
+                    const active = refs.filter((r) => r.status === 'active').length;
+                    const label = active > 0
+                      ? `↳ ${active}/${refs.length} heartbeats active`
+                      : `↳ ${refs.length} heartbeats (none active)`;
+                    return (
+                      <span
+                        title={refs.map((r) => `${r.slug} [${r.status}]`).join('\n')}
+                        className="rounded-sm bg-sky-100 px-1.5 py-0.5 text-[10px] font-medium uppercase tracking-wider text-sky-900 dark:bg-sky-900/40 dark:text-sky-100"
+                      >
+                        {label}
+                      </span>
+                    );
+                  })()}
                 </div>
                 <p className="text-xs text-muted-foreground">{s.description}</p>
                 <div className="flex flex-wrap items-baseline gap-x-2 gap-y-0.5 text-[11px] text-muted-foreground">

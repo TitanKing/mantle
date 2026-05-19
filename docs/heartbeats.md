@@ -492,6 +492,35 @@ Named so we don't accidentally do them:
 - **Heartbeat template library.** v1 expects hand-crafted entries
   through the UI / seed script.
 
+### Low-latency wake via pg_notify (NEW-7, shipped)
+
+Default tick interval is 60s, so a heartbeat created via `/settings/heartbeats`
+with `next_fire_at` in the immediate future would wait up to a full
+minute before the tick loop picked it up. Felt like a bug to the
+operator (click "Create", nothing happens).
+
+`packages/heartbeats/src/notify.ts` adds `notifyHeartbeatDue(ownerId)`
+which fires `pg_notify('heartbeat_due', <ownerId>)`. Producers:
+
+  - `apps/web/lib/heartbeats.createHeartbeat` after every insert
+  - `apps/web/lib/heartbeats.updateHeartbeat` after every update
+    (covers schedule edits + resume-from-paused)
+
+Consumer: `apps/agent/src/main.ts` LISTENs on `heartbeat_due` and
+calls `tickHeartbeats(ownerId)` on each notification — same code path
+as the 60s setInterval, just kicked early. Net effect: an operator's
+Create/Edit/Resume click lands in the trace within ~1s, not 60s.
+
+Soft-failing on both sides. `notifyHeartbeatDue` swallows errors
+(next regular tick catches up). The listener swallows handler errors
+too. The 60s setInterval remains as the floor — losing a single
+notify is at most a 60-second UX regression, never a correctness
+issue.
+
+The web's `fireNowAction` (Zap button) does NOT use `notify` — it
+calls `forceFire` directly in the Next.js server-action process, so
+the trace appears immediately. The two paths don't overlap.
+
 ### Catch-up spike after agent downtime (NEW-6)
 
 When `apps/agent` is down for an extended period (host reboot, deploy,

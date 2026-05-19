@@ -19,3 +19,4 @@ export {
   HEARTBEAT_RESPONDER_TOOLS,
   registerHeartbeatTools,
 } from './tools';
+export { notifyHeartbeatDue, HEARTBEAT_DUE_CHANNEL } from './notify';

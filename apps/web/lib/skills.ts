@@ -7,8 +7,8 @@
  * prompt + tool set by unioning every attached skill's bits.
  */
 
-import { and, asc, eq, inArray } from 'drizzle-orm';
-import { db, skills, type Skill } from '@mantle/db';
+import { and, asc, eq, inArray, sql } from 'drizzle-orm';
+import { db, heartbeats, skills, type Skill } from '@mantle/db';
 
 export type SkillSummary = {
   id: string;
@@ -49,6 +49,43 @@ export async function listSkills(ownerId: string): Promise<SkillSummary[]> {
     .orderBy(asc(skills.slug));
   return rows.map(toSummary);
 }
+
+/**
+ * Returns a `{slug → heartbeat[]}` map for every skill referenced by
+ * at least one heartbeat owned by `ownerId`. Used by /settings/skills
+ * to show a badge ("used by N heartbeats") + a meaningful delete
+ * confirmation. Skills with zero references aren't in the result —
+ * caller treats absence as zero.
+ *
+ * Single query, owner-scoped at both sides of the implicit join so
+ * a malicious slug can't reveal another user's heartbeats.
+ */
+export async function listSkillBackrefs(
+  ownerId: string,
+): Promise<Map<string, Array<{ slug: string; name: string; status: string }>>> {
+  const rows = await db
+    .select({
+      skillSlug: heartbeats.skillSlug,
+      heartbeatSlug: heartbeats.slug,
+      heartbeatName: heartbeats.name,
+      status: heartbeats.status,
+    })
+    .from(heartbeats)
+    .where(eq(heartbeats.ownerId, ownerId))
+    .orderBy(asc(heartbeats.slug));
+  const out = new Map<string, Array<{ slug: string; name: string; status: string }>>();
+  for (const r of rows) {
+    const list = out.get(r.skillSlug) ?? [];
+    list.push({ slug: r.heartbeatSlug, name: r.heartbeatName, status: r.status });
+    out.set(r.skillSlug, list);
+  }
+  return out;
+}
+
+// Silence unused-import — sql isn't used directly here but is kept
+// for future skill queries that need raw expressions (e.g. case-
+// insensitive name search).
+void sql;
 
 export async function getSkill(
   ownerId: string,

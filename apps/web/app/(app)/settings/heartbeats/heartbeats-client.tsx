@@ -58,6 +58,12 @@ type FormState = {
    *  edits from being clobbered when the operator switches skills
    *  back and forth experimentally. */
   state_touched: boolean;
+  /** Set when the heartbeat being edited has scheduleKind='cron'.
+   *  Cron isn't supported in v1 (see docs/heartbeats.md §2); the
+   *  form surfaces a banner + disables the schedule-kind radio in
+   *  this case so editing doesn't silently coerce to 'manual'.
+   *  P2-4 from the v1 audit. */
+  is_cron_locked: boolean;
 };
 
 const SENSIBLE_DEFAULTS = {
@@ -86,6 +92,7 @@ function emptyForm(): FormState {
     gate_preset: 'sensible',
     state_text: '{}',
     state_touched: false,
+    is_cron_locked: false,
     ...SENSIBLE_DEFAULTS,
   };
 }
@@ -112,6 +119,11 @@ function fromHeartbeat(h: HeartbeatSummary): FormState {
     description: h.description ?? '',
     agent_slug: h.agentSlug,
     skill_slug: h.skillSlug,
+    // Cron rows are surfaced through the form but the schedule_kind
+    // radio is locked (see is_cron_locked + banner below). We tag
+    // the form state as 'manual' for radio rendering purposes only;
+    // the submit path bails before re-serialising the schedule, so
+    // the DB row's cron config is preserved unchanged.
     schedule_kind: h.scheduleKind === 'cron' ? 'manual' : (h.scheduleKind as FormState['schedule_kind']),
     schedule_at: h.schedule.kind === 'once' ? isoToLocalInput(h.schedule.at) : '',
     schedule_every_minutes:
@@ -133,6 +145,7 @@ function fromHeartbeat(h: HeartbeatSummary): FormState {
     // subsequent skill change doesn't clobber existing data.
     state_text: JSON.stringify(h.state ?? {}, null, 2),
     state_touched: true,
+    is_cron_locked: h.scheduleKind === 'cron',
   };
 }
 
@@ -216,6 +229,17 @@ export function HeartbeatsClient({
 
   const submit = async () => {
     setError(undefined);
+    if (form.is_cron_locked) {
+      // Refuse to save while the form holds a cron-locked row.
+      // The server action would re-serialise the schedule from
+      // form fields, which would lose the cron expression. Force
+      // the operator down the documented path (SQL edit or
+      // delete + recreate). P2-4 from the v1 audit.
+      setError(
+        'Cannot save: this heartbeat uses a cron schedule (unsupported in v1). Edit via SQL or recreate the row with a v1-supported schedule.',
+      );
+      return;
+    }
     const fd = new FormData();
     if (editing?.mode === 'edit') fd.set('id', editing.hb.id);
     fd.set('slug', form.slug);
@@ -484,12 +508,31 @@ export function HeartbeatsClient({
 
             <fieldset className="space-y-3 rounded-md border p-4">
               <legend className="px-1 text-sm font-medium">Schedule</legend>
+              {form.is_cron_locked && (
+                <div className="rounded-md border border-amber-300 bg-amber-50 px-3 py-2 text-xs text-amber-900 dark:border-amber-700 dark:bg-amber-900/30 dark:text-amber-100">
+                  <strong>This heartbeat uses a cron schedule</strong>, which
+                  isn&apos;t supported in v1 of the heartbeats form. Editing the
+                  schedule here would silently coerce to <code>manual</code> and
+                  lose the cron expression — so it&apos;s locked.
+                  <br />
+                  To change this heartbeat&apos;s schedule, either edit the row
+                  directly via SQL, or delete + recreate it with one of the
+                  v1-supported schedule kinds.
+                </div>
+              )}
               <div className="flex flex-wrap gap-3">
                 {(['interval', 'once', 'manual'] as const).map((k) => (
-                  <label key={k} className="flex items-center gap-2 text-sm">
+                  <label
+                    key={k}
+                    className={
+                      'flex items-center gap-2 text-sm' +
+                      (form.is_cron_locked ? ' opacity-50' : '')
+                    }
+                  >
                     <input
                       type="radio"
                       checked={form.schedule_kind === k}
+                      disabled={form.is_cron_locked}
                       onChange={() => setForm((f) => ({ ...f, schedule_kind: k }))}
                     />
                     {k}
