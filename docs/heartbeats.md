@@ -300,22 +300,19 @@ this turn.
 
 ## 6. The worked example: `get_to_know_user`
 
-Seeded by `apps/web/scripts/seed-get-to-know-user.ts`. Fires once a
-day ±60min via Telegram with conservative gates and a 6-hour grace
-period after install. Asks one question per fire across 8 topics
-(family / work / hobbies / health / goals). Self-terminates when all
-are answered.
+Seeded by `apps/web/scripts/seed-get-to-know-user.ts`. **Fires once,
+~6 hours after install** (with a small random jitter so it doesn't
+always land at exactly 6h), sends a single warm invitation, and
+self-terminates on the user's first substantive reply. That's the
+whole script.
 
-The skill expects this state shape (see §11 for the canonical
-vocabulary, §10 for how the initial values get bootstrapped from
-`skills.default_state`):
+The skill (`profile_interview`) state shape is tiny — just enough to
+power the awareness block on the inbound reply:
 
 ```ts
 {
-  answered: string[],          // topics covered, e.g. ['family', 'work_role']
-  last_question_topic: string, // most recent topic asked, e.g. 'family'
-  last_asked_at: string,       // ISO instant of most recent ask
-  expecting_reply: boolean,    // true after asking, false after processing
+  expecting_reply: boolean,    // true after asking, false on complete
+  last_asked_at: string,       // ISO instant (drives "asked Nh ago")
 }
 ```
 
@@ -323,59 +320,73 @@ Lifecycle:
 
 ```
 T+0      Operator runs the seed script.
-         - Skill 'profile_interview' upserted.
-         - Responder agent's tool_slugs ensured to include
-           heartbeat_update_state / complete / snooze.
+         - Skill 'profile_interview' upserted with the simplified
+           one-invitation instructions + default_state.
+         - Responder agent's tool_slugs ensured to include the 3
+           heartbeat continuity tools.
          - Heartbeat 'get_to_know_user' created with
-             schedule: { interval, every_minutes: 1440, jitter_minutes: 60 }
-             earliest_at: now() + 6h
-             gates: 15min idle / 22-07 quiet / 30min cooldown
-             state: { answered: [], expecting_reply: false }
+             schedule: { once, at: now() + ~6h }
+             max_fires: 1
+             gates: 5min idle / 22-07 quiet
+             state: { expecting_reply: false }
 
-T+6h12m  First tick after earliest_at. Idle ok (no recent inbound).
-         FIRE → trace opened. Saskia generates first question.
-                  Tool loop: heartbeat_update_state({
-                    last_question_topic: 'family',
-                    expecting_reply: true,
-                    last_asked_at: '<now ISO>'
-                  })
-                  Reply text sent via Telegram sendMessage.
-         heartbeat_fires row: disposition='fired', trace_id stamped.
-         next_fire_at: now() + 1440min ± jitter.
+T+~6h    The single 'once' fire triggers (gates passing).
+         Saskia composes ONE warm invitation, e.g. "Hey 🌿 — quick
+         one: tell me a bit about yourself? Whatever you'd like me
+         to remember." Calls heartbeat_update_state with
+           { expecting_reply: true, last_asked_at: '<now>' }
+         Reply delivered via Telegram. trace_id stamped on
+         heartbeat_fires.
 
-T+6h25m  Jason replies "Wife + 3 kids, ages 4, 7, 11."
-         NORMAL responder turn (not a heartbeat fire).
-         openHeartbeatsForSurface returns the get_to_know_user row.
-         System prompt includes the 3-branch awareness block.
-         Saskia matches branch 1 (related answer), calls
-           heartbeat_update_state(
-             slug: 'get_to_know_user',
-             patch: { answered: ['family'], expecting_reply: false }
-           )
-         Replies "Got it — noted." in her own voice.
-
-T+8h     Jason sends "what's the weather like today?" — unrelated.
-         Responder turn opens. Awareness block still in prompt
-         (expecting_reply is false now so no entry shown).
-         Saskia answers the weather. Heartbeat untouched.
-
-T+30h    Next scheduled fire. expecting_reply=false (good — won't
-         double-ask). Idle ok. FIRE → next topic (work_role).
-
-         ... continues over ~10 days, one topic per day ...
-
-T+10d    All 8 topics answered. Saskia calls
+T+~7h    Jason replies with what he wants to share (family / role /
+         whatever). The reply hits the NORMAL responder turn —
+         openHeartbeatsForSurface returns the get_to_know_user row,
+         3-branch awareness block injected, Saskia matches "related
+         answer", acknowledges warmly, calls
            heartbeat_complete(slug: 'get_to_know_user',
-                              reason: 'all_topics_covered')
+                              reason: 'opened_relationship')
          Status → 'completed', next_fire_at → null. Never fires again.
-         The heartbeat row stays for audit.
+
+         Meanwhile, in the background:
+         - Extractor creates entities (Mia, Benji, Bella, …) +
+           facts ("Jason lives in Barrydale", …) from the message
+         - Reflector eventually appends persona_notes summarising
+           the relationship
+
+         The heartbeat opened the door; everything downstream that
+         actually "knows" Jason was passively absorbed by the
+         existing pipelines.
 ```
 
-If at any point Jason ignores a fire (`expecting_reply` stays true
-through the next 24h cycle), the next fire's synthetic prompt
-includes a stale-pending nudge telling Saskia to consider gently
-re-asking, pivoting to a different topic, or snoozing — NOT to
-hammer the same question every fire.
+**If Jason ignores the invitation**: heartbeat stays
+`expecting_reply: true` forever, no nagging. If he engages organically
+later (mentions his family in passing), the responder's awareness
+block still fires on that turn, Saskia closes the heartbeat then. If
+he explicitly declines ("not now"), Saskia calls `heartbeat_complete`
+with reason='user_declined'.
+
+### Why this design replaced the original 8-question interview
+
+The original design fired daily for 8 days, asking one topical question
+per fire (family / work / hobbies / health / weekend / goals / …).
+Tested every state-persistence + multi-fire path in the engine. Also
+felt like an interrogation — exactly the wrong vibe for an AI that's
+supposed to know you, not interview you.
+
+Two design failures in that v1:
+1. **The system already learns passively.** Extractor harvests entities
+   + facts from every message. Reflector appends persona notes. The
+   heartbeat doesn't need to drive the learning — it just needs to
+   open the door. Asking 8 questions duplicated work the rest of the
+   system was already doing for free.
+2. **Multi-fire pestering risk.** Even with the relevance gate + stale-
+   pending nudge, asking the same person N more questions over N more
+   days felt like a CRM, not a friend.
+
+The simplified one-question design is the canonical demo. The engine
+still supports the multi-fire pattern for skills that genuinely need
+it (e.g., a hypothetical "daily standup" or "weekly review"), but
+that's a different shape of feature, not the get-to-know-you flow.
 
 ## 7. Soft-fail catalog (real bugs we've already paid for)
 
@@ -565,6 +576,48 @@ There's no TypeScript type for these today; it's a documentation
 contract. A `WellKnownStateKeys` type re-exported from
 `@mantle/heartbeats` would catch typos at the skill-author layer
 without forcing a schema change — v1.1 candidate.
+
+## 11b. Skill design — prefer one focused fire over an interrogation
+
+Drawn from the get_to_know_user redesign. When you're tempted to
+ship a heartbeat with a multi-fire skill, ask:
+
+1. **Does the rest of the system already learn this passively?**
+   Extractor + reflector harvest entities, facts, and persona notes
+   from every message. If your heartbeat's goal is "build a profile
+   of the user", the heartbeat just needs to open the door — the
+   passive pipelines do the real work. A long script duplicates them
+   AND feels like a CRM.
+
+2. **Does each fire add genuinely new value, or just churn?**
+   A daily check-in adds value (today's mood is different from
+   yesterday's). An 8-day interview where each fire asks one more
+   topic is just N invasive pings stretched across N days. The user
+   doesn't experience them as separate — they experience them as
+   "this thing keeps bothering me."
+
+3. **Could one well-crafted fire achieve 80% of the goal?**
+   Usually yes. A single warm open-ended invitation gets the user
+   sharing in their own shape and pace. The engine's relevance gate
+   means unrelated turns leave the heartbeat alone; the responder's
+   awareness block means a delayed reply still closes the loop.
+   Reach for the multi-fire pattern only when each fire's content
+   is meaningfully fresh.
+
+**Pattern checklist for a well-designed heartbeat skill:**
+
+  - Single clear fire goal stated in the instructions
+  - State shape is minimal (often just `{expecting_reply, last_asked_at}`)
+  - Self-terminates on a clear completion signal (first substantive
+    reply / user_declined / max iterations reached)
+  - Schedule reflects intent: `once` for one-shot, `interval` only
+    when each fire genuinely covers new ground
+  - Tone matches a friend, not a survey
+
+The complex multi-fire flow stays available in the engine for skills
+that earn it (daily check-ins, weekly reviews, multi-step
+onboarding). It just isn't the default shape — design for one good
+fire first, only branch out if you can defend why.
 
 ## 12. Skills: two activation models, one table
 

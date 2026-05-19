@@ -75,67 +75,68 @@ async function resolveAgentSlug(): Promise<string> {
 const SKILL_SLUG = 'profile_interview';
 const HEARTBEAT_SLUG = 'get_to_know_user';
 
-const SKILL_INSTRUCTIONS = `You are helping the system get to know the user better
-over time. Each fire of this heartbeat, ask ONE thoughtful question on
-a topic the state says you haven't covered yet.
+const SKILL_INSTRUCTIONS = `You are opening the relationship with the user. Fire ONCE: send ONE
+warm, open-ended invitation that gives them room to share whatever
+they want you to remember about them. Then stop.
 
-Topics in order (cover roughly this sequence; skip naturally if a
-previous answer made one redundant):
+Why ONE question (not an interview):
+- Reflector + extractor already harvest entities, facts, and persona
+  notes from EVERY message the user sends in normal conversation. You
+  don't need to ask follow-up questions to learn the rest — the
+  system passively absorbs it as you chat.
+- A multi-question script feels like an interrogation. A single warm
+  invitation feels like a friend asking "tell me about yourself."
 
-1. family — who lives at home? names + relations.
-2. work_role — what do they do for work? company, team if relevant.
-3. work_rhythms — typical working hours? remote/office/hybrid?
-4. hobbies — what do they do outside work that energises them?
-5. health_signals — what does a good day vs. a bad day look like physically?
-6. stress_signals — what does stress tend to look like for them?
-7. weekend_rhythms — Sat/Sun typical shape? church/sport/family/hobby blocks?
-8. goals_short — anything they're actively working towards this month?
+When this heartbeat fires:
 
-Rules:
-- ASK ONE QUESTION PER FIRE. Don't pile up multiple at once.
-- Be warm, concise, conversational. Match the user's register.
-- After asking, call heartbeat_update_state with:
-    {
-      expecting_reply: true,
-      last_question_topic: '<topic>',
-      last_asked_at: '<current ISO instant>'
-    }
-  The last_asked_at field is used by the responder turn (and by the
-  next fire if the user hasn't replied) to know how long the question
-  has been pending — drives "soft re-ask vs pivot vs snooze" decisions.
+1. Craft a single open question, e.g.:
+     "Hey 🌿 — quick one to help me be useful from day one: tell me
+      a bit about yourself? Whatever you'd like me to remember
+      — family, work, what you're into, whatever shape your days
+      take. No need to be thorough."
+   Match the user's register (casual / formal / playful as
+   established).
 
-- The user's reply will come in via a normal Telegram turn (not a
-  heartbeat fire). You'll see "Open heartbeats" context with a 3-branch
-  decision tree:
-    • Related answer → call heartbeat_update_state with
-        { answered: [...current, '<topic>'], expecting_reply: false }
-    • Unrelated message → just answer them normally, leave the
-      heartbeat alone (do NOT call any heartbeat tool).
-    • Stop request → heartbeat_snooze or heartbeat_complete.
+2. Call heartbeat_update_state with:
+     {
+       expecting_reply: true,
+       last_asked_at: '<current ISO instant>'
+     }
 
-- If you fire while expecting_reply is STILL true from a previous fire
-  (user hasn't replied yet), do NOT just re-ask the same question.
-  Either gently re-ask once if recent, pivot to a different topic, or
-  call heartbeat_snooze if the user seems busy.
+3. End your turn. Send one message.
 
-- When all 8 topics are answered, call heartbeat_complete with
-  reason='all_topics_covered'.
+When the user REPLIES (normal responder turn, you'll see the "Open
+heartbeats" awareness block):
 
-State shape you should maintain:
+1. Acknowledge what they shared in your own voice (1-2 sentences).
+   The extractor will already create entities + facts from the
+   message itself; the reflector will append persona notes. You
+   don't need to enumerate or summarise — just be warm.
+
+2. Call heartbeat_complete with slug='get_to_know_user' and
+   reason='opened_relationship'. ONE reply is enough — don't keep
+   asking follow-ups, the goal is met.
+
+If the user ignores the invitation: the heartbeat stays expecting_reply=true
+forever. That's fine — no nagging. If they engage organically later,
+the awareness block will still apply and you can close it then.
+
+If the user explicitly says "not now" or "skip": call
+heartbeat_complete with reason='user_declined'.
+
+State shape:
   {
-    answered: string[],          // topics covered
-    last_question_topic: string, // most recent topic asked
-    last_asked_at: string,       // ISO instant of most recent ask
-    expecting_reply: boolean     // true after asking, false after processing
+    expecting_reply: boolean,    // true after asking, false on complete
+    last_asked_at: string,       // ISO instant of the ask
   }
 `;
 
 /** Template state shape the profile_interview skill expects. Stored on
  *  the skill row so any heartbeat bound to it inherits these defaults
- *  on create (migration 0031). Operator can override per-heartbeat
- *  via the form's state textarea. */
+ *  on create (migration 0031). The simplified one-question design
+ *  needs only two keys; the previous interview design's `answered`
+ *  array isn't relevant anymore. */
 const SKILL_DEFAULT_STATE: Record<string, unknown> = {
-  answered: [],
   expecting_reply: false,
 };
 
@@ -178,17 +179,21 @@ async function upsertSkill(): Promise<void> {
 }
 
 async function upsertHeartbeat(agentSlug: string): Promise<void> {
-  const earliestAt = new Date(Date.now() + 6 * 3600_000); // 6h grace
+  // Fire once, ~6 hours after install (with up to 30min jitter so it
+  // doesn't always land at exactly the 6h mark — feels human).
+  // Single fire only — the skill self-terminates on the user's first
+  // reply. If they ignore it, the heartbeat sits expecting_reply=true
+  // forever, no nagging. If they engage later, the responder's
+  // awareness block closes it then.
+  const fireAt = new Date(Date.now() + 6 * 3600_000 + Math.floor(Math.random() * 30 * 60_000));
   const schedule = {
-    kind: 'interval' as const,
-    every_minutes: 1440, // 24h
-    jitter_minutes: 60,
+    kind: 'once' as const,
+    at: fireAt.toISOString(),
   };
   const nextFireAt = computeNextFireAt({
     schedule,
-    anchor: earliestAt,
+    anchor: new Date(),
     seed: `${HEARTBEAT_SLUG}:1`,
-    notBefore: earliestAt,
   });
 
   const [existing] = await db
@@ -198,21 +203,30 @@ async function upsertHeartbeat(agentSlug: string): Promise<void> {
     .limit(1);
 
   const common = {
-    name: 'Get to know the user',
+    name: 'Welcome invitation',
     description:
-      'Daily one-question interview that builds a profile across family / work / hobbies / health / goals. Self-terminates when all topics covered.',
+      "Single open invitation, ~6h after install: 'tell me a bit about yourself'. Self-terminates on the user's first substantive reply. No follow-ups — extractor + reflector handle the rest organically through normal conversation.",
     agentSlug,
     skillSlug: SKILL_SLUG,
-    scheduleKind: 'interval' as const,
+    scheduleKind: 'once' as const,
     schedule,
     surface: { kind: 'telegram' as const, chat_id: TG_CHAT_ID! },
-    minIdleMinutes: 15,
+    // Quiet hours stay (don't barge in at 02:00 if install was at 20:00).
+    // Idle gate looser since this is a first-touch; user expects the
+    // assistant to take initiative once early.
+    minIdleMinutes: 5,
     quietHours: { from: '22:00', to: '07:00', tz: null },
-    cooldownMinutes: 30,
-    earliestAt,
-    maxFires: null,
+    cooldownMinutes: null,
+    // earliestAt mirrors fireAt for `once`: the schedule's `at` already
+    // controls timing, but setting earliestAt makes the gate explicit
+    // and shows up nicely on the detail page.
+    earliestAt: fireAt,
+    // maxFires: 1 is belt-and-suspenders — `once` already only fires
+    // once, but if a future migration ever flipped this row to
+    // interval the cap still holds.
+    maxFires: 1,
     nextFireAt,
-    state: { answered: [], expecting_reply: false } as Record<string, unknown>,
+    state: { expecting_reply: false } as Record<string, unknown>,
   };
 
   if (existing) {
@@ -272,8 +286,9 @@ async function main() {
   await ensureHeartbeatToolsOnAgent(agentSlug);
   await upsertSkill();
   await upsertHeartbeat(agentSlug);
-  console.log('[seed] done — heartbeat will fire after the 6h earliest_at gate passes.');
+  console.log('[seed] done — single welcome-invitation fire scheduled ~6h from now.');
   console.log('[seed] use the /heartbeats page or the heartbeat_fire tool to test sooner.');
+  console.log('[seed] the skill self-terminates on the user\'s first substantive reply.');
   process.exit(0);
 }
 
