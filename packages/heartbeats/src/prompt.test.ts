@@ -117,6 +117,59 @@ describe('buildHeartbeatPrompt', () => {
     expect(out).toContain('heartbeat_snooze');
     expect(out).toContain('heartbeat_complete');
   });
+
+  it('instructs the agent to set last_asked_at when asking', () => {
+    const out = buildHeartbeatPrompt({ hb: mkHeartbeat(), skill: mkSkill() });
+    expect(out).toContain('last_asked_at');
+  });
+
+  // C — stale-pending detection. fireCount > 0 + expecting_reply: true
+  // means a previous fire asked and we never heard back.
+  describe('stale pending detection (C)', () => {
+    it('omits the stale-pending block on the first fire', () => {
+      const out = buildHeartbeatPrompt({
+        hb: mkHeartbeat({ fireCount: 0, state: { expecting_reply: true } }),
+        skill: mkSkill(),
+      });
+      expect(out).not.toMatch(/previous question is still pending/i);
+    });
+
+    it('omits the stale-pending block when not expecting reply', () => {
+      const out = buildHeartbeatPrompt({
+        hb: mkHeartbeat({ fireCount: 3, state: { expecting_reply: false, answered: ['family'] } }),
+        skill: mkSkill(),
+      });
+      expect(out).not.toMatch(/previous question is still pending/i);
+    });
+
+    it('includes a soft-re-ask / pivot / snooze nudge when prev fire went unanswered', () => {
+      const out = buildHeartbeatPrompt({
+        hb: mkHeartbeat({
+          fireCount: 2,
+          state: {
+            expecting_reply: true,
+            last_question_topic: 'family',
+            last_asked_at: '2026-05-17T10:00:00Z',
+          },
+        }),
+        skill: mkSkill(),
+        now: new Date('2026-05-19T10:00:00Z'),
+      });
+      expect(out).toMatch(/previous question is still pending/i);
+      expect(out).toMatch(/asked 2d ago/);
+      expect(out).toMatch(/pivot/i);
+      expect(out).toMatch(/snooze/i);
+    });
+
+    it('renders age omitted when last_asked_at is missing or malformed', () => {
+      const out = buildHeartbeatPrompt({
+        hb: mkHeartbeat({ fireCount: 2, state: { expecting_reply: true } }),
+        skill: mkSkill(),
+      });
+      expect(out).toMatch(/previous question is still pending/i);
+      expect(out).not.toMatch(/asked .* ago/);
+    });
+  });
 });
 
 describe('buildOpenHeartbeatContext', () => {
@@ -158,5 +211,74 @@ describe('buildOpenHeartbeatContext', () => {
       { slug: 'get_to_know_user', name: 'One', state: { expecting_reply: true } },
     ]);
     expect(out).toMatch(/slug/i);
+  });
+
+  // A — 3-branch decision tree.
+  describe('relevance decision tree (A)', () => {
+    const open = [
+      { slug: 'get_to_know_user', name: 'One', state: { expecting_reply: true } },
+    ];
+
+    it('explicitly tells the model what to do on a related answer', () => {
+      const out = buildOpenHeartbeatContext(open);
+      expect(out).toMatch(/answers a heartbeat question/i);
+    });
+
+    it('explicitly tells the model to LEAVE THE HEARTBEAT ALONE on unrelated messages', () => {
+      // The whole point of A: without this branch, the model might
+      // re-ask after every unrelated turn (pestering) or fabricate
+      // an empty heartbeat_update_state call (junk data).
+      const out = buildOpenHeartbeatContext(open);
+      expect(out).toMatch(/unrelated/i);
+      expect(out).toMatch(/leave the heartbeat alone/i);
+      expect(out).toMatch(/do NOT call/);
+    });
+
+    it('explicitly handles the stop/not-now branch', () => {
+      const out = buildOpenHeartbeatContext(open);
+      expect(out).toMatch(/heartbeat_snooze/);
+      expect(out).toMatch(/heartbeat_complete/);
+    });
+  });
+
+  // B — last_asked_at age display.
+  describe('last_asked_at age display (B)', () => {
+    it('renders "asked Nh ago" when state.last_asked_at is set', () => {
+      const out = buildOpenHeartbeatContext(
+        [
+          {
+            slug: 'h1',
+            name: 'One',
+            state: {
+              expecting_reply: true,
+              last_asked_at: '2026-05-19T08:00:00Z',
+            },
+          },
+        ],
+        { now: new Date('2026-05-19T10:30:00Z') },
+      );
+      expect(out).toMatch(/asked 2h ago/);
+    });
+
+    it('omits the age suffix when last_asked_at is missing', () => {
+      const out = buildOpenHeartbeatContext([
+        { slug: 'h1', name: 'One', state: { expecting_reply: true } },
+      ]);
+      expect(out).not.toMatch(/asked .* ago/);
+    });
+
+    it('omits the age suffix when last_asked_at is unparseable', () => {
+      const out = buildOpenHeartbeatContext(
+        [
+          {
+            slug: 'h1',
+            name: 'One',
+            state: { expecting_reply: true, last_asked_at: 'not a date' },
+          },
+        ],
+        { now: new Date('2026-05-19T10:30:00Z') },
+      );
+      expect(out).not.toMatch(/asked .* ago/);
+    });
   });
 });

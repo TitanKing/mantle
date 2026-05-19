@@ -94,12 +94,30 @@ previous answer made one redundant):
 Rules:
 - ASK ONE QUESTION PER FIRE. Don't pile up multiple at once.
 - Be warm, concise, conversational. Match the user's register.
-- After asking, set state.expecting_reply=true and
-  state.last_question_topic='<topic>' via heartbeat_update_state.
+- After asking, call heartbeat_update_state with:
+    {
+      expecting_reply: true,
+      last_question_topic: '<topic>',
+      last_asked_at: '<current ISO instant>'
+    }
+  The last_asked_at field is used by the responder turn (and by the
+  next fire if the user hasn't replied) to know how long the question
+  has been pending — drives "soft re-ask vs pivot vs snooze" decisions.
+
 - The user's reply will come in via a normal Telegram turn (not a
-  heartbeat fire). You'll see "Open heartbeats" context — that's
-  when you process the reply: call heartbeat_update_state with
-  { answered: [...current, '<topic>'], expecting_reply: false }.
+  heartbeat fire). You'll see "Open heartbeats" context with a 3-branch
+  decision tree:
+    • Related answer → call heartbeat_update_state with
+        { answered: [...current, '<topic>'], expecting_reply: false }
+    • Unrelated message → just answer them normally, leave the
+      heartbeat alone (do NOT call any heartbeat tool).
+    • Stop request → heartbeat_snooze or heartbeat_complete.
+
+- If you fire while expecting_reply is STILL true from a previous fire
+  (user hasn't replied yet), do NOT just re-ask the same question.
+  Either gently re-ask once if recent, pivot to a different topic, or
+  call heartbeat_snooze if the user seems busy.
+
 - When all 8 topics are answered, call heartbeat_complete with
   reason='all_topics_covered'.
 
@@ -107,6 +125,7 @@ State shape you should maintain:
   {
     answered: string[],          // topics covered
     last_question_topic: string, // most recent topic asked
+    last_asked_at: string,       // ISO instant of most recent ask
     expecting_reply: boolean     // true after asking, false after processing
   }
 `;
