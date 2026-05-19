@@ -8,6 +8,8 @@ const KIND_LABEL: Record<string, string> = {
   extractor_run: 'Extractor',
   summarizer_run: 'Summarizer',
   reflector_run: 'Reflector',
+  content_ingest: 'Ingest',
+  photo_ingest: 'Photo',
   manual: 'Manual',
 };
 
@@ -58,6 +60,8 @@ export default async function TracesPage(props: {
             ['extractor_run', 'Extractor'],
             ['summarizer_run', 'Summarizer'],
             ['reflector_run', 'Reflector'],
+            ['content_ingest', 'Ingest'],
+            ['photo_ingest', 'Photo'],
           ]}
         />
         <FilterGroup
@@ -67,6 +71,11 @@ export default async function TracesPage(props: {
             ['success', 'Success'],
             ['running', 'Running'],
             ['error', 'Error'],
+            // skipped traces are the new visibility win — operator
+            // filters here to see what the system considered and
+            // declined to run, with a disposition string explaining
+            // why. Migration 0029 + Layer A.
+            ['skipped', 'Skipped'],
           ]}
         />
         <label className="flex items-center gap-1 text-xs">

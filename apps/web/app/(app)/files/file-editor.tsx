@@ -207,6 +207,17 @@ export function FileEditor({
               />
             </div>
           )}
+          {/* History link → /nodes/[id]/history. Shows every trace
+              that touched this file (ingest, extractor, summarizer,
+              etc.) with full step payloads. Operator's debug surface
+              for "what did the system do with my upload?" */}
+          <a
+            href={`/nodes/${file.id}/history`}
+            className="rounded-md border border-input px-2 py-1 text-xs font-medium hover:bg-accent"
+            title="See what the system did with this file"
+          >
+            History
+          </a>
           <a
             href={`/api/files/files/${file.id}?raw=1`}
             download={file.filename}

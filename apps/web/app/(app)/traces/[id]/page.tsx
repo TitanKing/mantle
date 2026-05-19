@@ -44,14 +44,32 @@ export default async function TraceDetailPage({
               trace.agentName ? `${trace.agentName} (${trace.agentSlug})` : '—'
             }
           />
-          <Field
-            label="Subject"
-            value={
-              trace.subjectKind
-                ? `${trace.subjectKind}#${(trace.subjectId ?? '').slice(0, 8)}`
-                : '—'
-            }
-          />
+          {/* When this trace was tied to a specific node, render the
+              subject value as a link into the node-biography view so
+              operators can pivot from "this one trace failed" to
+              "show me everything that touched this node." */}
+          {trace.subjectKind === 'node' && trace.subjectId ? (
+            <Field
+              label="Subject"
+              value={
+                <Link
+                  href={`/nodes/${trace.subjectId}/history`}
+                  className="text-primary hover:underline"
+                >
+                  node#{trace.subjectId.slice(0, 8)} →
+                </Link>
+              }
+            />
+          ) : (
+            <Field
+              label="Subject"
+              value={
+                trace.subjectKind
+                  ? `${trace.subjectKind}#${(trace.subjectId ?? '').slice(0, 8)}`
+                  : '—'
+              }
+            />
+          )}
           <Field
             label="Tokens"
             value={`in ${trace.tokensIn} · out ${trace.tokensOut}${trace.tokensCacheRead > 0 ? ` · cache ${trace.tokensCacheRead}` : ''}`}
@@ -82,7 +100,10 @@ function Field({
   mono,
 }: {
   label: string;
-  value: string;
+  // ReactNode so callers can pass a Link for clickable subjects
+  // (e.g. node subjects → /nodes/[id]/history). Plain strings still
+  // render fine — JSX renders them as text.
+  value: React.ReactNode;
   mono?: boolean;
 }) {
   return (
