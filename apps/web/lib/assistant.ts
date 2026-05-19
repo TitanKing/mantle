@@ -288,6 +288,10 @@ export async function runAssistantTurn(
     delegateTo: (agent.memoryConfig as { delegate_to?: string[] } | null)?.delegate_to ?? [],
     initialMessages: messages,
     tools: allowedTools,
+    // /assistant has no outbound channel beyond the reply stream itself
+    // — tools that want to "send a voice note" or similar refuse here
+    // with a clean error so the LLM falls back to text.
+    surface: { kind: 'web' },
   });
   const rawReply = loopOutcome.reply;
   if (!rawReply) {

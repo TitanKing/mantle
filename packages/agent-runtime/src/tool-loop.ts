@@ -81,6 +81,20 @@ export type ToolLoopArgs = {
   tools: Tool[];
   /** Max LLM round-trips before forcing a final answer. Default 6. */
   maxIterations?: number;
+  /** Which surface this loop is running on. Threaded into every
+   *  tool handler's `ctx.surface`. Set by the caller — handleMessage
+   *  passes `{kind: 'telegram', telegramChatId, ...}`, the web
+   *  assistant passes `{kind: 'web'}`. Optional because background
+   *  callers (extractor/reflector/manual scripts) don't have a
+   *  surface; worker-delegation tools refuse cleanly when this is
+   *  absent. */
+  surface?:
+    | {
+        kind: 'telegram';
+        telegramChatId: string;
+        replyToTelegramMessageId?: string;
+      }
+    | { kind: 'web' };
 };
 
 /**
@@ -284,6 +298,11 @@ export async function runToolLoop(args: ToolLoopArgs): Promise<ToolLoopResult> {
                   },
                 }
               : {}),
+            // Per-turn surface (Telegram chat id, /assistant, …) so
+            // worker-delegation tools know where to send results.
+            // Absent for background callers (reflector/extractor) —
+            // synthesize_speech & friends refuse cleanly when missing.
+            ...(args.surface ? { surface: args.surface } : {}),
           });
         },
       );

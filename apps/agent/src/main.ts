@@ -828,6 +828,17 @@ async function handleMessage(messageId: string): Promise<void> {
             (agent.memoryConfig as { delegate_to?: string[] } | null)?.delegate_to ?? [],
           initialMessages: messages,
           tools: allowedTools,
+          // Surface lets worker-delegation tools (synthesize_speech,
+          // etc.) target the right Telegram chat. The replyTo is the
+          // message that triggered this turn so the bot's outbound
+          // threads under it.
+          surface: {
+            kind: 'telegram',
+            telegramChatId: row.telegramChatId,
+            ...(row.telegramMessageId
+              ? { replyToTelegramMessageId: row.telegramMessageId }
+              : {}),
+          },
         });
         const rawReply = loopOutcome.reply;
         if (!rawReply) {

@@ -30,6 +30,31 @@ export type ToolHandlerContext = {
     /** Parent trace id, threaded into the child trace for navigation. */
     parentTraceId?: string | null;
   };
+  /** Which surface this turn is running on. Populated by the agent
+   *  runtime so worker-delegation tools can target the right channel
+   *  — e.g. synthesize_speech needs to know the Telegram chat id to
+   *  send the voice note to. Tools that don't care leave this
+   *  undefined and ignore it.
+   *
+   *  kind='telegram': turn came from a Telegram inbound message.
+   *    telegramChatId is the chat to send back to;
+   *    replyToTelegramMessageId is set when threading is appropriate.
+   *  kind='web':      turn came from /assistant. No outbound channel
+   *    other than the assistant's own reply stream — voice/file send
+   *    tools should refuse with a clear "web surface only" message.
+   *  Undefined:       background/cron path (reflector, extractor).
+   *    Worker-delegation tools should refuse here too — there's no
+   *    user on the other end to send anything to. */
+  surface?:
+    | {
+        kind: 'telegram';
+        telegramChatId: string;
+        /** When set, voice/text replies thread under this Telegram
+         *  message_id. Optional because a tool-initiated send might
+         *  not have a natural parent message. */
+        replyToTelegramMessageId?: string;
+      }
+    | { kind: 'web' };
 };
 
 export type ToolHandlerResult =

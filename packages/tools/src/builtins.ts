@@ -28,6 +28,7 @@ import {
   upsertFile,
 } from '@mantle/files';
 import type { BuiltinToolDef } from './types';
+import { WORKER_DELEGATION_TOOLS } from './builtins-workers';
 
 function str(v: unknown): string {
   return typeof v === 'string' ? v : '';
@@ -814,4 +815,9 @@ export const BUILTIN_TOOLS: BuiltinToolDef[] = [
   telegram_send,
   process_extraction,
   invoke_agent,
+  // Worker-delegation tools live in builtins-workers.ts so they can
+  // share helpers without bloating this file. Each one bridges
+  // Saskia's agency to a configured ai_workers row — TTS, vision,
+  // summarizer.
+  ...WORKER_DELEGATION_TOOLS,
 ];
