@@ -769,34 +769,53 @@ The fire loop lives in `apps/agent/src/main.ts` as a per-minute
 `setInterval` (same backoff pattern as the reflector). Each tick:
 
 1. SELECT active heartbeats where `next_fire_at <= now()`
-2. For each: gate-check (idle / quiet hours / cooldown / earliest)
-3. On pass: open `trace_kind='heartbeat_fire'`, build synthetic
+2. Filter out rows currently in-flight (per-process `Map<id, Promise>`
+   lock in `inflight.ts` — without it a fire taking >60s would be
+   re-selected by the next tick and double-fire)
+3. For each remaining: gate-check (idle / quiet / cooldown / earliest)
+4. On pass: open `trace_kind='heartbeat_fire'`, build synthetic
    "you have a heartbeat to do" prompt, run the agent's tool loop
-   under `withHeartbeatContext`, deliver reply to surface, update
-   `state` + `next_fire_at`
-4. On gate fail: append to `heartbeat_fires` audit log, bump
-   `next_fire_at` to retry soon. No trace row burned per skip.
+   under `withHeartbeatContext`, deliver reply via a dedicated
+   `deliver_surface` step, reload + update `state` + `next_fire_at`
+   (preserving any snooze pushed further out than the schedule)
+5. On gate fail: append to `heartbeat_fires` audit log + record a
+   skipped trace, bump `next_fire_at` to retry soon
 
 Key separation: **heartbeat skills are NOT loaded into the agent's
 persistent prompt**. They're injected ONLY into the synthetic
 user-role prompt at fire time. The responder's normal turn queries
-`open_heartbeats_for_surface` and appends a small "you have an open
-heartbeat expecting a reply" awareness block — this keeps
-conversation continuity across the outbound/inbound boundary
-without polluting every regular turn with heartbeat instructions.
+`open_heartbeats_for_surface` and appends an awareness block with
+a **3-branch decision tree** (related answer → call update_state;
+unrelated → leave alone, do NOT call heartbeat tools; stop request
+→ snooze/complete) — keeping continuity across outbound/inbound
+without making every regular turn pestering.
 
 Gates are nullable (per-heartbeat-only policy, no system-wide
-defaults). The form offers a "sensible defaults" preset (15min
-idle / 22:00–07:00 quiet / 30min cooldown) but the DB itself
-applies no fallback — blank = no gate of that kind.
+defaults). Form offers a "sensible defaults" preset
+(15min idle / 22:00–07:00 quiet / 30min cooldown); blank columns
+mean "no gate of that kind".
 
 5 builtin control tools live in `@mantle/heartbeats/src/tools.ts`
-(not `@mantle/tools` — would create a dep cycle since heartbeats
-already depends on tools): `heartbeat_complete`, `heartbeat_snooze`,
-`heartbeat_update_state`, `heartbeat_list`, `heartbeat_fire`. The
-first three refuse cleanly when called outside a heartbeat fire
-context (they read `currentHeartbeat()` from
-`AsyncLocalStorage`); the latter two are surface-agnostic.
+(not `@mantle/tools` — would create a dep cycle): `heartbeat_complete`,
+`heartbeat_snooze`, `heartbeat_update_state` (all use **dual-mode
+addressing**: explicit `slug` arg → ALS context → error),
+`heartbeat_list`, `heartbeat_fire` (always slug-keyed).
+
+**Permission model**: `agents.tool_slugs` is the single source of
+truth. The heartbeat continuity tools must be in the responder
+agent's allowlist (visible at `/settings/agents`) for the
+responder→state update path to work. The seed script
+`seed-get-to-know-user.ts` ensures this; custom heartbeats need
+the operator to grant the three mutation tools manually. The tools
+self-protect via `resolveTargetHeartbeat`, so granting them is
+safe — they're inert in unrelated turns.
+
+**State conventions**: `expecting_reply` (boolean — drives the
+awareness-block injection), `last_asked_at` (ISO — drives "asked
+Nh ago" display + stale-pending nudge), `last_question_topic`,
+`answered` (string[]). These are read by engine code but written
+only by skill instructions via `heartbeat_update_state`. See
+`heartbeats.md` §10 for the canonical list.
 
 ## 10. The MCP server
 
