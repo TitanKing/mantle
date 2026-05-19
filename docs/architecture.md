@@ -40,42 +40,75 @@ Three deliberate constraints shape every decision:
 
 ## 2. The big picture
 
-```
-┌──────────────────────────────────────────────────────────────────┐
-│  Browser  (you)                                                  │
-└─────────────────────────────┬────────────────────────────────────┘
-                              │ HTTPS
-┌─────────────────────────────▼────────────────────────────────────┐
-│  apps/web         Next.js 15 (App Router, RSC + server actions)  │
-│  - middleware.ts: signed-cookie gate, Edge runtime               │
-│  - lib/auth.ts:   bespoke HMAC session + bcryptjs                │
-│  - app/api/...:   REST endpoints (auth, attachments)             │
-│  - workers/...:   long-running ingest loops (run in same proc.   │
-│                   via `pnpm dev`)                                │
-└──┬─────────────────────────────┬─────────────────────────────────┘
-   │                             │
-   │ Drizzle (pg pool)           │ @mantle/storage (AWS S3 SDK)
-   │                             │
-┌──▼─────────────────────────────▼────────┐  ┌──────────────────────┐
-│  postgres (pgvector/pgvector:pg17)      │  │  minio (S3-compat)   │
-│  - public.*  (Mantle data)              │  │  bucket: mantle      │
-│  - auth.users  (id + bcrypt hash)       │  │  content-addressed   │
-│  - extensions: ltree, pg_trgm, vector,  │  │  files at aa/bb/<sha>│
-│      pgcrypto, uuid-ossp                │  │                      │
-│  - triggers: pg_notify('telegram_…')    │  │                      │
-└──┬──────────────────────────────────────┘  └──▲───────────────────┘
-   │                                            │
-   │ stdio (JSON-RPC)                           │
-   │                                            │
-┌──▼──────────────────────────────────────┐     │
-│  apps/mcp     (Drizzle direct)          │─────┘ (only when serving
-│  9 tools exposed to Claude              │        attachments via web)
-└─────────────────────────────────────────┘
+A `pnpm dev` process tree of seven Node lanes, two Docker containers,
+one shared Postgres + MinIO behind them. Memory is the spine — every
+ingest path lands a `nodes` row, which fires `pg_notify('node_ingested')`,
+which the extractor turns into searchable index + facts + entities.
+See [memory.md §0](./memory.md#0-the-flow-at-a-glance) for the
+end-to-end flow.
+
+```mermaid
+flowchart LR
+    classDef proc fill:#dbeafe,stroke:#3b82f6,color:#0c4a6e
+    classDef infra fill:#fef3c7,stroke:#d97706,color:#78350f
+    classDef ext fill:#fce7f3,stroke:#db2777,color:#831843
+
+    %% External interfaces
+    Browser[/"Browser<br/>(you)"/]:::ext
+    Phone[/"Phone<br/>Telegram"/]:::ext
+    IMAP[/"IMAP provider<br/>(Gmail, Fastmail, ...)"/]:::ext
+    OR[/"OpenRouter<br/>(LLM + embeddings)"/]:::ext
+    Disk[/"$MANTLE_FILES_ROOT<br/>(host filesystem)"/]:::ext
+    CC[/"Claude Desktop<br/>/ Claude Code"/]:::ext
+
+    %% Web
+    Web["apps/web<br/>Next.js 15 (Turbopack)<br/>middleware (HMAC cookie gate)<br/>/inbox /assistant /files<br/>/notes /todos /events<br/>/secrets /traces /debug /pending"]:::proc
+    Browser -- HTTPS --> Web
+
+    %% MCP
+    MCPp["apps/mcp<br/>stdio JSON-RPC<br/>~30 tools"]:::proc
+    CC -- stdio --> MCPp
+
+    %% Background workers
+    EmailW["apps/web/workers/email-sync.ts<br/>(pg-boss)"]:::proc
+    TgW["apps/web/workers/telegram-poll.ts"]:::proc
+    FilesW["apps/web/workers/files-watch.ts<br/>(chokidar)"]:::proc
+    EvW["apps/web/workers/events-reminders.ts<br/>(30s poll)"]:::proc
+    Agent["apps/agent/src/main.ts<br/>responder + extractor +<br/>summarizer + reflector<br/>(LISTEN-driven)"]:::proc
+
+    IMAP --> EmailW
+    Phone -- "Bot API" --> TgW
+    EvW -- "reminder" --> Phone
+    Disk --> FilesW
+    Disk <-- FilesW
+
+    %% Shared infra
+    PG[("postgres<br/>pgvector/pg_trgm/ltree<br/>public.* + auth.*<br/>pg_notify channels:<br/>node_ingested,<br/>telegram_message_inserted,<br/>summarize_due")]:::infra
+    MIN[("minio<br/>S3-compat<br/>bucket: mantle")]:::infra
+
+    Web -- "Drizzle pool" --> PG
+    Web -- "S3 SDK" --> MIN
+    EmailW --> PG
+    TgW --> PG
+    FilesW --> PG
+    EvW --> PG
+    Agent --> PG
+    Agent -- "@mantle/storage" --> MIN
+    MCPp --> PG
+
+    %% LLM
+    Agent -- "@openrouter/sdk" --> OR
+    Web -- "@openrouter/sdk<br/>(via /assistant)" --> OR
+
+    %% pg_notify fan-out
+    PG -. "node_ingested" .-> Agent
+    PG -. "telegram_message_inserted" .-> Agent
+    PG -. "summarize_due" .-> Agent
 ```
 
-Everything in the box is in `docker-compose.dev.yml` (the two infra containers)
-plus a single `pnpm dev` process tree (the four Node processes orchestrated by
-`concurrently`).
+Everything in the box is in `docker-compose.dev.yml` (the two infra
+containers) plus a single `pnpm dev` process tree (seven Node
+processes orchestrated by `concurrently`).
 
 ---
 
@@ -727,41 +760,60 @@ stack. `pg_restore --data-only` loads the latest backup. Insert your
 
 ## 16. Known sharp edges / future work
 
-In rough priority order:
+In rough priority order. Items the audit completed have been removed
+from this list; what's here is genuinely still open.
 
-- **Production Dockerfile is in place** (`Dockerfile` at repo root,
-  multi-target: `web`, `agent`, `worker-email`, `worker-telegram`).
-  `docker-compose.yml` wires all four behind `postgres + minio`.
-  Still untested end-to-end on a real VPS; refine env handling +
-  ergonomics there as needed. `pnpm up` (which uses
-  `docker-compose.dev.yml` + native Node) remains the dev path for
-  hot-reload.
-- **Rate limiting** on `/api/auth/login`. Acceptable for localhost-only;
-  needs to land before any remote exposure. Either at the reverse proxy
-  layer (Caddy with `rate_limit` directive) or in the route handler.
+**Deployment & operations**
+- **Production deploy untested on a real VPS.** `Dockerfile` (multi-
+  target) and `docker-compose.yml` exist; the dev path
+  (`docker-compose.dev.yml` + `pnpm dev`) is the only one exercised
+  end-to-end. First-deploy runbook + HTTPS-only cookie verification +
+  Caddy reverse proxy config still need to land.
+- **No backup/restore drill.** `pg_dump` + MinIO `mc mirror` would
+  work; nothing's scripted or rehearsed.
+- **No HSTS, no Content-Security-Policy** on web responses. Acceptable
+  on localhost; must land before public exposure.
 - **Attachment proxy** in `apps/web/app/api/attachments/[id]/route.ts`
-  streams bytes through Next. Fine functionally; in prod we'd want to
-  put a CDN or proxy in front of the Next process.
-- **Web UI for Telegram** is missing. Allowlist management, pairing-code
-  approval, conversation view — all happen via MCP tools today.
+  streams bytes through Next. Fine functionally; in prod a CDN or
+  direct presigned-MinIO would scale better.
+
+**Telegram surface**
+- **Web UI for Telegram is missing.** Allowlist management, pairing-
+  code approval, conversation view — all happen via MCP tools today.
 - **Embeddings for Telegram messages** aren't generated. The
-  `nodes.embedding` column exists but is unused for type=`telegram_message`.
-- **Webhooks instead of long-poll** for Telegram, once Mantle has a
-  public URL.
-- **Multi-turn agent context.** Today the agent sees only the inbound
-  message + persona. Storing outbound replies (new `telegram_replies`
-  table or a direction flag on `telegram_messages`) would let it carry
-  conversational state.
-- **Memory tiers + retrieval for the agent.** The persona prompt is a
-  fixed env string; the planned tier-2 (per-chat recent window) and
-  tier-3 (semantic retrieval over `nodes.embedding`) aren't wired.
-- **Multi-model routing in the agent.** Today every reply uses one
-  default model. Cheap-triage + Claude-escalation lives in `docs/architecture.md`
-  as a known design, not as code.
-- **Group support** for Telegram. `gate.ts` drops non-DM messages in v1.
-- **OAuth/MFA** for auth. Bespoke session is fine for single-user; if
-  this ever opens to more humans, swap in `better-auth` (~half a day,
-  Drizzle adapter built in).
+  `nodes.embedding` column exists but is unused for
+  `type='telegram_message'`. Means search_nodes can't find a turn
+  semantically; only digests are indexed.
+- **Long-poll, not webhook.** Once Mantle has a public URL with TLS,
+  switching the bot to webhook mode cuts the constant `getUpdates`
+  background traffic. Worth doing before the VPS deploy.
+- **Group chats** are still dropped in `gate.ts`. v1 is DM-only.
+
+**Voice modality**
+- **STT / TTS not wired.** Sketched as a transformation layer in the
+  conversation that produced this doc — voice clip → Whisper-style
+  STT → existing responder → Gemini/ElevenLabs TTS → audio back. Not
+  an agent (it's plumbing). Roughly 150 LOC + a provider SDK pick.
+
+**Auth**
+- **OAuth/MFA** isn't here. Bespoke HMAC session is fine for single-
+  user; swap in `better-auth` if this ever opens to more humans
+  (~half a day with the Drizzle adapter).
+
+**Testing**
+- **DB-dependent integration tests** are not yet written. The pure-
+  function layer has 188 vitest tests covering crypto, rate-limit,
+  events tz/remind helpers, file paths, tool-args, extractor parse.
+  Integration coverage (full extractor pipeline, secrets reveal end
+  to end, tool-loop with a real DB) needs a test Postgres — probably
+  a `docker-compose.test.yml`.
+
+**Agent ergonomics**
+- **No UI for `delegate_to`.** The `invoke_agent` allowlist lives on
+  `memory_config.delegate_to` and is editable via the jsonb-config
+  editor at `/settings/agents` but there's no dedicated field. Build
+  this once delegation has been exercised enough to know the right
+  shape.
 
 ---
 

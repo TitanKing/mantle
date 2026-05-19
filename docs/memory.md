@@ -4,11 +4,164 @@ How Mantle holds and retrieves what it knows. This file is the durable
 reference for the memory layer; companion to
 [`architecture.md`](./architecture.md) which covers the system as a whole.
 
-Status: **partially implemented.** `recent_turns` and `conversation_digest`
-are live for Telegram (migrations 0012, 0013). `persona`, `profile`,
-`content_index`, and `content_store` are partly in place at the schema
-level but their full retrieval pipelines aren't built yet — sequencing is
-in [§7](#7-build-sequence).
+Status (2026-05-19): **all six layers live end-to-end.** Every memory
+tier in [§2](#2-the-six-layers) has its writer wired, its reader
+wired, and tests for the load-bearing pure helpers. Specifically:
+
+| Layer | Writer | Reader | Notes |
+|---|---|---|---|
+| `persona` | `reflector` (live, with 10m→1h failure backoff) + hand-edits at `/settings/agents` | `responder`, `assistant` | Persona notes append-only; seed prompt editable |
+| `recent_turns` | telegram-poll + assistant route | responder, assistant | Live |
+| `conversation_digest` | summarizer (live, fires on `summarize_due`) | responder, assistant | Live |
+| `profile` (facts) | extractor (live, ADD/UPDATE/DELETE/NOOP classifier) | responder, assistant via vector search | Live |
+| `content_index` | extractor (summary + entities + embedding per node) | responder, assistant, MCP `search_nodes` | Live |
+| `content_store` | telegram, email, files watcher, web UI, MCP | by-id lookup only | Live for emails, telegram, files, notes, todos, events, secrets |
+
+A seventh capability — **agent delegation** via the `invoke_agent`
+builtin — sits beside memory rather than in it: it lets a responder
+hand a one-shot prompt to a specialised peer (see [architecture.md
+§9b'](./architecture.md#9b-agent-delegation-invoke_agent)).
+
+---
+
+## 0. The flow at a glance
+
+Two diagrams, then the rest of the doc explains the boxes.
+
+### 0.1 The write path — how content becomes memory
+
+When any piece of content arrives (email, voice clip, file edit, web-UI
+note, MCP call from Claude Desktop), it lands as a row in `nodes`. A
+single Postgres trigger fans the rest out asynchronously, so the
+ingester doesn't block on the extractor.
+
+```mermaid
+flowchart TD
+    classDef source fill:#dbeafe,stroke:#3b82f6,color:#0c4a6e
+    classDef store  fill:#fef3c7,stroke:#d97706,color:#78350f
+    classDef agent  fill:#dcfce7,stroke:#16a34a,color:#14532d
+    classDef layer  fill:#ede9fe,stroke:#7c3aed,color:#3b0764
+
+    %% Ingest sources
+    TG["Telegram poll<br/>(telegram-poll worker)"]:::source
+    EM["IMAP sync<br/>(email-sync worker)"]:::source
+    FW["Files watcher<br/>(chokidar on disk)"]:::source
+    WEB["Web UI<br/>(/notes /todos /events<br/>/secrets /files)"]:::source
+    MCP["MCP server<br/>(Claude Desktop tools)"]:::source
+
+    %% Persist
+    N[("nodes row inserted<br/>type ∈ {note,file,email,<br/>task,event,secret,<br/>telegram_message,...}")]:::store
+    TG --> N
+    EM --> N
+    FW --> N
+    WEB --> N
+    MCP --> N
+
+    %% Specialised tables alongside
+    N -.-> TM[("telegram_messages")]:::store
+    N -.-> EROW[("emails + email_attachments")]:::store
+    N -.-> SR[("secrets sealed bytea")]:::store
+
+    %% Trigger
+    N --> TR{{"pg_notify('node_ingested', node_id)<br/>migration 0018, AFTER INSERT"}}
+
+    %% Extractor agent
+    TR --> EX["extractor agent<br/>(apps/agent listens, debounces 2s)"]:::agent
+    EX -- "secret type:<br/>title + description only" --> EX
+    EX --> SUM["LLM call:<br/>summary + facts + entities JSON<br/>(model from agents row)"]:::agent
+    SUM --> EMB["embed summary →<br/>vector(1536)"]:::agent
+
+    %% Layer writes
+    EMB --> CI["nodes.data.summary<br/>nodes.embedding<br/>nodes.data.entities[]"]:::layer
+    EMB --> FACTS["facts table<br/>(per fact: vector-dedup vs top-3,<br/>classifier ADD/UPDATE/DELETE/NOOP)"]:::layer
+    EMB --> ENT["entities + entity_edges<br/>(trigram + vector dedup,<br/>add 'mentioned_in' edge)"]:::layer
+
+    CI -.-> L5["Layer 5: content_index"]:::layer
+    CI -.-> L6["Layer 6: content_store<br/>(nodes is the store too)"]:::layer
+    FACTS -.-> L4["Layer 4: profile"]:::layer
+```
+
+**Key invariants the diagram glosses over:**
+
+- The `secret` type takes a special path. `readNodeBodyRaw` returns
+  *only* title + description + tags — the sealed ciphertext in the
+  `secrets` table is never read by the extractor. See
+  [docs/secrets.md](./secrets.md) for the threat model.
+- The `nodes.embedding` write makes the row findable; clearing it (on
+  any meaningful edit) reschedules it through the same trigger path
+  on next save.
+- Fact classification is itself an LLM call per candidate fact —
+  bounded by `memory_config.extract_cost_cap_micro_usd` so a hostile
+  or malformed document can't burn the budget. Drops are logged
+  per-fact.
+- The trigger fires on commit, not insert — a rolled-back transaction
+  never fires `node_ingested`. This is what makes the dual insert in
+  email-sync (node + emails row in one transaction) safe.
+
+### 0.2 The read path — how a user turn assembles memory
+
+When the user sends a message (Telegram or web `/assistant`), the
+responder agent reads from every memory layer, then runs the tool
+loop. Same code in both surfaces — `@mantle/agent-runtime` is shared.
+
+```mermaid
+flowchart TD
+    classDef user   fill:#fde68a,stroke:#ca8a04,color:#713f12
+    classDef layer  fill:#ede9fe,stroke:#7c3aed,color:#3b0764
+    classDef agent  fill:#dcfce7,stroke:#16a34a,color:#14532d
+    classDef out    fill:#fce7f3,stroke:#db2777,color:#831843
+
+    U["User sends a message<br/>(Telegram / /assistant)"]:::user
+    U --> IN[("telegram_messages or<br/>assistant_messages row<br/>direction: inbound")]
+
+    IN --> RESP["responder agent<br/>(apps/agent or<br/>apps/web/lib/assistant.ts)"]:::agent
+
+    RESP -- "agent.system_prompt<br/>+ persona_notes" --> L1["Layer 1<br/>persona"]:::layer
+    RESP -- "last N rows by sent_at" --> L2["Layer 2<br/>recent_turns"]:::layer
+    RESP -- "top-K digests by embedding sim" --> L3["Layer 3<br/>conversation_digest"]:::layer
+    RESP -- "vector + ltree search on facts" --> L4["Layer 4<br/>profile facts"]:::layer
+    RESP -- "vector + ltree search on nodes" --> L5["Layer 5<br/>content_index"]:::layer
+
+    L1 --> ASSY["buildChatMessages<br/>(@mantle/agent-runtime)"]:::agent
+    L2 --> ASSY
+    L3 --> ASSY
+    L4 --> ASSY
+    L5 --> ASSY
+
+    ASSY -- "system + history + user turn" --> LOOP["runToolLoop<br/>(tool calls, max 6 iters)"]:::agent
+
+    LOOP -- "search_nodes / file_read /<br/>event_create / invoke_agent / ..." --> TOOLS["dispatch via<br/>@mantle/tools"]:::agent
+    TOOLS -- "depth-2 child:<br/>own trace, allowlisted" --> CHILD["another agent's<br/>runToolLoop"]:::agent
+    CHILD --> TOOLS
+    TOOLS --> LOOP
+
+    LOOP --> REPLY["final reply text"]:::out
+
+    REPLY --> OUT[("outbound row in<br/>telegram_messages /<br/>assistant_messages")]
+    OUT -. fires when threshold met .-> SD{{"pg_notify('summarize_due',<br/>chat_id)"}}
+
+    %% Tier 6 fetch when full body needed
+    LOOP -. "file_read / email_get by id" .-> L6["Layer 6<br/>content_store<br/>(nodes + emails + minio)"]:::layer
+    L6 --> LOOP
+```
+
+**The two side processes that don't touch a single user turn:**
+
+- **Summarizer**: when undigested-turn count crosses
+  `memory_config.summarize_threshold` (default 30),
+  `pg_notify('summarize_due', chat_id)` fires. The summarizer agent
+  rolls the oldest N turns into a single `conversation_digest` node
+  and marks them digested. Reduces the recent_turns window cost
+  without losing the content.
+- **Reflector**: every 10 minutes (with exponential backoff on
+  failure, capped at 1h), reads new outbound activity since its last
+  run and decides whether anything notable about the user surfaced —
+  preferences, in-jokes, corrections. Appends to `agent.persona_notes`
+  jsonb (which is read on every turn as Layer 1).
+
+Both are *reactive* agents — they're not invoked by the responder, they
+react to `pg_notify` and `setInterval` independently. The responder
+doesn't know they exist; they don't know the responder exists.
 
 ---
 
@@ -63,6 +216,26 @@ ABOUT YOUR WORLD      profile               (what I know is true)
 ```
 
 This grouping isn't a 7th layer — it's the mental model behind the six.
+
+### Node types currently in use
+
+`content_store` (Layer 6) is a single `nodes` table polymorphic on
+`type`. As of 2026-05 the live writers populate:
+
+| Type | Surface | Specialised table | Extractor body source |
+|---|---|---|---|
+| `note` | `/notes` | — | `data.content` (markdown) |
+| `file` | `/files` | — (bytes on disk under `MANTLE_FILES_ROOT`) | text files inline; `.pdf` via pdf-parse |
+| `task` | `/todos` | — | title + status + priority + due_at + body |
+| `event` | `/events` | — | title + starts_at + ends_at + location + body (IANA tz preserved for reminder display) |
+| `secret` | `/secrets` | `secrets` (sealed bytea) | title + description + tags **only** — sealed payload never reaches the LLM |
+| `email` / `email_thread` | inbox / IMAP sync | `emails` + `email_attachments` | subject + bodyText (head+tail truncation at 24K chars) |
+| `telegram_message` | Telegram | `telegram_messages` | message text |
+| `branch` | folder nodes | — | **never** — `HARD_SKIP_TYPES` |
+
+The enum also declares `sermon`, `contact`, `printer_project` for
+future surfaces; none have writers today and they're hidden from the
+agent-settings chip picker. The Postgres enum holds them inert.
 
 ### Fact subtypes (inside `profile`)
 
@@ -463,11 +636,11 @@ Each agent is one row in `agents`; you configure them at
 | Role | Status | Default model | What it does |
 |---|---|---|---|
 | `responder` | ✓ Live | `anthropic/claude-sonnet-4.6` | The user-facing chat agent (Sarah for Telegram). Reads from every layer, composes replies. Heavy reasoning. |
-| `assistant` | Enum only | `anthropic/claude-sonnet-4.6` | The web-chat counterpart to `responder` once that surface lands. Same memory, different transport. |
+| `assistant` | ✓ Live | `anthropic/claude-sonnet-4.6` | The web-chat counterpart at `/assistant`. Same code path as `responder` via `@mantle/agent-runtime`; same memory, different transport. |
 | `summarizer` | ✓ Live | `anthropic/claude-haiku-4.5` | Produces `conversation_digest` rows. Cheap, runs on a debounced LISTEN. |
-| `extractor` | Enum only — planned | `anthropic/claude-haiku-4.5` | At content ingest: writes per-item summary + entities into `content_index`, extracts facts + runs the ADD/UPDATE/DELETE classifier into `profile`. The Mem0-pattern build. |
-| `reflector` | Planned (likely a future enum value) | `anthropic/claude-haiku-4.5` | Watches conversations for relationship signals ("Jason said 'too verbose' on X") and appends to `persona_notes`. Never overwrites the seed `system_prompt`. |
-| `custom` | ✓ Live | Whatever you pick | Catch-all for anything that doesn't fit. |
+| `extractor` | ✓ Live | `anthropic/claude-haiku-4.5` | At content ingest: writes per-item summary + entities into `content_index`, extracts facts + runs the ADD/UPDATE/DELETE classifier into `profile`. Per-node-type body resolution in `readNodeBodyRaw` (markdown, PDFs via pdf-parse, email subject+body, structured task/event metadata, secret metadata-only). |
+| `reflector` | ✓ Live | `anthropic/claude-haiku-4.5` | Reads new outbound activity every 10 min (exponential backoff to 1h on failure); appends to `persona_notes` when something notable surfaces. Never overwrites the seed `system_prompt`. |
+| `custom` | ✓ Live | Whatever you pick | Catch-all for anything that doesn't fit. Also used as the role for any agent invoked via `invoke_agent` delegation. |
 
 **Why Sonnet for `responder` / `assistant`:** these agents do real
 reasoning across all six memory layers in the same prompt. Cheaping out
@@ -483,6 +656,16 @@ local Qwen) for cost; we default to Haiku for stability + caching.
 wins when two agents share a role — e.g. two `responder` rows enabled
 means the higher-priority one handles Telegram. Drop a row's priority
 to switch. See `architecture.md` §9b for the resolution logic.
+
+**Delegation between agents** is opt-in via the `invoke_agent` builtin
+tool. Each agent's `memory_config.delegate_to: string[]` lists which
+peer slugs it may invoke; empty/missing = no delegation (fail closed).
+The child runs one-shot with its own persona + tools + API key — the
+parent's conversation history is NOT forwarded. Chain depth is capped
+at 2 (parent → child, no grandchildren) and self-invocation is refused
+even when the parent's own slug is in the list. Cost is attributed to
+the child agent's trace independently — `/debug` "spend by agent" stays
+correct. Full design: [architecture.md §9b'](./architecture.md#9b-agent-delegation-invoke_agent).
 
 ### 6.3 The embedding subsystem
 
