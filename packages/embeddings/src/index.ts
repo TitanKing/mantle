@@ -107,10 +107,51 @@ export async function embedMultimodal(
     {
       name: 'embed_batch',
       kind: 'embed',
-      input: { count: inputs.length, model: opts?.model ?? DEFAULT_EMBEDDING_MODEL },
+      // Capturing a preview of what's being embedded turns the
+      // 10-identical-cards problem in the trace graph into a useful
+      // forensic surface — operators can answer "what 3 entities
+      // triggered this embed_batch?" without rerunning. The preview
+      // is truncated to keep step rows small (truncateJson in
+      // @mantle/tracing also caps the field, but doing it here means
+      // the cap respects the inputs' natural boundaries).
+      input: {
+        count: inputs.length,
+        model: opts?.model ?? DEFAULT_EMBEDDING_MODEL,
+        preview: inputs.slice(0, 5).map(previewOfInput),
+        ...(inputs.length > 5 ? { more_count: inputs.length - 5 } : {}),
+      },
     },
     async (handle) => doEmbed(ownerId, inputs, opts, handle),
   );
+}
+
+/** Render an EmbedInput as a short, human-readable string for trace
+ *  step previews. Strings + text parts → first 80 chars; image/audio
+ *  references → a placeholder noting the kind + url stem. Keeps
+ *  embed_batch trace cards distinguishable when you click through
+ *  them in the graph view. */
+function previewOfInput(item: EmbedInput): string {
+  const MAX = 80;
+  if (typeof item === 'string') {
+    return item.length > MAX ? `${item.slice(0, MAX)}…` : item;
+  }
+  if (item.type === 'text') {
+    const t = item.text ?? '';
+    return t.length > MAX ? `${t.slice(0, MAX)}…` : t;
+  }
+  if (item.type === 'image') {
+    const url = (item as { url?: string }).url ?? '';
+    return `<image: ${url.slice(-40)}>`;
+  }
+  if (item.type === 'audio') {
+    const url = (item as { url?: string }).url ?? '';
+    return `<audio: ${url.slice(-40)}>`;
+  }
+  if (item.type === 'file') {
+    const url = (item as { url?: string }).url ?? '';
+    return `<file: ${url.slice(-40)}>`;
+  }
+  return `<${(item as { type?: string }).type ?? 'unknown'}>`;
 }
 
 type EmbedStepHandle = { setMeta(m: Record<string, unknown>): void };

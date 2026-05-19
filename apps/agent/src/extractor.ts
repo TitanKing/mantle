@@ -692,7 +692,22 @@ export async function extractNode(nodeId: string, ownerId: string): Promise<void
       const userPayload = `Title: ${node.title}\nType: ${node.type}\n\nBody:\n${body.slice(0, 8000)}`;
 
       const parsed = await step(
-        { name: 'llm_extract', kind: 'llm_call', input: { model: worker.model } },
+        {
+          name: 'llm_extract',
+          kind: 'llm_call',
+          input: {
+            model: worker.model,
+            // Surface what the LLM actually saw — the title + a
+            // truncated body preview turn the trace into a useful
+            // debug surface for "the extractor read what?" without
+            // having to re-fetch the node.
+            title: node.title,
+            node_type: node.type,
+            body_chars: body.length,
+            body_preview:
+              body.length > 1500 ? `${body.slice(0, 1500)}…` : body,
+          },
+        },
         async (h) => {
           const r = await chatComplete(
             client,
@@ -702,7 +717,26 @@ export async function extractNode(nodeId: string, ownerId: string): Promise<void
             params,
           );
           captureLlmUsage(h, r.raw, worker.model);
-          return parseExtractorOutput(r.content, { nodeId: node.id, model: worker.model });
+          const result = parseExtractorOutput(r.content, { nodeId: node.id, model: worker.model });
+          // Capture what the LLM produced as the step's output so
+          // operators can see the actual JSON it returned, not just
+          // token counts. Cap counts to avoid runaway output rows.
+          h.setOutput({
+            summary:
+              result.summary && result.summary.length > 600
+                ? `${result.summary.slice(0, 600)}…`
+                : result.summary,
+            entity_count: result.entities.length,
+            entities: result.entities.slice(0, 10).map((e) => ({
+              name: e.name.slice(0, 60),
+              kind: e.kind ?? 'unknown',
+            })),
+            fact_count: result.facts.length,
+            facts: result.facts.slice(0, 5).map((f) =>
+              f.content.length > 120 ? `${f.content.slice(0, 120)}…` : f.content,
+            ),
+          });
+          return result;
         },
       );
 
@@ -767,7 +801,21 @@ export async function extractNode(nodeId: string, ownerId: string): Promise<void
         {
           name: 'reconcile_entities',
           kind: 'compute',
-          input: { mentions: uniqueMentions.length },
+          input: {
+            mentions: uniqueMentions.length,
+            // Surface the actual mention names + kinds so the step's
+            // /traces panel tells the whole story — previously the
+            // operator could only see "10 mentions" with no clue
+            // which ones. Truncated for big batches; the rest are
+            // discoverable via the per-mention embed_batch children.
+            preview: uniqueMentions.slice(0, 10).map((m) => ({
+              name: m.name.slice(0, 60),
+              kind: m.kind ?? 'unknown',
+            })),
+            ...(uniqueMentions.length > 10
+              ? { more_count: uniqueMentions.length - 10 }
+              : {}),
+          },
         },
         async (h) => {
           const map = new Map<string, string>();
@@ -832,7 +880,22 @@ export async function extractNode(nodeId: string, ownerId: string): Promise<void
       const costCap = params.extract_cost_cap_micro_usd ?? null;
 
       const tally = await step(
-        { name: 'process_facts', kind: 'compute', input: { candidates: parsed.facts.length, costCapMicroUsd: costCap } },
+        {
+          name: 'process_facts',
+          kind: 'compute',
+          input: {
+            candidates: parsed.facts.length,
+            costCapMicroUsd: costCap,
+            // Preview of the actual fact contents so the trace shows
+            // WHAT was processed. Cap at 5 + an overflow counter to
+            // keep step rows compact.
+            preview: parsed.facts.slice(0, 5).map((f) => ({
+              content: f.content.length > 120 ? `${f.content.slice(0, 120)}…` : f.content,
+              entities: (f.entities ?? []).map((e) => e.name).slice(0, 5),
+            })),
+            ...(parsed.facts.length > 5 ? { more_count: parsed.facts.length - 5 } : {}),
+          },
+        },
         async (h) => {
           const t = { ADD: 0, UPDATE: 0, DELETE: 0, NOOP: 0 };
           let capExceededAt: number | null = null;
