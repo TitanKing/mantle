@@ -28,8 +28,13 @@ import { huggingfaceChatAdapter } from './huggingface-chat';
 import { anthropicChatAdapter } from './anthropic-chat';
 import { googleChatAdapter } from './google-chat';
 import { googleTtsAdapter } from './google-tts';
+import { googleSttAdapter } from './google-stt';
 import { xaiTtsAdapter } from './xai-tts';
+import { xaiSttAdapter } from './xai-stt';
 import { elevenLabsTtsAdapter } from './elevenlabs-tts';
+import { elevenLabsSttAdapter } from './elevenlabs-stt';
+import { deepgramSttAdapter } from './deepgram-stt';
+import { assemblyAiSttAdapter } from './assemblyai-stt';
 
 // Built-in adapters. Order doesn't matter — these are just into a
 // Map keyed by providerId.
@@ -38,6 +43,11 @@ registerTtsAdapter(elevenLabsTtsAdapter);
 registerTtsAdapter(xaiTtsAdapter);
 registerTtsAdapter(googleTtsAdapter);
 registerSttAdapter(openAiSttAdapter);
+registerSttAdapter(xaiSttAdapter);
+registerSttAdapter(elevenLabsSttAdapter);
+registerSttAdapter(deepgramSttAdapter);
+registerSttAdapter(assemblyAiSttAdapter);
+registerSttAdapter(googleSttAdapter);
 registerChatAdapter(xaiChatAdapter);
 registerChatAdapter(huggingfaceChatAdapter);
 registerChatAdapter(anthropicChatAdapter);
@@ -95,6 +105,11 @@ export {
 // (e.g. for testing against a mocked HTTP layer).
 export { openAiTtsAdapter } from './openai-tts';
 export { openAiSttAdapter } from './openai-stt';
+export { xaiSttAdapter } from './xai-stt';
+export { elevenLabsSttAdapter } from './elevenlabs-stt';
+export { deepgramSttAdapter } from './deepgram-stt';
+export { assemblyAiSttAdapter } from './assemblyai-stt';
+export { googleSttAdapter } from './google-stt';
 export { xaiChatAdapter } from './xai-chat';
 export {
   huggingfaceChatAdapter,
@@ -115,6 +130,7 @@ export {
   XAI_TTS_MODEL_ID,
   XAI_TTS_VOICES,
   XAI_AUDIO_TAGS,
+  XAI_STT_MODELS,
   audioTagsForXaiTtsModel,
 } from '../catalogs/xai';
 export {
@@ -132,11 +148,13 @@ export {
   GOOGLE_TTS_MODELS,
   GOOGLE_TTS_VOICES,
   GOOGLE_AUDIO_TAGS,
+  GOOGLE_STT_MODELS,
   audioTagsForGoogleTtsModel,
   type GoogleTtsModelId,
 } from '../catalogs/google';
 export {
   ELEVENLABS_TTS_MODELS,
+  ELEVENLABS_STT_MODELS,
   ELEVENLABS_BASE_URL,
   ELEVENLABS_OUTPUT_FORMATS,
   ELEVENLABS_PREMADE_VOICES,
@@ -144,3 +162,12 @@ export {
   type ElevenLabsTtsModel,
   type ElevenLabsOutputFormat,
 } from '../catalogs/elevenlabs';
+export {
+  DEEPGRAM_BASE_URL,
+  DEEPGRAM_STT_MODELS,
+} from '../catalogs/deepgram';
+export {
+  ASSEMBLYAI_BASE_URL,
+  ASSEMBLYAI_STT_MODELS,
+  ASSEMBLYAI_POLL_TIMEOUT_SECONDS,
+} from '../catalogs/assemblyai';

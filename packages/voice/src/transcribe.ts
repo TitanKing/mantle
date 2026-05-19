@@ -78,6 +78,29 @@ export async function transcribeAudio(
   });
   if (!res.ok) {
     const body = await res.text().catch(() => '');
+    // Known footgun: MediaRecorder-produced WebM has no duration in its
+    // segment header (the browser doesn't know the length until stop()
+    // is called, so the EBML field is left unset). whisper-1 tolerates
+    // this; gpt-4o-transcribe / gpt-4o-mini-transcribe validate the
+    // container more strictly and return a misleading 400 that blames
+    // the file ("Audio file might be corrupted or unsupported"). Same
+    // bytes, stricter parser. Upgrade the message so the next person
+    // debugging this doesn't have to discover it by reading server
+    // logs at 11pm.
+    const looksLikeMediaRecorderQuirk =
+      res.status === 400 &&
+      /corrupted|unsupported/i.test(body) &&
+      /gpt-4o/i.test(model) &&
+      filename === 'audio.webm';
+    if (looksLikeMediaRecorderQuirk) {
+      throw new Error(
+        `${model} rejected the browser recording. This is a known incompatibility — ` +
+          `MediaRecorder writes WebM files with no duration in the container header, and ` +
+          `the gpt-4o transcription models reject those (whisper-1 tolerates them). ` +
+          `Switch this worker's model to whisper-1, or upload an mp3/m4a from disk instead ` +
+          `of recording in-browser.`,
+      );
+    }
     throw new Error(`whisper ${res.status}: ${body.slice(0, 400)}`);
   }
   const parsed = (await res.json()) as {

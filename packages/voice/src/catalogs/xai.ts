@@ -141,3 +141,30 @@ export function audioTagsForXaiTtsModel(modelId: string): readonly AudioTag[] {
   }
   return [];
 }
+
+// ─── xAI STT (Grok transcribe) ───────────────────────────────────────
+//
+// Endpoint: POST {XAI_BASE_URL}/stt
+// Auth:     Authorization: Bearer $XAI_API_KEY
+// Body:     multipart/form-data — `format`=true, `language`=<iso>, `file` LAST.
+// Response: { text }
+//
+// Accepts WAV, MP3, WebM, OGG, M4A, MP4. 500 MB max per file.
+// Docs: https://docs.x.ai/developers/model-capabilities/audio/speech-to-text
+
+import type { SttModelInfo } from '../catalog';
+
+/** xAI publishes a single transcription model today ("grok-stt"
+ *  alias). When variants ship, add entries here — the adapter passes
+ *  the model id through but xAI's STT API doesn't take a `model` field
+ *  in the multipart body. We surface the id for traces only. */
+export const XAI_STT_MODELS: readonly SttModelInfo[] = [
+  {
+    id: 'grok-stt',
+    label: 'grok-stt',
+    description:
+      'xAI Speech-to-Text. Accepts WAV/MP3/WebM/OGG/M4A/MP4 up to 500 MB, returns formatted text.',
+    supportsLanguageHint: true,
+    supportsTimestamps: false,
+  },
+] as const;

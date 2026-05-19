@@ -16,14 +16,19 @@ import { RefreshCw } from 'lucide-react';
 import type { AiWorker, AiWorkerKind } from '@mantle/db';
 import {
   ANTHROPIC_CHAT_MODELS,
+  ASSEMBLYAI_STT_MODELS,
   CAPABILITY_FOR_KIND,
+  DEEPGRAM_STT_MODELS,
+  ELEVENLABS_STT_MODELS,
   GOOGLE_CHAT_MODELS,
+  GOOGLE_STT_MODELS,
   HUGGINGFACE_CHAT_MODELS,
   HUGGINGFACE_ROUTING_POLICIES,
   OPENAI_STT_MODELS,
   OPENAI_TTS_MODELS,
   VOICE_DESCRIPTIONS,
   XAI_CHAT_MODELS,
+  XAI_STT_MODELS,
   audioTagsForElevenLabsModel,
   audioTagsForGoogleTtsModel,
   audioTagsForXaiTtsModel,
@@ -133,17 +138,35 @@ export function WorkerForm({ mode, kind, worker, keys, action }: Props) {
   // depends on which provider+kind we're configuring. Picking the
   // right static fallback per (kind, provider) means the dropdown
   // is never empty in create mode.
-  const initialCatalog = ((): Array<TtsModelInfo | SttModelInfo | ChatModelInfo> => {
-    if (kind === 'tts') return [...OPENAI_TTS_MODELS];
-    if (kind === 'stt') return [...OPENAI_STT_MODELS];
-    if (chatShaped) {
-      if (provider === 'xai') return [...XAI_CHAT_MODELS];
-      if (provider === 'huggingface') return [...HUGGINGFACE_CHAT_MODELS];
-      if (provider === 'anthropic') return [...ANTHROPIC_CHAT_MODELS];
-      if (provider === 'google') return [...GOOGLE_CHAT_MODELS];
+  // Static-catalog fallback per (kind, provider). Used to seed the
+  // dropdown at mount AND whenever the user changes provider before
+  // picking an API key (so the model list stays plausible). Once an
+  // api key is selected we replace this with live discovery.
+  const staticCatalogFor = (
+    forKind: AiWorkerKind,
+    forProvider: string,
+  ): Array<TtsModelInfo | SttModelInfo | ChatModelInfo> => {
+    if (forKind === 'tts') return [...OPENAI_TTS_MODELS];
+    if (forKind === 'stt') {
+      // Each STT provider ships its own model list. Falls back to
+      // OpenAI's list for providers without a wired adapter (Hugging
+      // Face today — model id is free-text on the Hub).
+      if (forProvider === 'xai') return [...XAI_STT_MODELS];
+      if (forProvider === 'elevenlabs') return [...ELEVENLABS_STT_MODELS];
+      if (forProvider === 'deepgram') return [...DEEPGRAM_STT_MODELS];
+      if (forProvider === 'assemblyai') return [...ASSEMBLYAI_STT_MODELS];
+      if (forProvider === 'google') return [...GOOGLE_STT_MODELS];
+      return [...OPENAI_STT_MODELS];
+    }
+    if (forKind === 'reflector' || forKind === 'extractor' || forKind === 'summarizer') {
+      if (forProvider === 'xai') return [...XAI_CHAT_MODELS];
+      if (forProvider === 'huggingface') return [...HUGGINGFACE_CHAT_MODELS];
+      if (forProvider === 'anthropic') return [...ANTHROPIC_CHAT_MODELS];
+      if (forProvider === 'google') return [...GOOGLE_CHAT_MODELS];
     }
     return [];
-  })();
+  };
+  const initialCatalog = staticCatalogFor(kind, provider);
   const [discovery, setDiscovery] = useState<{
     available: Array<TtsModelInfo | SttModelInfo | ChatModelInfo>;
     filtered: boolean;
@@ -201,10 +224,21 @@ export function WorkerForm({ mode, kind, worker, keys, action }: Props) {
   }, []);
 
   // Re-discover when the provider changes — different providers have
-  // different model-listing surfaces, and the catalog the form falls
-  // back to in the meantime is OpenAI-shaped.
+  // different model-listing surfaces. If no api key is selected yet
+  // we still want the dropdown to reflect the new provider, so swap
+  // to that provider's static catalog as a stopgap until the user
+  // picks a key and live discovery runs.
   useEffect(() => {
-    if (apiKeyId) void refreshDiscovery(apiKeyId, provider);
+    if (apiKeyId) {
+      void refreshDiscovery(apiKeyId, provider);
+    } else {
+      setDiscovery({
+        available: staticCatalogFor(kind, provider),
+        filtered: false,
+        error: null,
+        loading: false,
+      });
+    }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [provider]);
 
@@ -220,6 +254,17 @@ export function WorkerForm({ mode, kind, worker, keys, action }: Props) {
             await action(fd);
             if (mode === 'edit') toast.success('Saved');
           } catch (err) {
+            // Next's `redirect()` inside a server action throws a
+            // sentinel error with `digest` starting with 'NEXT_REDIRECT'
+            // — the framework catches it at the boundary and performs
+            // the navigation. If we swallow it here, the redirect never
+            // happens and the user sees a useless "NEXT_REDIRECT" toast.
+            // Re-throw so React/Next can do its thing.
+            // Same goes for 'NEXT_NOT_FOUND'.
+            const digest = (err as { digest?: string } | null)?.digest;
+            if (typeof digest === 'string' && (digest.startsWith('NEXT_REDIRECT') || digest === 'NEXT_NOT_FOUND')) {
+              throw err;
+            }
             const msg = err instanceof Error ? err.message : String(err);
             setError(msg);
             toast.error(msg);

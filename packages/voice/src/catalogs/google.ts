@@ -186,3 +186,52 @@ export const GOOGLE_CHAT_MODELS: readonly ChatModelInfo[] = [
     capabilities: ['vision', 'function_calling'],
   },
 ];
+
+// ─── Gemini as STT ───────────────────────────────────────────────────
+//
+// Unlike OpenAI / xAI / Deepgram / AssemblyAI which all expose a
+// dedicated `/transcriptions` endpoint, Google ships transcription as
+// "ask Gemini to transcribe this audio." The shape is the same
+// generateContent call used for chat — we pass an inline audio part
+// and a system prompt telling the model to output just the transcript.
+//
+// The catalog here only lists models that actually accept audio input.
+// Older 1.5 / pre-multimodal models don't, and the adapter rejects them
+// with a clear error rather than silently dropping the audio.
+
+import type { SttModelInfo } from '../catalog';
+
+/** Models that accept audio parts in generateContent and can return a
+ *  transcript when prompted to. Per Google's docs the multimodal-input
+ *  surface covers the 3.x and 2.5 lines. */
+export const GOOGLE_STT_MODELS: readonly SttModelInfo[] = [
+  {
+    id: 'gemini-2.5-flash',
+    label: 'Gemini 2.5 Flash',
+    description:
+      'Cheapest multimodal model. Recommended default for transcription — Gemini Pro adds little for voice.',
+    supportsLanguageHint: true,
+    supportsTimestamps: false,
+  },
+  {
+    id: 'gemini-2.5-flash-lite',
+    label: 'Gemini 2.5 Flash Lite',
+    description: 'Fastest, lowest-cost option for short clips.',
+    supportsLanguageHint: true,
+    supportsTimestamps: false,
+  },
+  {
+    id: 'gemini-2.5-pro',
+    label: 'Gemini 2.5 Pro',
+    description: 'Higher accuracy on noisy or accented audio. More expensive.',
+    supportsLanguageHint: true,
+    supportsTimestamps: false,
+  },
+  {
+    id: 'gemini-3-flash-preview',
+    label: 'Gemini 3 Flash (preview)',
+    description: 'Latest Flash with stronger multilingual coverage.',
+    supportsLanguageHint: true,
+    supportsTimestamps: false,
+  },
+] as const;

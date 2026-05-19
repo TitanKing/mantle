@@ -159,6 +159,31 @@ export function audioTagsForElevenLabsModel(modelId: string): readonly AudioTag[
   return ELEVENLABS_V3_AUDIO_TAGS;
 }
 
+// ─── ElevenLabs STT (Scribe) ─────────────────────────────────────────
+//
+// Endpoint: POST {ELEVENLABS_BASE_URL}/v1/speech-to-text
+// Auth:     xi-api-key header
+// Body:     multipart/form-data — `model_id` + `file` + optional
+//           `language_code`, `diarize`, `timestamps_granularity`.
+// Response: { text, language_code, language_probability, words?: [...] }
+//
+// Scribe v1 supports 99 languages, returns word-level timing when
+// `timestamps_granularity=word`. Pricing is per-minute; cheaper than
+// OpenAI Whisper for most language tiers.
+
+import type { SttModelInfo } from '../catalog';
+
+export const ELEVENLABS_STT_MODELS: readonly SttModelInfo[] = [
+  {
+    id: 'scribe_v1',
+    label: 'Scribe v1',
+    description:
+      'ElevenLabs Scribe transcription. 99 languages, word-level timestamps, diarization optional.',
+    supportsLanguageHint: true,
+    supportsTimestamps: true,
+  },
+] as const;
+
 /** Output format query-param values. We pick `opus_48000_64` for
  *  Telegram (Telegram-native voice notes are OGG/Opus), but other
  *  surfaces may want different containers. */

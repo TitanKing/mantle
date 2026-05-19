@@ -62,11 +62,23 @@ describe('isProviderWired', () => {
     expect(isProviderWired('openai', 'stt')).toBe(true);
   });
 
-  it('returns false for catalogued-but-unwired providers', () => {
-    // Deepgram is in the catalog but has no STT adapter yet — UI
-    // shows "not yet wired" hint via this check. If/when we wire it,
-    // this assertion breaks loudly and we update it.
-    expect(isProviderWired('deepgram', 'stt')).toBe(false);
+  it('returns true for the wired STT providers', () => {
+    // After the May 2026 STT expansion the catalog and registry both
+    // declare these. If we ever unwire one, this assertion breaks
+    // loudly and we update it (or the underlying bug).
+    expect(isProviderWired('openai', 'stt')).toBe(true);
+    expect(isProviderWired('xai', 'stt')).toBe(true);
+    expect(isProviderWired('elevenlabs', 'stt')).toBe(true);
+    expect(isProviderWired('deepgram', 'stt')).toBe(true);
+    expect(isProviderWired('assemblyai', 'stt')).toBe(true);
+    expect(isProviderWired('google', 'stt')).toBe(true);
+  });
+
+  it('returns false for catalogued-but-unwired (provider, capability) pairs', () => {
+    // Hugging Face declares 'stt' in capabilities but we haven't
+    // shipped a HF STT adapter yet — UI shows the "not yet wired"
+    // hint. If/when we wire it, this assertion breaks loudly.
+    expect(isProviderWired('huggingface', 'stt')).toBe(false);
   });
 
   it('returns false for completely unknown providers', () => {
