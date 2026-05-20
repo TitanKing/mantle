@@ -500,7 +500,7 @@ const file_read: BuiltinToolDef = {
   slug: 'file_read',
   name: 'Read a file',
   description:
-    "Read a file's content by id. For text files (.md / .txt / .json / .yaml) returns the body as a utf-8 string; for binaries returns a short metadata object only (no bytes). Use `node_read` for notes/events/tasks/secrets — those aren't stored in object storage.",
+    "Read a file's content by id. For text files (.md / .txt / .json / .yaml) returns the body as a utf-8 string. For binaries the extractor stores the parsed text (PDF / Word / Excel) as `data.text`, which is returned here — so you can read or quote the document's actual contents, not just its summary. Returns `content: null` only when no text could be extracted (e.g. a scanned image with no OCR). Use `node_read` for notes/events/tasks/secrets.",
   inputSchema: {
     type: 'object',
     properties: { file_id: { type: 'string', format: 'uuid' } },
@@ -512,8 +512,20 @@ const file_read: BuiltinToolDef = {
     const meta = await fileById({ ownerId: ctx.ownerId, fileId });
     if (!meta) return { ok: false, error: 'file not found' };
     if (!meta.isText) {
-      ctx.step?.setOutput({ binary: true });
-      return { ok: true, output: { file: meta, content: null } };
+      // Binary (pdf/docx/xlsx). Bytes aren't useful to the LLM, but the
+      // extractor persists the parsed text as data.text — return that so
+      // the assistant can reproduce the document's content.
+      const [n] = await db
+        .select({ data: nodes.data })
+        .from(nodes)
+        .where(and(eq(nodes.id, meta.id), eq(nodes.ownerId, ctx.ownerId)))
+        .limit(1);
+      const text =
+        n && typeof (n.data as Record<string, unknown>)?.text === 'string'
+          ? ((n.data as Record<string, unknown>).text as string)
+          : null;
+      ctx.step?.setOutput({ binary: true, hasExtractedText: !!text, textChars: text?.length ?? 0 });
+      return { ok: true, output: { file: meta, content: text } };
     }
     const res = await readFileById({ ownerId: ctx.ownerId, fileId });
     if (!res) return { ok: false, error: 'file not found' };

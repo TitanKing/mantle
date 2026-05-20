@@ -79,6 +79,13 @@ const DEFAULT_EXTRACT_TYPES = ['note', 'file', 'email', 'email_thread', 'secret'
  *  cost predictable. A summary is a spine, not a full recap. */
 const BODY_MAX_CHARS = 24_000;
 
+/** Max characters of extracted text we PERSIST as `data.text` for binary
+ *  file nodes (pdf/docx/xlsx) whose body isn't otherwise stored. This is
+ *  the retrievable full document — independent of the prompt truncation
+ *  above. Single-user/family scale, so the cap is generous; it only
+ *  exists to bound a pathologically huge OCR'd file, not real documents. */
+const TEXT_STORE_MAX_CHARS = 1_000_000;
+
 /** Top-K near-neighbours considered when classifying a candidate fact. */
 const CLASSIFIER_NEIGHBOURS = 3;
 
@@ -160,13 +167,12 @@ async function resolveExtractor(ownerId: string): Promise<AiWorker | null> {
   return await getDefaultWorker(ownerId, 'extractor');
 }
 
-/** Read the source body for a node, dispatched on type. Email/file/note/sermon
- *  for now; expand the switch as we wire more types. */
-async function readNodeBody(node: typeof nodes.$inferSelect): Promise<string> {
-  const body = await readNodeBodyRaw(node);
+/** Bound the body the LLM sees. Keeps head + tail so the model gets both
+ *  the lede and the sign-off (which often carries the most action items in
+ *  long emails). The FULL raw text is persisted separately (see
+ *  `data.text` in the index pass) — this truncation is prompt-only. */
+function truncateForPrompt(body: string): string {
   if (body.length <= BODY_MAX_CHARS) return body;
-  // Keep head + tail so the model sees both the lede and the sign-off
-  // (which often carries the most action items in long emails).
   const head = body.slice(0, Math.floor(BODY_MAX_CHARS * 0.7));
   const tail = body.slice(-Math.floor(BODY_MAX_CHARS * 0.25));
   return `${head}\n\n[…truncated ${body.length - BODY_MAX_CHARS} chars…]\n\n${tail}`;
@@ -650,8 +656,10 @@ export async function extractNode(nodeId: string, ownerId: string): Promise<void
     return;
   }
 
-  const body = await readNodeBody(node);
-  if (!body || body.trim().length < 20) {
+  // Read the FULL extracted text once. `body` (truncated) is what the LLM
+  // sees; `rawBody` is what we persist so the document stays retrievable.
+  const rawBody = await readNodeBodyRaw(node);
+  if (!rawBody || rawBody.trim().length < 20) {
     // Not enough content to extract meaningfully.
     await recordSkippedTrace({
       kind: 'extractor_run',
@@ -663,13 +671,24 @@ export async function extractNode(nodeId: string, ownerId: string): Promise<void
         worker_slug: worker.slug,
         node_type: node.type,
         title: node.title,
-        body_chars: body?.length ?? 0,
+        body_chars: rawBody?.length ?? 0,
         threshold_chars: 20,
         hint: 'The extractor wants ≥20 chars of body content. Title-only nodes are skipped.',
       },
     });
     return;
   }
+  const body = truncateForPrompt(rawBody);
+
+  // Persist the full text for binary file nodes (pdf/docx/xlsx) — their
+  // body lives nowhere else (text files cache it in data.content; emails
+  // keep it in the emails table). Without this, only the summary survives
+  // and "write out the full document" is impossible. node_read / file_read
+  // return data.text so the assistant can reproduce the content on demand.
+  const persistedText =
+    node.type === 'file' && !existingData.content
+      ? rawBody.slice(0, TEXT_STORE_MAX_CHARS)
+      : undefined;
 
   const client = new OpenRouter({
     apiKey,
@@ -797,12 +816,17 @@ export async function extractNode(nodeId: string, ownerId: string): Promise<void
                 summary_model: worker.model,
                 summary_at: new Date().toISOString(),
                 entities: uniqueMentions.map((m) => m.name),
+                ...(persistedText ? { text: persistedText } : {}),
               },
               ...(embedding ? { embedding } : {}),
               updatedAt: new Date(),
             })
             .where(eq(nodes.id, node.id));
-          h.setMeta({ summaryLength: summary.length, embedded: !!embedding });
+          h.setMeta({
+            summaryLength: summary.length,
+            embedded: !!embedding,
+            textStored: persistedText?.length ?? 0,
+          });
         },
       );
 
