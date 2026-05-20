@@ -32,6 +32,7 @@ export {
 export {
   ensureFilesRootBranch,
   createFolder,
+  ensureDatedUploadFolder,
   updateFolderDescription,
   deleteFolder,
   listFolders,

@@ -35,7 +35,8 @@ import {
   type PersonaNote,
 } from '@mantle/db';
 import { accountForChat, downloadTelegramFile, sendMessage, sendVoice } from '@mantle/telegram';
-import { buildTimeContextLine, createNote, loadProfilePreferences } from '@mantle/content';
+import { buildTimeContextLine, loadProfilePreferences } from '@mantle/content';
+import { ensureDatedUploadFolder, upsertFile } from '@mantle/files';
 import { getApiKey, getApiKeyById } from '@mantle/api-keys';
 import {
   composeAudioTagInstructions,
@@ -52,9 +53,10 @@ import {
   type TtsParams,
 } from '@mantle/db';
 import { embed } from '@mantle/embeddings';
-import { recordIngest, startTrace, step } from '@mantle/tracing';
+import { maxImageBytesFor, modelSupportsVision, recordIngest, startTrace, step } from '@mantle/tracing';
 import {
   buildChatMessages,
+  buildImageContextText,
   composeSystemPromptWithSkills,
   effectiveToolSlugs,
   invokeAgent,
@@ -65,6 +67,7 @@ import {
   type Digest,
   type FactSnippet,
   type HistoryTurn,
+  type UserImage,
 } from '@mantle/agent-runtime';
 import {
   PERSONA_TOOL_SLUGS,
@@ -353,112 +356,166 @@ async function handleMessage(messageId: string): Promise<void> {
     voiceFileId = voiceAttachment.file_id;
   }
 
-  // Photo branch — when a Telegram message has an image attachment we
-  // route it through the default vision worker, save the extracted
-  // text as a note, and send a short ack back to the user. This is a
-  // SHORT-CIRCUIT: the responder LLM is not invoked. The default
-  // extraction prompt is verbatim transcription (see VisionFields in
-  // the worker form), which is exactly what you want for "photo of
-  // my notes → searchable note." Operators who want a conversational
-  // photo reply can re-route by editing the worker's prompt and
-  // we'll layer that on later.
-  //
-  // text+photo: the caption (`row.text`) becomes the note title and
-  // is appended to the prompt so the LLM has context. We still skip
-  // the responder — the photo's the primary signal here.
+  // Photo branch — save the image to /files, run the vision worker, then
+  // FALL THROUGH to the responder so Saskia can actually answer about it
+  // (parity with the web /assistant). The bytes land as a real file node
+  // (not a note); the vision transcript becomes that node's searchable
+  // data.text; and the responder gets the transcript folded into its turn
+  // (transcript-default) with the node id surfaced so it can re-read the
+  // picture via extract_from_image. The dedicated photo_ingest trace stays
+  // the file's biography entry point; the reply gets its own responder_turn.
   const photoAttachment = (row.attachments ?? []).find(
     (a): a is TelegramAttachment & { file_id: string } =>
       a.kind === 'photo' && typeof a.file_id === 'string',
   );
-  if (photoAttachment) {
-    // Atomic claim — same pattern as the main path so a duplicate
-    // notify can't double-ingest the photo.
-    const claim = await db
+
+  // Nothing actionable: no text, no voice, no photo (sticker/etc.). Mark
+  // processed and bail before any trace/claim overhead.
+  const textIsEmpty = !row.text || !row.text.trim() || row.text === '(voice message)';
+  if (textIsEmpty && !wasVoice && !photoAttachment) {
+    await db
       .update(telegramMessages)
       .set({ processed: true, processedAt: new Date() })
-      .where(and(eq(telegramMessages.id, row.id), eq(telegramMessages.processed, false)))
-      .returning({ id: telegramMessages.id });
-    if (claim.length === 0) return;
+      .where(eq(telegramMessages.id, row.id));
+    return;
+  }
 
-    await startTrace(
+  // Single atomic claim up front — covers text, voice, AND photo paths.
+  // Flip processed=true BEFORE any work; if the row was already claimed (a
+  // prior invocation that crashed mid-reply, or a racing notify in another
+  // process), the UPDATE returns 0 rows and we exit silently. Tradeoff: a
+  // crash between this UPDATE and the Telegram send means the user gets no
+  // reply — but no duplicate either, the friendlier failure on a chat
+  // surface. Hot-reload-driven duplicates were the original symptom. Doing
+  // it here (before the photo download) also stops a duplicate notify from
+  // double-ingesting the photo.
+  const claim = await db
+    .update(telegramMessages)
+    .set({ processed: true, processedAt: new Date() })
+    .where(and(eq(telegramMessages.id, row.id), eq(telegramMessages.processed, false)))
+    .returning({ id: telegramMessages.id });
+  if (claim.length === 0) return;
+
+  // Ingest the photo (if any) into a file node + transcript BEFORE the
+  // responder runs. Its own photo_ingest trace is the file's biography
+  // entry point.
+  let photoContext:
+    | {
+        transcript: string;
+        note: string | null;
+        nodeId: string | null;
+        bytes: Buffer;
+        mimeType: string;
+      }
+    | null = null;
+  if (photoAttachment) {
+    photoContext = await startTrace(
       {
         kind: 'photo_ingest',
         ownerId: USER_ID!,
         subjectId: row.id,
         subjectKind: 'telegram_message',
-        data: {
-          telegramChatId: row.telegramChatId,
-          fileId: photoAttachment.file_id,
-        },
+        data: { telegramChatId: row.telegramChatId, fileId: photoAttachment.file_id },
       },
       async () => {
-        const visionWorker = await getDefaultWorker(USER_ID!, 'vision');
-        if (!visionWorker?.apiKeyId) {
-          const account = await accountForChat(row.telegramChatId);
-          if (account) {
-            await sendMessage(
-              account,
-              row.telegramChatId,
-              "I saw a photo but I don't have a vision worker configured yet. Add one at /settings/ai-workers and set it as the default for 'vision'.",
-              { replyTo: row.telegramMessageId ?? undefined },
-            );
-          }
-          return;
+        const account = await accountForChat(row.telegramChatId);
+        if (!account) {
+          console.error('[agent] no telegram account for photo download', row.telegramChatId);
+          return null;
         }
-        const adapter = getVisionAdapter(visionWorker.provider);
-        if (!adapter) {
-          const account = await accountForChat(row.telegramChatId);
-          if (account) {
-            await sendMessage(
-              account,
-              row.telegramChatId,
-              `Vision provider '${visionWorker.provider}' isn't wired yet. Switch the default vision worker to openai / anthropic / google / xai.`,
-              { replyTo: row.telegramMessageId ?? undefined },
-            );
-          }
-          return;
-        }
-        const apiKey = await getApiKeyById(visionWorker.apiKeyId);
-        if (!apiKey) {
-          console.error(
-            `[agent] vision worker '${visionWorker.slug}' api_key_id ${visionWorker.apiKeyId} not found.`,
-          );
-          return;
-        }
-
-        // Download the photo. Telegram's "best" size is what sync.ts
-        // already picked (last entry in the photo array) so we don't
-        // need to do thumbnail/scale logic here.
+        // Download the photo. Telegram's "best" size is what sync.ts already
+        // picked (last entry in the photo array) so no scaling logic here.
         const downloaded = await step(
-          {
-            name: 'download_photo',
-            kind: 'compute',
-            input: { fileId: photoAttachment.file_id },
-          },
+          { name: 'download_photo', kind: 'compute', input: { fileId: photoAttachment.file_id } },
           async (h) => {
-            const account = await accountForChat(row.telegramChatId);
-            if (!account) throw new Error('no telegram account for photo download');
             const file = await downloadTelegramFile(account, photoAttachment.file_id);
             h.setMeta({ bytes: file.bytes.length, mime: file.mimeType });
             return file;
           },
         );
 
-        // Vision extraction. The worker's params carry the per-image
-        // prompt; we fall back to a verbatim default if it's blank.
-        // text+photo case: append the caption so the model knows
-        // what the user said about the image.
+        const caption = row.text && row.text !== '(photo)' ? row.text.trim() : '';
+
+        // Save the bytes as a real file node first — even if vision fails we
+        // want the picture persisted + searchable in /files.
+        let nodeId: string | null = null;
+        try {
+          const parentPath = await ensureDatedUploadFolder({
+            ownerId: USER_ID!,
+            topSlug: 'telegram-uploads',
+            topDescription: 'Photos sent to Saskia on Telegram. Auto-created.',
+          });
+          const ext =
+            (downloaded.mimeType.split('/')[1] || 'jpg').replace(/[^a-z0-9]/gi, '') || 'jpg';
+          const safeBase =
+            (caption || 'photo')
+              .toLowerCase()
+              .replace(/[^\w-]+/g, '-')
+              .slice(0, 60)
+              .replace(/^-+|-+$/g, '') || 'photo';
+          const filename = `${Date.now()}-${safeBase}.${ext}`;
+          const saved = await step({ name: 'persist_file', kind: 'db_write' }, async (h) => {
+            const file = await upsertFile({
+              ownerId: USER_ID!,
+              parentPath,
+              filename,
+              bytes: downloaded.bytes,
+              overwrite: false,
+            });
+            h.setMeta({ nodeId: file.id, filename, bytes: file.sizeBytes });
+            return file;
+          });
+          nodeId = saved.id;
+          void recordIngest({
+            source: 'telegram_photo',
+            ownerId: USER_ID!,
+            nodeId: saved.id,
+            summary: `Image received via Telegram: ${filename}`,
+            payload: {
+              chatId: row.telegramChatId,
+              telegramMessageId: row.telegramMessageId,
+              filename,
+              mimeType: downloaded.mimeType,
+              sizeBytes: saved.sizeBytes,
+            },
+          });
+        } catch (err) {
+          console.error(
+            '[agent] telegram photo save failed:',
+            err instanceof Error ? err.message : err,
+          );
+        }
+
+        // Vision (transcript-default). If no worker / unwired / no key, skip
+        // with a note — the responder can still inline the bytes when its
+        // model is vision-capable (mirrors web).
+        const visionWorker = await getDefaultWorker(USER_ID!, 'vision');
+        const adapter = visionWorker?.apiKeyId ? getVisionAdapter(visionWorker.provider) : null;
+        const skip = (note: string) => ({
+          transcript: '',
+          note,
+          nodeId,
+          bytes: downloaded.bytes,
+          mimeType: downloaded.mimeType,
+        });
+        if (!visionWorker?.apiKeyId) return skip('No default vision worker configured.');
+        if (!adapter) return skip(`Vision provider '${visionWorker.provider}' isn't wired.`);
+        const apiKey = await getApiKeyById(visionWorker.apiKeyId);
+        if (!apiKey)
+          return skip(`Vision worker '${visionWorker.slug}' api_key could not be decrypted.`);
+
         const visionParams = (visionWorker.params ?? {}) as {
           extraction_prompt?: string;
           max_tokens?: number;
         };
-        const basePrompt =
+        const ocrPrompt =
           visionParams.extraction_prompt?.trim() ||
           "Describe what's in this image in one or two sentences — the main subject, objects, logos, people, or scene. Then, if the image contains any text, transcribe it verbatim below the description (preserve line breaks; mark anything unclear as [unclear]). If there's no text, the description alone is enough. Output plain text only.";
-        const caption = row.text && row.text !== '(photo)' ? row.text.trim() : '';
+        // Question-aware (same switch as web): a caption that asks something
+        // gets answered; a bare photo gets OCR/description.
         const prompt = caption
-          ? `${basePrompt}\n\nUser's caption: ${caption}`
-          : basePrompt;
+          ? `The user sent this image and said: "${caption}"\n\nAnswer directly and specifically, grounded only in what's actually visible in the image — don't invent details you can't see. Then add one short line describing the image overall, so this also serves as a useful record of the photo.`
+          : ocrPrompt;
 
         const extracted = await step(
           {
@@ -489,111 +546,49 @@ async function handleMessage(messageId: string): Promise<void> {
             });
             return result;
           },
-        );
+        ).catch((err) => {
+          console.error(
+            '[agent] telegram vision extract failed:',
+            err instanceof Error ? err.message : err,
+          );
+          return null;
+        });
         void bumpAiWorkerUsage(visionWorker.id);
 
-        // If the extraction returned nothing useful, don't create an
-        // empty note — just tell the user. This usually means the
-        // model refused (e.g. NSFW guard) or the image was blank.
-        if (!extracted.text || extracted.text.length === 0) {
-          const account = await accountForChat(row.telegramChatId);
-          if (account) {
-            await sendMessage(
-              account,
-              row.telegramChatId,
-              "Got the photo, but I couldn't extract any text from it. (Worker: " +
-                visionWorker.slug +
-                '.)',
-              { replyTo: row.telegramMessageId ?? undefined },
+        const transcript = extracted?.text?.trim() ? extracted.text : '';
+        // Persist the transcript as the file node's searchable text + re-fire
+        // node_ingested so the extractor summarises/embeds it (same as web).
+        if (nodeId && transcript) {
+          try {
+            await db
+              .update(nodes)
+              .set({
+                data: sql`${nodes.data} || jsonb_build_object('text', ${transcript}::text, 'vision_model', ${visionWorker.model}::text)`,
+                updatedAt: new Date(),
+              })
+              .where(and(eq(nodes.id, nodeId), eq(nodes.ownerId, USER_ID!)));
+            await db.execute(sql`SELECT pg_notify('node_ingested', ${nodeId}::text)`);
+          } catch (err) {
+            console.error(
+              '[agent] persist telegram vision text failed:',
+              err instanceof Error ? err.message : err,
             );
           }
-          return;
         }
 
-        // Persist as a note. Title: caption if present, else a short
-        // stem of the extracted text. The extractor + embedder
-        // pipelines already watch for new nodes and will run over
-        // this row asynchronously — that's the "embed" half of
-        // "extract and embed" the user asked for.
-        const title =
-          caption.length > 0
-            ? caption.slice(0, 120)
-            : extracted.text.slice(0, 80).split(/\n/)[0]?.trim() || 'Photo notes';
-        const note = await step(
-          { name: 'persist_note', kind: 'db_write' },
-          async (h) => {
-            const created = await createNote(USER_ID!, {
-              title,
-              content: extracted.text,
-              tags: ['telegram', 'photo', 'vision'],
-            });
-            h.setMeta({ noteId: created.id, title });
-            return created;
-          },
-        );
-        // Emit a content_ingest trace tied to the NEW NOTE id (the
-        // surrounding photo_ingest trace is tied to the telegram
-        // message). The note-biography view filters by subject_id;
-        // this is what makes the photo-derived note discoverable as
-        // "came in via Telegram photo at HH:MM" without parsing
-        // the photo_ingest trace data jsonb.
-        void recordIngest({
-          source: 'telegram_photo',
-          ownerId: USER_ID!,
-          nodeId: note.id,
-          summary: `Note created from Telegram photo: ${title}`,
-          payload: {
-            chatId: row.telegramChatId,
-            telegramMessageId: row.telegramMessageId,
-            visionAdapter: adapter.adapterName,
-            visionModel: extracted.model,
-            extractedChars: extracted.text.length,
-          },
-          snippet: extracted.text,
-        });
-
-        // Acknowledge to the user so they know the ingest worked.
-        // Keep it short — they don't need the full transcript echoed
-        // back; that's what /files/notes is for. Show the title and
-        // a length hint so they can verify the right thing got saved.
-        const account = await accountForChat(row.telegramChatId);
-        if (account) {
-          const ack =
-            `Saved your photo as a note: "${title}" ` +
-            `(${extracted.text.length} chars extracted via ${adapter.adapterName}).`;
-          await sendMessage(account, row.telegramChatId, ack, {
-            replyTo: row.telegramMessageId ?? undefined,
-          });
-        }
+        return {
+          transcript,
+          note: transcript ? null : 'Vision worker returned no text.',
+          nodeId,
+          bytes: downloaded.bytes,
+          mimeType: downloaded.mimeType,
+        };
       },
     );
-    return;
+    // No usable bytes (download impossible — e.g. no account). Nothing to
+    // reply through; the row is already claimed so we don't retry.
+    if (!photoContext) return;
   }
-
-  // If there's no useful text AND no voice → sticker/etc., nothing
-  // to reply to. Skip the trace overhead, mark processed, done.
-  const textIsEmpty = !row.text || !row.text.trim() || row.text === '(voice message)';
-  if (textIsEmpty && !wasVoice) {
-    await db
-      .update(telegramMessages)
-      .set({ processed: true, processedAt: new Date() })
-      .where(eq(telegramMessages.id, row.id));
-    return;
-  }
-
-  // Atomic claim. Flip processed=true BEFORE doing any work; if the row was
-  // already claimed (by a prior invocation that crashed mid-reply, or by a
-  // racing notify in another process), the UPDATE returns 0 rows and we
-  // exit silently. Tradeoff: a crash between this UPDATE and the actual
-  // Telegram send means the user gets no reply — but they don't get a
-  // duplicate either, which is the more user-friendly failure mode on a
-  // chat surface. Hot-reload-driven duplicates were the original symptom.
-  const claim = await db
-    .update(telegramMessages)
-    .set({ processed: true, processedAt: new Date() })
-    .where(and(eq(telegramMessages.id, row.id), eq(telegramMessages.processed, false)))
-    .returning({ id: telegramMessages.id });
-  if (claim.length === 0) return;
 
   // Resolve the responder + key BEFORE opening a trace. Failure modes here
   // (no agent, no key) don't generate traces — there's nothing useful to
@@ -640,6 +635,7 @@ async function handleMessage(messageId: string): Promise<void> {
           telegramChatId: row.telegramChatId,
           model: agent.model,
           wasVoice,
+          wasPhoto: !!photoContext,
         },
       },
       async () => {
@@ -871,6 +867,35 @@ async function handleMessage(messageId: string): Promise<void> {
         const effectiveSystemPrompt =
           promptWithSkills + openHeartbeatBlock + audioTagInstructions;
 
+        // Photo → responder input (transcript-default, mirroring web).
+        // Prefer the vision transcript folded into the text; only inline the
+        // raw pixels when there's NO transcript and the model can see images
+        // within its size limit. The node id is surfaced either way so Saskia
+        // can re-read the picture via extract_from_image on a follow-up.
+        let responderUserText = row.text;
+        let userImage: UserImage | undefined;
+        if (photoContext) {
+          const baseText =
+            row.text && row.text !== '(photo)'
+              ? row.text.trim()
+              : "Here's an image — tell me what you see.";
+          const hasTranscript = photoContext.transcript.trim().length > 0;
+          const withinLimit = photoContext.bytes.length <= maxImageBytesFor(agent.model);
+          if (!hasTranscript && modelSupportsVision(agent.model) && withinLimit) {
+            userImage = {
+              base64: photoContext.bytes.toString('base64'),
+              mimeType: photoContext.mimeType,
+            };
+            responderUserText = baseText;
+          } else {
+            responderUserText = buildImageContextText(baseText, {
+              transcript: photoContext.transcript,
+              note: photoContext.note,
+              nodeId: photoContext.nodeId,
+            });
+          }
+        }
+
         const messages = await step(
           { name: 'build_messages', kind: 'compute' },
           async (h) => {
@@ -882,11 +907,13 @@ async function handleMessage(messageId: string): Promise<void> {
               digests,
               contentHits,
               history,
-              newUserText: row.text,
+              newUserText: responderUserText,
+              userImage,
             });
             h.setMeta({
               blockCount: m.length,
               skillCount: attachedSkills.length,
+              hasImage: !!userImage,
             });
             return m;
           },

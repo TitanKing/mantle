@@ -1,5 +1,6 @@
 export {
   buildChatMessages,
+  buildImageContextText,
   type HistoryTurn,
   type Digest,
   type FactSnippet,

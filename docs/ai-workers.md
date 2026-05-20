@@ -315,21 +315,23 @@ conversation:
 
 ```
 1. Telegram message arrives with attachment kind='photo'
-2. handleMessage detects the photo, opens a photo_ingest trace
-3. Resolve default vision worker via getDefaultWorker(ownerId, 'vision')
-4. downloadTelegramFile → bytes
-5. adapter.extract(bytes, {apiKey, mimeType, prompt, model, maxTokens})
-6. createNote(ownerId, {title, content: extracted_text, tags: ['telegram','photo','vision']})
-7. recordIngest({source: 'telegram_photo', nodeId: note.id, ...}) — picked up
-   by the biography page
-8. Send Telegram ack: "Saved your photo as a note: '<title>' (X chars
-   extracted via <adapter>)."
+2. handleMessage claims the row, opens a photo_ingest trace
+3. downloadTelegramFile → bytes
+4. Save bytes as a file node under /files/telegram-uploads/<yyyy-mm-dd>/
+   (upsertFile) + recordIngest({source: 'telegram_photo', nodeId: file.id})
+5. Resolve default vision worker; adapter.extract(bytes, {...}) → transcript
+6. Persist transcript to the file node's data.text + pg_notify('node_ingested')
+   so the extractor summarises/embeds it
+7. FALL THROUGH to the responder (separate responder_turn trace): the
+   transcript is folded into the turn (transcript-default) with the file
+   node id surfaced; if there's no transcript and the model is vision-capable
+   within its size limit, the raw bytes are inlined instead
+8. Saskia replies conversationally (text or voice)
 ```
 
-This is a SHORT-CIRCUIT — the responder LLM is NOT invoked. Photos
-become searchable notes; conversational photo replies are a separate
-follow-up if needed (operator can re-route by editing the worker's
-prompt).
+This is **full parity** with the web /assistant — the responder LLM runs,
+so Saskia answers "what is this?" about a photo. The picture persists as a
+real file node (searchable), not a note.
 
 ### Web /assistant path
 
@@ -337,18 +339,27 @@ prompt).
 1. POST /api/assistant/turn (multipart, text + image)
 2. Save image to /files/assistant-uploads/<yyyy-mm-dd>/
 3. recordIngest({source: 'assistant_upload', nodeId: file.id, ...})
-4. Run default vision worker over the image bytes
-5. Compose the LLM-visible message:
-   `${user_text}\n\n[Attached image — vision worker transcript:]\n${extracted_text}`
-6. runToolLoop with the augmented prompt — Saskia sees what was in the photo
+4. Run default vision worker over the image bytes (question-aware)
+5. Compose the LLM-visible message (transcript-default, via the shared
+   buildImageContextText helper):
+   `${user_text}\n\n[Attached image (saved as file node <id> — call
+    extract_from_image with that node_id to look closer). Vision analysis:]
+    \n${extracted_text}`
+6. runToolLoop with the augmented prompt — Saskia answers from the transcript
+   and can re-read the picture on demand via extract_from_image
 7. Return reply + inbound artifact (so the user's bubble renders the image)
 ```
 
-The user's bubble shows the original image; Saskia sees the
-vision-extracted transcript appended to the typed text. Vision worker
-failures fall back to a `[Image attached but couldn't be read:
-<reason>]` marker so the LLM at least sees the user TRIED to share
-something.
+The user's bubble shows the original image; Saskia sees the vision
+transcript (with the file node id) folded into the text. **Transcript-
+default:** the raw pixels are inlined only when there's no usable
+transcript (worker failed/unconfigured) AND the model is vision-capable
+AND the image is within the provider's per-image limit
+(`maxImageBytesFor`) — guarding against Bedrock's opaque "Could not
+process image" on oversized photos. On any responder error with an image
+attached, the turn retries once text-only (transcript-grounded), so a
+turn never hard-fails on a picture. Vision worker failures fall back to a
+`[Image attached … couldn't be read: <reason>]` marker.
 
 ---
 

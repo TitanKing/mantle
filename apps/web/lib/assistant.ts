@@ -39,6 +39,7 @@ import { getApiKeyById } from '@mantle/api-keys';
 import { embed } from '@mantle/embeddings';
 import {
   buildChatMessages,
+  buildImageContextText,
   composeSystemPromptWithSkills,
   effectiveToolSlugs,
   invokeAgent,
@@ -249,11 +250,15 @@ export async function runAssistantTurn(
     displayText?: string;
     /** Raw image bytes to show a vision-capable responder directly. */
     image?: UserImage;
-    /** Fallback transcript (from the vision worker) injected as text when
-     *  the responder's model can't accept images. */
+    /** Transcript from the vision worker. Preferred over the raw image:
+     *  cheap, cacheable, and the worker already answered the user's
+     *  question at ingest. Injected as text. */
     imageTranscript?: string;
     /** Note injected when the image couldn't be read at all. */
     imageNote?: string;
+    /** File node id of the saved image, surfaced in the injected text so
+     *  the model can re-read it via extract_from_image on a follow-up. */
+    imageNodeId?: string;
   },
 ): Promise<AssistantTurnResult> {
   const trimmed = text.trim();
@@ -337,32 +342,40 @@ export async function runAssistantTurn(
   // (not auto-injected here). Add them at /settings/agents on the
   // agent that should respond to heartbeat-asked questions.
 
-  // Image routing. Show the raw picture to a vision-capable responder only
-  // when it's within that provider's per-image size limit; otherwise fall
-  // back to the vision-worker transcript as text. Anthropic via OpenRouter
-  // (Bedrock) rejects oversized images with an opaque "Could not process
-  // image" the SDK masks as a validation error — guarding up front turns a
-  // hard 500 into a graceful, transcript-grounded answer.
+  // Image routing — transcript-default. The vision worker already described
+  // (and, when the user asked a question, answered) the image at ingest, so
+  // prefer its cheap, cacheable transcript as text. Only show the responder
+  // the raw pixels when there's NO usable transcript (worker failed or
+  // unconfigured) — and only if the model is vision-capable and the file is
+  // within that provider's per-image limit. (Anthropic via OpenRouter →
+  // Bedrock rejects oversized images with an opaque "Could not process
+  // image" the SDK masks as a validation error; the size guard avoids it.)
+  // Either way the node id is surfaced in the text so Saskia can pull the
+  // picture back for a closer look via extract_from_image(node_id).
+  const hasTranscript = !!options?.imageTranscript?.trim();
   const imageBytes = options?.image ? base64Bytes(options.image.base64) : 0;
   const withinImageLimit = imageBytes > 0 && imageBytes <= maxImageBytesFor(agent.model);
   const canSeeImage =
-    !!options?.image && modelSupportsVision(agent.model) && withinImageLimit;
-  if (options?.image && modelSupportsVision(agent.model) && !withinImageLimit) {
+    !!options?.image &&
+    !hasTranscript &&
+    modelSupportsVision(agent.model) &&
+    withinImageLimit;
+  if (options?.image && !hasTranscript && modelSupportsVision(agent.model) && !withinImageLimit) {
     console.warn(
-      `[assistant] image ${imageBytes}B exceeds ${agent.model} limit ` +
-        `(${maxImageBytesFor(agent.model)}B) — using vision-worker transcript instead`,
+      `[assistant] no transcript and image ${imageBytes}B exceeds ${agent.model} limit ` +
+        `(${maxImageBytesFor(agent.model)}B) — answering from the saved file node only`,
     );
   }
   const userImage = canSeeImage ? options!.image : undefined;
 
-  // The user's text with the vision transcript / note folded in. Used when
-  // we're NOT showing the raw image, and as the retry fallback below if the
-  // responder chokes on the picture.
-  const textWithTranscript = options?.imageTranscript?.trim()
-    ? `${trimmed}\n\n[Attached image — vision analysis:]\n${options.imageTranscript.trim()}`
-    : options?.imageNote?.trim()
-      ? `${trimmed}\n\n[Image attached but couldn't be read: ${options.imageNote.trim()}]`
-      : trimmed;
+  // The user's text with the vision transcript / note + node-id folded in.
+  // Used whenever we're NOT showing the raw image, and as the retry fallback
+  // below if the responder chokes on the picture.
+  const textWithTranscript = buildImageContextText(trimmed, {
+    transcript: options?.imageTranscript,
+    note: options?.imageNote,
+    nodeId: options?.imageNodeId,
+  });
 
   const buildMessages = (image: UserImage | undefined, userText: string) =>
     buildChatMessages({

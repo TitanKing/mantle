@@ -103,13 +103,16 @@ folder path) are already live.
 
 ## Other open threads (from this session)
 
-1. **Telegram photo path still short-circuits the responder.** A captioned
-   photo on Telegram (`handleMessage` photo branch in `apps/agent/src/main.ts`)
-   creates a *note* and sends a canned "saved as a note" — it never runs the
-   responder, so Saskia can't *answer* "what is this?". Fix = mirror web
-   Option B: for a captioned photo, save the image as a real **file** (not a
-   note), then run the responder with the image. Currently it only persists
-   a note with the vision description; the photo bytes aren't saved.
+1. ✅ **FIXED — Telegram photo path now answers.** A photo on Telegram
+   (`handleMessage` photo branch in `apps/agent/src/main.ts`) is saved as a
+   real **file** node under `/files/telegram-uploads/<date>/`, transcribed by
+   the vision worker (transcript persisted to the node's `data.text`), then
+   the responder runs (no more short-circuit) so Saskia answers "what is
+   this?". Transcript-default with the file node id surfaced for
+   `extract_from_image`, mirroring the web /assistant. Shares the folder
+   helper (`ensureDatedUploadFolder` in `@mantle/files`) and the text builder
+   (`buildImageContextText` in `@mantle/agent-runtime`) with web.
+   **Needs the agent restarted to go live.**
 2. **Could not retrieve a real failing image** to test the size hypothesis:
    Telegram photos become notes (no bytes); the web upload of the car photo
    wasn't persisted before the files-root fix; the one 4.6 MB image in the DB

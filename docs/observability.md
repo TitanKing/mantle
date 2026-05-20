@@ -55,8 +55,8 @@ A trace is one of seven kinds (the `trace_kind` enum):
 | `extractor_run` | New `nodes` row of an extractable type — **runs even on early-return paths** (marked `skipped`) | `node` id |
 | `summarizer_run` | Chat crosses the undigested-turn threshold | `chat` id |
 | `reflector_run` | 10-minute timer fires — **runs even when no new activity** (marked `skipped`) | `agent_tick` (subject_id null) |
-| `content_ingest` | Every data entry moment — file upload, note create, image upload via /assistant, Telegram photo → note, agent-tool file write | the resulting `node` id |
-| `photo_ingest` | Telegram photo message → vision worker → note pipeline | `telegram_message` id |
+| `content_ingest` | Every data entry moment — file upload, note create, image upload via /assistant, Telegram photo → file, agent-tool file write | the resulting `node` id |
+| `photo_ingest` | Telegram photo message → save file + vision-transcribe pipeline (the responder reply is a separate `responder_turn`) | `telegram_message` id |
 | `manual` | Reserved for scripts + the `invoke_agent` builtin's child agent runs | (whatever) |
 
 Each trace rolls up totals from its steps:
@@ -188,7 +188,7 @@ roll-up at each level.
 | Extractor skip | (same) | `extractor_run` (status `skipped`) | (none — disposition + details in `data`) |
 | Summarizer run | `apps/agent/src/summarizer.ts summarizeChat` | `summarizer_run` | load_batch · load_chat_account · llm_summarize · insert_digest_node · mark_turns_digested |
 | Reflector run | `apps/agent/src/reflector.ts reflect` | `reflector_run` | load_recent_turns · llm_reflect · append_notes |
-| Telegram photo ingest | `apps/agent/src/main.ts (photo branch)` | `photo_ingest` | download_photo · extract_vision · persist_note |
+| Telegram photo ingest | `apps/agent/src/main.ts (photo branch)` | `photo_ingest` | download_photo · persist_file · extract_vision |
 | Content ingest | various entry points | `content_ingest` | `received` step with content snippet |
 | Embedder | `packages/embeddings/src/index.ts embedBatch` | (sub-step) | `embed_batch` step appears under whatever parent called it |
 

@@ -683,9 +683,13 @@ Failure modes degrade gracefully:
 The agent + assistant both speak the multimedia adapter surface for
 images:
 
-- **Vision in (Telegram photo):** photo attachment → default vision
-  worker → note with extracted text → biography page picks it up. See
-  `photo_ingest` trace kind. Short-circuit: responder LLM doesn't run.
+- **Vision in (Telegram photo):** photo attachment → saved as a `file`
+  node under `/files/telegram-uploads/<date>/` → default vision worker
+  transcribes it into the node's `data.text` (`photo_ingest` trace) →
+  the responder then answers about it (`responder_turn` trace),
+  transcript-default with the file node id surfaced so Saskia can
+  re-read via `extract_from_image`. Full parity with the /assistant
+  upload path; no longer a short-circuit.
 - **Vision in (/assistant image upload):** image attached to a web
   turn → save under `/files/assistant-uploads/<date>/` → vision worker
   runs synchronously → LLM-visible message gets the transcript

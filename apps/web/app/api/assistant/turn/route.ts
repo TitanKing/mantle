@@ -25,7 +25,7 @@ import { runAssistantTurn } from '@/lib/assistant';
 import { getDefaultWorker } from '@mantle/db';
 import { getApiKeyById } from '@mantle/api-keys';
 import { getVisionAdapter } from '@mantle/voice';
-import { createFolder, dashToLtree, upsertFile } from '@mantle/files';
+import { ensureDatedUploadFolder, upsertFile } from '@mantle/files';
 import { and, eq, sql } from 'drizzle-orm';
 import { db, nodes } from '@mantle/db';
 import type { ToolArtifact } from '@mantle/tools';
@@ -34,52 +34,8 @@ import { recordIngest } from '@mantle/tracing';
 const Body = z.object({ text: z.string().min(1).max(20_000) });
 
 const ASSISTANT_UPLOADS_SLUG = 'assistant-uploads';
-// ltree labels use underscores; createFolder stores the dash slug as
-// `assistant_uploads`, so the path constant must use the same form or the
-// per-day subfolder's parent lookup fails ("parent folder not found").
-const ASSISTANT_UPLOADS_LTREE = `files.${dashToLtree(ASSISTANT_UPLOADS_SLUG)}`;
 const IMAGE_MIME_PREFIX = 'image/';
 const MAX_UPLOAD_BYTES = 15 * 1024 * 1024; // 15 MB — generous; Anthropic vision caps at 5 MB
-
-async function ensureUploadFolder(ownerId: string): Promise<string> {
-  // Top-level folder, then per-day subfolder. Slugs stay dash-cased (the
-  // disk dir name); the ltree path uses dashToLtree so DB lookups match
-  // what createFolder stores.
-  const dateSlug = new Date().toISOString().slice(0, 10); // 'YYYY-MM-DD'
-  for (const [parent, slug] of [
-    ['files', ASSISTANT_UPLOADS_SLUG],
-    [ASSISTANT_UPLOADS_LTREE, dateSlug],
-  ] as const) {
-    const childPath = `${parent}.${dashToLtree(slug)}`;
-    const [exists] = await db
-      .select({ id: nodes.id })
-      .from(nodes)
-      .where(
-        and(
-          eq(nodes.ownerId, ownerId),
-          eq(nodes.type, 'branch'),
-          sql`${nodes.path}::text = ${childPath}`,
-        ),
-      )
-      .limit(1);
-    if (!exists) {
-      try {
-        await createFolder({
-          ownerId,
-          parentPath: parent,
-          slug,
-          description:
-            parent === 'files'
-              ? 'Files uploaded through the /assistant chat. Auto-created.'
-              : `Uploads from ${slug}.`,
-        });
-      } catch (err) {
-        if (!(err instanceof Error) || !/duplicate|unique/i.test(err.message)) throw err;
-      }
-    }
-  }
-  return `${ASSISTANT_UPLOADS_LTREE}.${dashToLtree(dateSlug)}`;
-}
 
 /** Save the uploaded image to /files/assistant-uploads/<date>/ and
  *  run the default vision worker over it. Returns the extracted text
@@ -104,7 +60,11 @@ async function processUploadedImage(
   let nodeId: string | null = null;
   let storagePath: string | null = null;
   try {
-    const parentPath = await ensureUploadFolder(ownerId);
+    const parentPath = await ensureDatedUploadFolder({
+      ownerId,
+      topSlug: ASSISTANT_UPLOADS_SLUG,
+      topDescription: 'Files uploaded through the /assistant chat. Auto-created.',
+    });
     const ext = mimeType.split('/')[1] ?? 'png';
     const safeBase = originalName
       .toLowerCase()
@@ -334,6 +294,7 @@ export async function POST(req: Request) {
               : undefined,
             imageTranscript: imageContext.extractedText || undefined,
             imageNote: imageContext.note || undefined,
+            imageNodeId: imageContext.nodeId || undefined,
           }
         : undefined,
     );

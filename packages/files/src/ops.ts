@@ -169,6 +169,50 @@ export async function createFolder(args: {
   return folderRowFromNode(row, 0, 0);
 }
 
+/**
+ * Ensure `files.<topSlug>.<YYYY-MM-DD>` exists (both levels) and return the
+ * per-day folder's ltree path. The upload surfaces (web /assistant, Telegram)
+ * use this to file an incoming image under a dated folder before persisting
+ * the bytes. Idempotent — tolerates the unique-index race when two uploads
+ * land in the same second. Note ltree labels use underscores, so the stored
+ * path uses `dashToLtree(slug)` while `createFolder` keeps the dash slug as
+ * the disk dir name (mirrors the original per-surface helpers).
+ */
+export async function ensureDatedUploadFolder(args: {
+  ownerId: string;
+  topSlug: string;
+  topDescription?: string;
+}): Promise<string> {
+  const { ownerId, topSlug } = args;
+  const topLtree = `files.${dashToLtree(topSlug)}`;
+  const dateSlug = new Date().toISOString().slice(0, 10); // 'YYYY-MM-DD'
+  for (const [parent, slug, description] of [
+    ['files', topSlug, args.topDescription ?? ''],
+    [topLtree, dateSlug, `Uploads from ${dateSlug}.`],
+  ] as const) {
+    const childPath = `${parent}.${dashToLtree(slug)}`;
+    const [exists] = await db
+      .select({ id: nodes.id })
+      .from(nodes)
+      .where(
+        and(
+          eq(nodes.ownerId, ownerId),
+          eq(nodes.type, 'branch'),
+          sql`${nodes.path}::text = ${childPath}`,
+        ),
+      )
+      .limit(1);
+    if (!exists) {
+      try {
+        await createFolder({ ownerId, parentPath: parent, slug, description });
+      } catch (err) {
+        if (!(err instanceof Error) || !/duplicate|unique/i.test(err.message)) throw err;
+      }
+    }
+  }
+  return `${topLtree}.${dashToLtree(dateSlug)}`;
+}
+
 export async function updateFolderDescription(args: {
   ownerId: string;
   folderId: string;

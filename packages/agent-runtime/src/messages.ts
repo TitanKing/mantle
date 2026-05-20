@@ -80,6 +80,34 @@ export type ChatMessage =
 /** An image to attach to the new user turn (vision-capable models only). */
 export type UserImage = { base64: string; mimeType: string };
 
+/**
+ * Fold a vision-worker transcript (or a failure note) into the user's text
+ * for a responder turn, and surface the saved file node id so the model can
+ * call `extract_from_image(node_id)` for a closer look on a follow-up turn —
+ * the picture itself isn't kept in conversation history.
+ *
+ * Shared by the web /assistant and the Telegram responder so the injected
+ * marker stays byte-identical across surfaces (no drift, stable for caching).
+ */
+export function buildImageContextText(
+  userText: string,
+  opts: { transcript?: string | null; note?: string | null; nodeId?: string | null },
+): string {
+  const base = userText.trim();
+  const ref = opts.nodeId
+    ? ` (saved as file node ${opts.nodeId} — call extract_from_image with that node_id to look closer)`
+    : '';
+  const transcript = opts.transcript?.trim();
+  if (transcript) {
+    return `${base}\n\n[Attached image${ref}. Vision analysis:]\n${transcript}`;
+  }
+  const note = opts.note?.trim();
+  if (note) {
+    return `${base}\n\n[Image attached${ref} but couldn't be read: ${note}]`;
+  }
+  return ref ? `${base}\n\n[Attached image${ref}.]` : base;
+}
+
 export function buildChatMessages(args: {
   model: string;
   systemPrompt: string;
