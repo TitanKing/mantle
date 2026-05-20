@@ -66,7 +66,7 @@ export async function setSenderStatus(formData: FormData) {
 
   if (next === 'approved') await enqueueBackfill(user.id, address);
   revalidatePath('/settings/senders');
-  revalidatePath('/');
+  revalidatePath('/inbox');
 }
 
 export async function setDomainStatus(formData: FormData) {
@@ -80,7 +80,7 @@ export async function setDomainStatus(formData: FormData) {
       .delete(emailSenderDomains)
       .where(and(eq(emailSenderDomains.userId, user.id), eq(emailSenderDomains.domain, domain)));
     revalidatePath('/settings/senders');
-    revalidatePath('/');
+    revalidatePath('/inbox');
     return;
   }
 
@@ -123,7 +123,7 @@ export async function setDomainStatus(formData: FormData) {
   }
 
   revalidatePath('/settings/senders');
-  revalidatePath('/');
+  revalidatePath('/inbox');
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -192,7 +192,7 @@ export async function addManualDecision(
     if (status === 'approved') await enqueueBackfill(user.id, cleaned);
 
     revalidatePath('/settings/senders');
-    revalidatePath('/');
+    revalidatePath('/inbox');
     return { ok: true, kind: 'address', target: cleaned, status };
   }
 
@@ -226,7 +226,7 @@ export async function addManualDecision(
   }
 
   revalidatePath('/settings/senders');
-  revalidatePath('/');
+  revalidatePath('/inbox');
   return { ok: true, kind: 'domain', target: cleaned, status, cascadedCount: cascaded.length };
 }
 
@@ -328,6 +328,6 @@ export async function bulkSetSenderStatus(formData: FormData) {
     if (next === 'approved') await enqueueBackfill(user.id, address);
   }
   revalidatePath('/settings/senders');
-  revalidatePath('/');
+  revalidatePath('/inbox');
 }
 

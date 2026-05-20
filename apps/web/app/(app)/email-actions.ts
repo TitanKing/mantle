@@ -8,8 +8,8 @@ import { requireOwner } from '@/lib/auth';
 /**
  * Flip the read state on one email. The WHERE clause is owner-scoped via
  * an account-id subquery so a stolen email UUID can't change another
- * user's mail. `revalidatePath('/')` makes the inbox list re-render with
- * the new bold/unbold weight.
+ * user's mail. `revalidatePath('/inbox')` makes the inbox list re-render
+ * with the new bold/unbold weight.
  */
 export async function setEmailReadStatus(formData: FormData) {
   const user = await requireOwner();
@@ -27,5 +27,5 @@ export async function setEmailReadStatus(formData: FormData) {
     .set({ isRead: next })
     .where(and(eq(emails.id, emailId), inArray(emails.accountId, ownedAccounts)));
 
-  revalidatePath('/');
+  revalidatePath('/inbox');
 }

@@ -14,6 +14,7 @@ import {
   Hammer,
   HeartPulse,
   Inbox,
+  LayoutDashboard,
   KeyRound,
   Key,
   Lock,
@@ -55,7 +56,8 @@ export function SidebarNav({
     {
       label: 'Workspace',
       items: [
-        { name: 'Inbox', href: '/', icon: Inbox, exact: true },
+        { name: 'Dashboard', href: '/', icon: LayoutDashboard, exact: true },
+        { name: 'Inbox', href: '/inbox', icon: Inbox },
         { name: 'Assistant', href: '/assistant', icon: MessageCircle },
         { name: 'Files', href: '/files', icon: FolderTree },
         { name: 'Notes', href: '/notes', icon: FileText },
