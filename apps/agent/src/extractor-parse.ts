@@ -54,6 +54,43 @@ export function isValidEntity(e: unknown): e is { name: string; kind: string } {
 }
 
 /**
+ * Extract the first balanced top-level JSON object from a string,
+ * ignoring braces inside string literals. Returns the `{…}` substring
+ * or null if no complete object is found.
+ *
+ * Why: smaller models (Haiku on a long document) often emit a valid
+ * object then append explanatory prose, a second fenced block, or a
+ * stray closing ``` — which makes a whole-string JSON.parse throw
+ * "Unexpected non-whitespace character after JSON". Scanning to the
+ * matching brace recovers the object the model actually produced. A
+ * genuinely truncated response (unbalanced) still returns null and
+ * falls through to the empty result.
+ */
+export function extractFirstJsonObject(text: string): string | null {
+  const start = text.indexOf('{');
+  if (start === -1) return null;
+  let depth = 0;
+  let inString = false;
+  let escaped = false;
+  for (let i = start; i < text.length; i++) {
+    const ch = text[i];
+    if (inString) {
+      if (escaped) escaped = false;
+      else if (ch === '\\') escaped = true;
+      else if (ch === '"') inString = false;
+      continue;
+    }
+    if (ch === '"') inString = true;
+    else if (ch === '{') depth++;
+    else if (ch === '}') {
+      depth--;
+      if (depth === 0) return text.slice(start, i + 1);
+    }
+  }
+  return null; // unbalanced — truncated mid-object
+}
+
+/**
  * Parse the extractor LLM response with sanity defaults. Distinct log
  * lines for "the model returned bad JSON" vs "the model returned valid
  * JSON but no facts" — used to look identical, which made silent
@@ -75,14 +112,25 @@ export function parseExtractorOutput(
   let parsed: unknown;
   try {
     parsed = JSON.parse(cleaned);
-  } catch (err) {
-    console.error('[extractor] LLM returned non-JSON; producing empty result', {
-      nodeId: context?.nodeId,
-      model: context?.model,
-      message: (err as Error).message,
-      preview: cleaned.slice(0, 200),
-    });
-    return { summary: '', facts: [], entities: [] };
+  } catch {
+    // Fast path failed — most often the model appended prose or a stray
+    // fence after a complete object. Recover the first balanced {…}.
+    const candidate = extractFirstJsonObject(cleaned);
+    if (candidate) {
+      try {
+        parsed = JSON.parse(candidate);
+      } catch {
+        /* fall through to the empty-result log below */
+      }
+    }
+    if (parsed === undefined) {
+      console.error('[extractor] LLM returned non-JSON; producing empty result', {
+        nodeId: context?.nodeId,
+        model: context?.model,
+        preview: cleaned.slice(0, 200),
+      });
+      return { summary: '', facts: [], entities: [] };
+    }
   }
   const obj = parsed as Partial<ExtractorOutput>;
   return {

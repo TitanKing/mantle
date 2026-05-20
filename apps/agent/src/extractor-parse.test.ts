@@ -15,6 +15,7 @@
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
+  extractFirstJsonObject,
   isValidEntity,
   isValidFact,
   parseExtractorOutput,
@@ -76,9 +77,65 @@ describe('parseExtractorOutput — happy path', () => {
   });
 });
 
+describe('parseExtractorOutput — trailing-content recovery', () => {
+  const obj = {
+    summary: 'A car sale contract.',
+    facts: [{ content: 'The user has a vehicle purchase contract.', kind: 'factual', confidence: 0.9 }],
+    entities: [],
+  };
+
+  it('recovers a valid object followed by explanatory prose', () => {
+    const raw = JSON.stringify(obj) + '\n\nThese facts capture the key terms of the contract.';
+    const out = parseExtractorOutput(raw);
+    expect(out.summary).toBe('A car sale contract.');
+    expect(out.facts).toHaveLength(1);
+    expect(errorSpy).not.toHaveBeenCalled();
+  });
+
+  it('recovers when the model appends a second fenced block / stray fence', () => {
+    const raw = JSON.stringify(obj) + '\n```';
+    expect(parseExtractorOutput(raw).facts).toHaveLength(1);
+  });
+
+  it('does not get fooled by braces inside string values', () => {
+    const tricky = {
+      summary: 'Contains { and } and "quotes" in the text.',
+      facts: [],
+      entities: [],
+    };
+    const raw = JSON.stringify(tricky) + ' trailing junk';
+    expect(parseExtractorOutput(raw).summary).toBe('Contains { and } and "quotes" in the text.');
+  });
+
+  it('still returns empty + logs on a genuinely truncated object', () => {
+    // No closing brace — unbalanced, unrecoverable.
+    const out = parseExtractorOutput('{"summary": "half a tho');
+    expect(out).toEqual({ summary: '', facts: [], entities: [] });
+    expect(errorSpy).toHaveBeenCalled();
+  });
+});
+
+describe('extractFirstJsonObject', () => {
+  it('returns the balanced object ignoring trailing text', () => {
+    expect(extractFirstJsonObject('{"a":1} and more')).toBe('{"a":1}');
+  });
+  it('handles nested objects', () => {
+    expect(extractFirstJsonObject('prefix {"a":{"b":2}} suffix')).toBe('{"a":{"b":2}}');
+  });
+  it('ignores braces inside strings', () => {
+    expect(extractFirstJsonObject('{"s":"a}b{c"} x')).toBe('{"s":"a}b{c"}');
+  });
+  it('returns null when no object is present', () => {
+    expect(extractFirstJsonObject('no braces here')).toBeNull();
+  });
+  it('returns null on an unbalanced (truncated) object', () => {
+    expect(extractFirstJsonObject('{"a":1')).toBeNull();
+  });
+});
+
 describe('parseExtractorOutput — error path', () => {
   it('returns an empty result on malformed JSON', () => {
-    const out = parseExtractorOutput('not json {');
+    const out = parseExtractorOutput('not json [[[');
     expect(out).toEqual({ summary: '', facts: [], entities: [] });
   });
 
