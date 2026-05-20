@@ -48,6 +48,7 @@ import {
   type ContentHit,
   type FactSnippet,
   type HistoryTurn,
+  type UserImage,
 } from '@mantle/agent-runtime';
 import { registerAgentInvoker, type ToolArtifact } from '@mantle/tools';
 import { stripAudioTags } from '@mantle/voice';
@@ -58,7 +59,7 @@ import {
   hasActiveHeartbeatsOnSurface,
   openHeartbeatsForSurface,
 } from '@mantle/heartbeats';
-import { startTrace } from '@mantle/tracing';
+import { startTrace, modelSupportsVision } from '@mantle/tracing';
 
 // Register the cross-package bridge for the `invoke_agent` builtin.
 // First module load (the first /assistant request after boot) wires
@@ -233,7 +234,16 @@ async function loadContext(
 export async function runAssistantTurn(
   ownerId: string,
   text: string,
-  options?: { displayText?: string },
+  options?: {
+    displayText?: string;
+    /** Raw image bytes to show a vision-capable responder directly. */
+    image?: UserImage;
+    /** Fallback transcript (from the vision worker) injected as text when
+     *  the responder's model can't accept images. */
+    imageTranscript?: string;
+    /** Note injected when the image couldn't be read at all. */
+    imageNote?: string;
+  },
 ): Promise<AssistantTurnResult> {
   const trimmed = text.trim();
   if (!trimmed) throw new Error('runAssistantTurn: empty text');
@@ -316,6 +326,20 @@ export async function runAssistantTurn(
   // (not auto-injected here). Add them at /settings/agents on the
   // agent that should respond to heartbeat-asked questions.
 
+  // Image routing: if an image was attached and this agent's model can
+  // see images, show it the raw picture (Saskia identifies it herself).
+  // Otherwise fall back to the vision-worker transcript / note as text.
+  const canSeeImage = !!options?.image && modelSupportsVision(agent.model);
+  const userImage = canSeeImage ? options!.image : undefined;
+  let llmUserText = trimmed;
+  if (!canSeeImage) {
+    if (options?.imageTranscript?.trim()) {
+      llmUserText = `${trimmed}\n\n[Attached image — vision analysis:]\n${options.imageTranscript.trim()}`;
+    } else if (options?.imageNote?.trim()) {
+      llmUserText = `${trimmed}\n\n[Image attached but couldn't be read: ${options.imageNote.trim()}]`;
+    }
+  }
+
   const messages = buildChatMessages({
     model: agent.model,
     systemPrompt: effectiveSystemPrompt,
@@ -324,7 +348,8 @@ export async function runAssistantTurn(
     digests: [],
     contentHits: ctx.contentHits,
     history: filteredHistory,
-    newUserText: trimmed,
+    newUserText: llmUserText,
+    userImage,
   });
 
   const client = new OpenRouter({

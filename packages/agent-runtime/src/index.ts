@@ -6,6 +6,7 @@ export {
   type ContentHit,
   type ChatMessage,
   type ToolCallRequest,
+  type UserImage,
 } from './messages';
 
 export { captureLlmUsage } from './llm-usage';

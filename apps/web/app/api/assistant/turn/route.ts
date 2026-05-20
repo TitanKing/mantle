@@ -309,26 +309,29 @@ export async function POST(req: Request) {
     userText = parsed.data.text;
   }
 
-  // Compose the message the LLM actually sees. With an image attached
-  // we sandwich the transcript between markers so the model knows
-  // these are vision-extracted lines (not the user's own typed text).
-  const messageForLlm =
-    imageContext && imageContext.extractedText
-      ? `${userText}\n\n[Attached image — vision analysis:]\n${imageContext.extractedText}`
-      : imageContext && imageContext.note
-      ? `${userText}\n\n[Image attached but couldn't be read: ${imageContext.note}]`
-      : userText;
-
   try {
+    // Hand the turn the raw image + the vision-worker transcript. The
+    // runtime decides per model: a vision-capable responder (Saskia on
+    // Sonnet) sees the picture directly and identifies it herself; a
+    // non-vision model falls back to the transcript text. Either way the
+    // mini worker already filed the photo's metadata (data.text) above,
+    // and the persisted inbound row shows the user's own typed text.
     const { inbound, outbound, reply, artifacts } = await runAssistantTurn(
       user.id,
-      messageForLlm,
-      // Keep the persisted inbound row + the chat bubble showing the
-      // user's actual typed text, not the LLM-augmented version that
-      // includes the vision transcript. The user sees what they typed;
-      // the LLM sees the transcript appended; the image lives in
-      // /files for later retrieval.
-      imageContext ? { displayText: userText } : undefined,
+      userText,
+      imageContext
+        ? {
+            displayText: userText,
+            image: imageContext.imageArtifact
+              ? {
+                  base64: imageContext.imageArtifact.base64,
+                  mimeType: imageContext.imageArtifact.mimeType,
+                }
+              : undefined,
+            imageTranscript: imageContext.extractedText || undefined,
+            imageNote: imageContext.note || undefined,
+          }
+        : undefined,
     );
     // Forward the inbound image as an inbound-side artifact so the
     // user's bubble shows the picture they sent (alongside their

@@ -39,3 +39,25 @@ export function contextLimitFor(modelSlug: string | null | undefined): number | 
   if (!modelSlug) return null;
   return CONTEXT_LIMITS[modelSlug.toLowerCase()] ?? null;
 }
+
+/**
+ * Whether a model can accept image input directly (multimodal). Used to
+ * decide if the responder can be shown a raw image vs. needing a vision
+ * worker to transcribe it first. Pattern-based rather than an exact list
+ * so new versions of known multimodal families keep working.
+ */
+export function modelSupportsVision(modelSlug: string | null | undefined): boolean {
+  if (!modelSlug) return false;
+  const s = modelSlug.toLowerCase();
+  // Anthropic Claude 3+ — all current Claude chat models are multimodal.
+  if (s.startsWith('anthropic/claude-')) return true;
+  // OpenAI 4o / 4.1 / 5 / reasoning families (mini variants included).
+  if (/^openai\/(gpt-4o|gpt-4\.1|gpt-5|chatgpt-4o|o1|o3|o4)/.test(s)) return true;
+  // Google Gemini — all current models are multimodal.
+  if (s.startsWith('google/gemini')) return true;
+  // xAI Grok vision-capable lines.
+  if (s.startsWith('x-ai/grok-4') || s.includes('grok-2-vision')) return true;
+  // Open vision-language variants (Qwen-VL, Llama vision, Pixtral, …).
+  if (s.includes('-vl') || s.includes('vision') || s.includes('pixtral')) return true;
+  return false;
+}

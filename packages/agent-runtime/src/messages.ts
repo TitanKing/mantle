@@ -63,9 +63,22 @@ export type ChatMessage =
         | string
         | Array<{ type: 'text'; text: string; cacheControl?: { type: 'ephemeral' } }>;
     }
-  | { role: 'user'; content: string }
+  | {
+      role: 'user';
+      content:
+        | string
+        // Multimodal: text + image part(s) for vision-capable models.
+        // imageUrl is the SDK's camelCase shape (→ image_url on the wire).
+        | Array<
+            | { type: 'text'; text: string }
+            | { type: 'image_url'; imageUrl: { url: string; detail?: 'auto' | 'low' | 'high' } }
+          >;
+    }
   | { role: 'assistant'; content: string | null; toolCalls?: ToolCallRequest[] }
   | { role: 'tool'; toolCallId: string; content: string };
+
+/** An image to attach to the new user turn (vision-capable models only). */
+export type UserImage = { base64: string; mimeType: string };
 
 export function buildChatMessages(args: {
   model: string;
@@ -76,6 +89,9 @@ export function buildChatMessages(args: {
   contentHits: ContentHit[];
   history: HistoryTurn[];
   newUserText: string;
+  /** When set + the model is vision-capable, the new user turn becomes a
+   *  multimodal message (text + image) so the model sees the picture. */
+  userImage?: UserImage;
 }): ChatMessage[] {
   const {
     model,
@@ -86,6 +102,7 @@ export function buildChatMessages(args: {
     contentHits,
     history,
     newUserText,
+    userImage,
   } = args;
 
   const supportsExplicitCache = model.startsWith('anthropic/');
@@ -143,8 +160,28 @@ export function buildChatMessages(args: {
         ? { role: 'user', content: t.text }
         : { role: 'assistant', content: t.text },
     ),
-    { role: 'user', content: newUserText },
   );
+
+  // The new user turn: multimodal (text + image) when an image is attached
+  // and the caller passed it (caller is responsible for the vision-capable
+  // check); plain text otherwise.
+  if (userImage) {
+    messages.push({
+      role: 'user',
+      content: [
+        { type: 'text', text: newUserText },
+        {
+          type: 'image_url',
+          imageUrl: {
+            url: `data:${userImage.mimeType};base64,${userImage.base64}`,
+            detail: 'auto',
+          },
+        },
+      ],
+    });
+  } else {
+    messages.push({ role: 'user', content: newUserText });
+  }
 
   return messages;
 }
