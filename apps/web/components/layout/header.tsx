@@ -3,7 +3,7 @@
 import Link from 'next/link';
 import { useState } from 'react';
 import { usePathname, useRouter } from 'next/navigation';
-import { LogOut, Menu, TreePine, User as UserIcon } from 'lucide-react';
+import { LogOut, Menu, User as UserIcon } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import {
   DropdownMenu,
@@ -80,9 +80,8 @@ export function Header({
         <Menu className="size-5" />
       </Button>
 
-      <Link href="/" className="flex items-center gap-2">
-        <TreePine className="size-5 text-primary" aria-hidden />
-        <span className="text-sm font-semibold">Mantle</span>
+      <Link href="/" className="flex items-center" aria-label="Mantle home">
+        <span className="font-logo text-3xl leading-none text-primary">Mantle</span>
       </Link>
 
       <div className="ml-2 hidden h-5 w-px bg-border md:block" />

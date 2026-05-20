@@ -1,6 +1,6 @@
 import type { Metadata } from 'next';
 import './globals.css';
-import { fontSans } from '@/lib/fonts';
+import { fontSans, fontLogo } from '@/lib/fonts';
 import { ThemeProvider } from '@/components/theme-provider';
 import { ColorThemeProvider } from '@/components/color-theme-provider';
 import { COLOR_THEME_STORAGE_KEY, DEFAULT_COLOR_THEME } from '@/lib/themes';
@@ -19,7 +19,7 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
       <head>
         <script dangerouslySetInnerHTML={{ __html: colorThemeScript }} />
       </head>
-      <body className={`${fontSans.variable} h-full font-sans antialiased`}>
+      <body className={`${fontSans.variable} ${fontLogo.variable} h-full font-sans antialiased`}>
         <ThemeProvider
           attribute="class"
           defaultTheme="system"

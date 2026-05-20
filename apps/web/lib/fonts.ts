@@ -36,3 +36,20 @@ export const fontSans = localFont({
     },
   ],
 });
+
+/**
+ * Display/logo font — used only for the "Mantle" wordmark. Self-hosted
+ * Bukhari Script. Exposed as `--font-logo` (mapped to the `font-logo`
+ * utility in globals.css @theme inline).
+ */
+export const fontLogo = localFont({
+  variable: '--font-logo',
+  display: 'swap',
+  src: [
+    {
+      path: '../public/fonts/BukhariScript-Regular.ttf',
+      style: 'normal',
+      weight: '400',
+    },
+  ],
+});
