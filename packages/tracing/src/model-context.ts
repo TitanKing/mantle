@@ -61,3 +61,24 @@ export function modelSupportsVision(modelSlug: string | null | undefined): boole
   if (s.includes('-vl') || s.includes('vision') || s.includes('pixtral')) return true;
   return false;
 }
+
+/**
+ * Maximum decoded image size (bytes) a model's provider will accept for a
+ * single inline image. Used by the vision routing to decide whether to send
+ * the raw picture to a vision-capable responder, or fall back to a text
+ * transcript when it's too big.
+ *
+ * Anthropic — including `anthropic/*` routed through OpenRouter to Amazon
+ * Bedrock — rejects images over ~5 MB with an opaque `400 "Could not process
+ * image"`, which `@openrouter/sdk` then masks as a `ResponseValidationError`.
+ * We keep a safety margin under that. OpenAI accepts up to 20 MB. Anything
+ * uncatalogued gets the conservative Anthropic limit: a too-low guard merely
+ * degrades to the transcript fallback, whereas a too-high one is a hard 500.
+ */
+export function maxImageBytesFor(modelSlug: string | null | undefined): number {
+  const ANTHROPIC_LIMIT = 4_500_000; // ~4.5 MB — under Bedrock's ~5 MB cap
+  const OPENAI_LIMIT = 18_000_000; // ~18 MB — under OpenAI's 20 MB cap
+  if (!modelSlug) return ANTHROPIC_LIMIT;
+  if (modelSlug.toLowerCase().startsWith('openai/')) return OPENAI_LIMIT;
+  return ANTHROPIC_LIMIT;
+}

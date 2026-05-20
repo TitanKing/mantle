@@ -59,7 +59,18 @@ import {
   hasActiveHeartbeatsOnSurface,
   openHeartbeatsForSurface,
 } from '@mantle/heartbeats';
-import { startTrace, modelSupportsVision } from '@mantle/tracing';
+import { startTrace, modelSupportsVision, maxImageBytesFor } from '@mantle/tracing';
+
+/** Decoded byte size of a base64 string (tolerates a leading data-URL
+ *  prefix). Used to size-check an inline image before sending it to a
+ *  vision responder, without allocating a Buffer. */
+function base64Bytes(b64: string): number {
+  const clean = b64.includes(',') ? b64.slice(b64.indexOf(',') + 1) : b64;
+  const len = clean.length;
+  if (len === 0) return 0;
+  const padding = clean.endsWith('==') ? 2 : clean.endsWith('=') ? 1 : 0;
+  return Math.floor((len * 3) / 4) - padding;
+}
 
 // Register the cross-package bridge for the `invoke_agent` builtin.
 // First module load (the first /assistant request after boot) wires
@@ -326,31 +337,45 @@ export async function runAssistantTurn(
   // (not auto-injected here). Add them at /settings/agents on the
   // agent that should respond to heartbeat-asked questions.
 
-  // Image routing: if an image was attached and this agent's model can
-  // see images, show it the raw picture (Saskia identifies it herself).
-  // Otherwise fall back to the vision-worker transcript / note as text.
-  const canSeeImage = !!options?.image && modelSupportsVision(agent.model);
-  const userImage = canSeeImage ? options!.image : undefined;
-  let llmUserText = trimmed;
-  if (!canSeeImage) {
-    if (options?.imageTranscript?.trim()) {
-      llmUserText = `${trimmed}\n\n[Attached image — vision analysis:]\n${options.imageTranscript.trim()}`;
-    } else if (options?.imageNote?.trim()) {
-      llmUserText = `${trimmed}\n\n[Image attached but couldn't be read: ${options.imageNote.trim()}]`;
-    }
+  // Image routing. Show the raw picture to a vision-capable responder only
+  // when it's within that provider's per-image size limit; otherwise fall
+  // back to the vision-worker transcript as text. Anthropic via OpenRouter
+  // (Bedrock) rejects oversized images with an opaque "Could not process
+  // image" the SDK masks as a validation error — guarding up front turns a
+  // hard 500 into a graceful, transcript-grounded answer.
+  const imageBytes = options?.image ? base64Bytes(options.image.base64) : 0;
+  const withinImageLimit = imageBytes > 0 && imageBytes <= maxImageBytesFor(agent.model);
+  const canSeeImage =
+    !!options?.image && modelSupportsVision(agent.model) && withinImageLimit;
+  if (options?.image && modelSupportsVision(agent.model) && !withinImageLimit) {
+    console.warn(
+      `[assistant] image ${imageBytes}B exceeds ${agent.model} limit ` +
+        `(${maxImageBytesFor(agent.model)}B) — using vision-worker transcript instead`,
+    );
   }
+  const userImage = canSeeImage ? options!.image : undefined;
 
-  const messages = buildChatMessages({
-    model: agent.model,
-    systemPrompt: effectiveSystemPrompt,
-    personaNotes: ctx.personaNotes,
-    facts: ctx.facts,
-    digests: [],
-    contentHits: ctx.contentHits,
-    history: filteredHistory,
-    newUserText: llmUserText,
-    userImage,
-  });
+  // The user's text with the vision transcript / note folded in. Used when
+  // we're NOT showing the raw image, and as the retry fallback below if the
+  // responder chokes on the picture.
+  const textWithTranscript = options?.imageTranscript?.trim()
+    ? `${trimmed}\n\n[Attached image — vision analysis:]\n${options.imageTranscript.trim()}`
+    : options?.imageNote?.trim()
+      ? `${trimmed}\n\n[Image attached but couldn't be read: ${options.imageNote.trim()}]`
+      : trimmed;
+
+  const buildMessages = (image: UserImage | undefined, userText: string) =>
+    buildChatMessages({
+      model: agent.model,
+      systemPrompt: effectiveSystemPrompt,
+      personaNotes: ctx.personaNotes,
+      facts: ctx.facts,
+      digests: [],
+      contentHits: ctx.contentHits,
+      history: filteredHistory,
+      newUserText: userText,
+      userImage: image,
+    });
 
   const client = new OpenRouter({
     apiKey,
@@ -384,42 +409,73 @@ export async function runAssistantTurn(
   // shows. The node-biography page at /nodes/<id>/history works for
   // any subject_id — operators can use it on assistant_messages too,
   // though those rows don't show in /files (different table).
-  const loopOutcome = await startTrace(
-    {
-      kind: 'responder_turn',
-      ownerId,
-      subjectId: inbound.id,
-      subjectKind: 'assistant_message',
-      agentId: agent.id,
-      data: {
-        surface: 'web',
-        model: agent.model,
-        agent_slug: agent.slug,
-        tool_count: allowedTools.length,
-        // Empty array when no heartbeats were open. Stored either
-        // way so a query for "traces influenced by heartbeats"
-        // works against the same shape on every row.
-        related_heartbeat_slugs: relatedHeartbeatSlugs,
-      },
-    },
-    async () =>
-      runToolLoop({
-        client,
-        model: agent.model,
-        params,
+  const runLoop = (
+    messages: ReturnType<typeof buildMessages>,
+    dataExtra: Record<string, unknown> = {},
+  ) =>
+    startTrace(
+      {
+        kind: 'responder_turn',
         ownerId,
+        subjectId: inbound.id,
+        subjectKind: 'assistant_message',
         agentId: agent.id,
-        agentSlug: agent.slug,
-        agentDepth: 1,
-        delegateTo: (agent.memoryConfig as { delegate_to?: string[] } | null)?.delegate_to ?? [],
-        initialMessages: messages,
-        tools: allowedTools,
-        // /assistant has no outbound channel beyond the reply stream
-        // itself — tools that want to "send a voice note" or similar
-        // refuse here with a clean error so the LLM falls back to text.
-        surface: { kind: 'web' },
-      }),
-  );
+        data: {
+          surface: 'web',
+          model: agent.model,
+          agent_slug: agent.slug,
+          tool_count: allowedTools.length,
+          // Empty array when no heartbeats were open. Stored either
+          // way so a query for "traces influenced by heartbeats"
+          // works against the same shape on every row.
+          related_heartbeat_slugs: relatedHeartbeatSlugs,
+          ...dataExtra,
+        },
+      },
+      async () =>
+        runToolLoop({
+          client,
+          model: agent.model,
+          params,
+          ownerId,
+          agentId: agent.id,
+          agentSlug: agent.slug,
+          agentDepth: 1,
+          delegateTo: (agent.memoryConfig as { delegate_to?: string[] } | null)?.delegate_to ?? [],
+          initialMessages: messages,
+          tools: allowedTools,
+          // /assistant has no outbound channel beyond the reply stream
+          // itself — tools that want to "send a voice note" or similar
+          // refuse here with a clean error so the LLM falls back to text.
+          surface: { kind: 'web' },
+        }),
+    );
+
+  // Run the turn. When we attached a raw image and the responder errors —
+  // e.g. Bedrock's "Could not process image" surfacing as the SDK's
+  // ResponseValidationError — retry once WITHOUT the image, grounded in the
+  // vision-worker transcript instead, so a turn never hard-fails on a
+  // picture. The failed first attempt stays its own 'error' trace; the
+  // retry is a separate 'success' trace flagged image_retry_after_error.
+  let loopOutcome: Awaited<ReturnType<typeof runLoop>>;
+  if (canSeeImage) {
+    try {
+      loopOutcome = await runLoop(buildMessages(userImage, trimmed), { image_attached: true });
+    } catch (err) {
+      console.warn(
+        '[assistant] responder failed with image attached; retrying text-only:',
+        err instanceof Error ? err.message : err,
+      );
+      loopOutcome = await runLoop(buildMessages(undefined, textWithTranscript), {
+        image_attached: false,
+        image_retry_after_error: true,
+      });
+    }
+  } else {
+    loopOutcome = await runLoop(buildMessages(undefined, textWithTranscript), {
+      image_attached: false,
+    });
+  }
   const rawReply = loopOutcome.reply;
   if (!rawReply) {
     throw new Error('assistant: empty reply from model');

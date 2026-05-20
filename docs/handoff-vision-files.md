@@ -5,11 +5,33 @@ this first, then the "Open issue" is the active bug.
 
 ---
 
-## 🔴 OPEN ISSUE — `/assistant` image Q&A fails on real photos
+## 🟢 FIXED (2026-05-20) — `/assistant` image Q&A no longer hard-fails
 
-**Symptom:** Upload a photo to the web `/assistant` and ask Saskia to
-identify it → `POST /api/assistant/turn 500` after ~33s, console shows
-`[assistant/turn] Response validation failed`.
+**Fix shipped:** size-guard + catch-retry (handoff options 1 + 2), dep-free.
+
+- `maxImageBytesFor(model)` added to `packages/tracing/src/model-context.ts`
+  (anthropic/* + default → 4.5 MB, openai/* → 18 MB) and exported from the
+  package. Unit-tested in `model-context.test.ts`.
+- `runAssistantTurn` (`apps/web/lib/assistant.ts`) now only attaches the raw
+  image when `base64Bytes(image) <= maxImageBytesFor(agent.model)`; oversized
+  images route to the vision-worker transcript as text instead.
+- Catch-retry: if the responder errors *with an image attached*, the turn
+  retries once without it (transcript-grounded). The failed attempt stays its
+  own `error` trace; the retry is a separate `success` trace flagged
+  `image_retry_after_error` in trace `data`.
+
+Net behaviour: oversized or otherwise-rejected image → Saskia answers from the
+OpenAI mini's description (degraded but works) instead of a 500.
+
+**Still worth doing later:** downscale with `sharp` (handoff option 3) so
+Saskia sees the actual picture even when large — deferred (heavy native dep);
+note `sharp@0.34.5` is already in the lockfile. Also surface a per-provider
+"too large for <provider>" hint at upload time (the 15 MB cap vs Anthropic's
+~5 MB mismatch).
+
+**Original symptom (for reference):** Upload a photo to the web `/assistant`
+and ask Saskia to identify it → `POST /api/assistant/turn 500` after ~33s,
+console showed `[assistant/turn] Response validation failed`.
 
 **What now WORKS (fixed this session):**
 - The image **saves** — a `file` node is created and the bytes land on disk

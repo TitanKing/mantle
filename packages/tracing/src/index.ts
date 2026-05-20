@@ -15,4 +15,4 @@ export {
 } from './store';
 
 export { fallbackCostMicroUsd } from './pricing';
-export { contextLimitFor, modelSupportsVision } from './model-context';
+export { contextLimitFor, modelSupportsVision, maxImageBytesFor } from './model-context';
