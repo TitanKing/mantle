@@ -6,6 +6,7 @@ import { Check, Moon, Sun, Monitor, type LucideIcon } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { useColorTheme } from '@/components/color-theme-provider';
 import { COLOR_THEMES } from '@/lib/themes';
+import { PreviewTabs } from '@/components/theme-preview/preview-tabs';
 
 const MODES: Array<{ id: string; label: string; icon: LucideIcon }> = [
   { id: 'light', label: 'Light', icon: Sun },
@@ -22,7 +23,8 @@ export default function AppearancePage() {
   useEffect(() => setMounted(true), []);
 
   return (
-    <div className="mx-auto max-w-3xl space-y-8 px-6 py-8">
+    <div className="space-y-8 px-6 py-8">
+      <div className="mx-auto max-w-3xl space-y-8">
       <header className="space-y-1">
         <h1 className="text-2xl font-semibold">Appearance</h1>
         <p className="text-sm text-muted-foreground">
@@ -95,6 +97,17 @@ export default function AppearancePage() {
         <p className="text-xs text-muted-foreground">
           More themes coming soon — generate them at tweakcn.com and drop them in.
         </p>
+      </section>
+      </div>
+
+      <section className="space-y-3">
+        <div className="mx-auto max-w-3xl">
+          <h2 className="text-sm font-semibold">Preview</h2>
+          <p className="text-sm text-muted-foreground">
+            See the active theme on real surfaces. Switch mode/theme above and watch it update.
+          </p>
+        </div>
+        <PreviewTabs />
       </section>
     </div>
   );
