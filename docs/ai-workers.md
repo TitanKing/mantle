@@ -306,6 +306,10 @@ where that lives.
 
 ## 5b. Attachment ingestion (images + documents)
 
+> Full reference (flow table from every source + production audit):
+> [`file-ingestion.md`](./file-ingestion.md). This section is the vision/worker
+> view.
+
 Every file that enters Mantle — uploaded via the Files UI, attached to a
 `/assistant` turn, sent to the Telegram bot, dropped on disk, or pushed
 through MCP — is handled by **two cleanly-separated responsibilities**:

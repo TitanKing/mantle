@@ -13,6 +13,10 @@ Companion docs:
 - [`files.md`](./files.md) — the host-mirrored filesystem layer:
   folders + files on disk under `MANTLE_FILES_ROOT`, the editor, the
   ingestion handoff, and the MCP tools.
+- [`file-ingestion.md`](./file-ingestion.md) — how files/images/documents
+  enter from every source (Files UI, /assistant, Telegram, disk-watcher,
+  MCP): the save→notify→extract spine, the shared primitives, a flow table,
+  and the production audit.
 - [`telegram.md`](./telegram.md) — a frozen handoff covering the Telegram
   bridge build. Project diary; durable details have moved here.
 
