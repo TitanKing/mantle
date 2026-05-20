@@ -34,7 +34,7 @@ export function PreviewTabs() {
   return (
     <Tabs defaultValue="cards" className="@container w-full">
       <div className="sticky top-0 z-10 -mx-1 mb-2 bg-background/95 px-1 py-2 backdrop-blur">
-        <TabsList className="flex w-full flex-wrap justify-start gap-1 bg-transparent p-0">
+        <TabsList className="flex w-full flex-wrap justify-end gap-1 bg-transparent p-0">
           {TABS.map((t) => (
             <TabsTrigger
               key={t.value}
