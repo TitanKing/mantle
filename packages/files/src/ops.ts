@@ -35,7 +35,7 @@ import {
   writeFile as writeFileOnDisk,
   deleteFile as deleteFileOnDisk,
 } from './index';
-import { db, nodes, type Node } from '@mantle/db';
+import { db, nodes, notifyNodeIngested, type Node } from '@mantle/db';
 
 export type FolderRow = {
   id: string;
@@ -465,7 +465,7 @@ export async function upsertFile(args: {
     row = updated;
     // Notify the extractor again only when content changed.
     if (!sameContent) {
-      await db.execute(sql`SELECT pg_notify('node_ingested', ${updated.id}::text)`);
+      await notifyNodeIngested(updated.id);
     }
   } else {
     const [inserted] = await db
@@ -628,7 +628,7 @@ export async function syncFileFromDisk(args: {
       .where(eq(nodes.id, existing.id))
       .returning({ id: nodes.id });
     if (!updated) throw new Error('syncFileFromDisk: update returned no row');
-    await db.execute(sql`SELECT pg_notify('node_ingested', ${updated.id}::text)`);
+    await notifyNodeIngested(updated.id);
     return { status: 'updated', nodeId: updated.id };
   }
   const [inserted] = await db

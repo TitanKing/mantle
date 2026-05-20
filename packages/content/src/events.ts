@@ -16,7 +16,7 @@
  * sends a Telegram ping via @mantle/telegram.
  */
 import { and, asc, desc, eq, gte, ilike, isNull, lt, or, sql } from 'drizzle-orm';
-import { db, nodes, type Node } from '@mantle/db';
+import { db, nodes, notifyNodeIngested, type Node } from '@mantle/db';
 
 export const EVENTS_ROOT_LABEL = 'events';
 
@@ -268,7 +268,7 @@ export async function updateEvent(
     .returning();
   if (!updated) throw new Error('updateEvent: update returned no row');
   if (contentChanged) {
-    await db.execute(sql`SELECT pg_notify('node_ingested', ${id}::text)`);
+    await notifyNodeIngested(id);
   }
   return rowOf(updated);
 }

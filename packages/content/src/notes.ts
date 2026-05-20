@@ -10,7 +10,7 @@
  * + embedding land automatically on the next pg_notify('node_ingested').
  */
 import { and, desc, eq, ilike, or, sql } from 'drizzle-orm';
-import { db, nodes, type Node } from '@mantle/db';
+import { db, nodes, notifyNodeIngested, type Node } from '@mantle/db';
 
 export const NOTES_ROOT_LABEL = 'notes';
 
@@ -149,7 +149,7 @@ export async function updateNote(
     .returning();
   if (!updated) throw new Error('updateNote: update returned no row');
   if (contentChanged) {
-    await db.execute(sql`SELECT pg_notify('node_ingested', ${id}::text)`);
+    await notifyNodeIngested(id);
   }
   return rowOf(updated);
 }

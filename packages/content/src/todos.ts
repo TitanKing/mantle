@@ -12,7 +12,7 @@
  * surfaces status + priority + due_at into the body it summarises.
  */
 import { and, desc, eq, ilike, or, sql } from 'drizzle-orm';
-import { db, nodes, type Node } from '@mantle/db';
+import { db, nodes, notifyNodeIngested, type Node } from '@mantle/db';
 
 export const TODOS_ROOT_LABEL = 'todos';
 export const TODO_STATUSES = ['open', 'done'] as const;
@@ -205,7 +205,7 @@ export async function updateTodo(
     .returning();
   if (!updated) throw new Error('updateTodo: update returned no row');
   if (contentChanged) {
-    await db.execute(sql`SELECT pg_notify('node_ingested', ${id}::text)`);
+    await notifyNodeIngested(id);
   }
   return rowOf(updated);
 }

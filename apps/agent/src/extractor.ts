@@ -267,28 +267,31 @@ async function readNodeBodyRaw(node: typeof nodes.$inferSelect): Promise<string>
 /**
  * Vision-ingest an image file node: run the default vision worker (neutral
  * describe+OCR) over the bytes, persist the result as `data.text` (+
- * `vision_model`), and re-fire `node_ingested` so the next extractor pass
- * indexes it normally (summary + embedding + facts).
+ * `vision_model`), and RETURN the text so the caller indexes it in the same
+ * extractNode pass (summary + embedding + facts). Single pass — no
+ * node_ingested re-fire, no second extractor round-trip.
  *
  * This is the SINGLE durable-metadata path for images, however they entered —
  * Files upload, disk-sync watcher, MCP file_upload, AND the chat/Telegram
  * surfaces (whose own inline vision is question-aware and used only for the
  * live reply; they no longer persist `data.text`, so every image lands here).
  *
- * Best-effort: a missing/unwired/erroring vision worker leaves `result.text`
- * empty, so we persist nothing and the image stays findable by filename —
- * the `photo_ingest` trace's extract_vision step records the reason.
+ * The early `data.text` persist is deliberate robustness: the picture stays
+ * searchable even if the caller's downstream summary/embedding step later
+ * fails. Best-effort otherwise: a missing/unwired/erroring vision worker
+ * returns null (image stays findable by filename) — the `photo_ingest` trace's
+ * extract_vision step records the reason.
  */
 async function visionIngestImageNode(
   node: typeof nodes.$inferSelect,
   ownerId: string,
-): Promise<void> {
+): Promise<string | null> {
   const data = (node.data ?? {}) as Record<string, unknown>;
   const filename = data.filename as string;
   const diskPath = diskPathForFile(node.path, filename);
-  if (!diskPath) return;
+  if (!diskPath) return null;
 
-  await startTrace(
+  return await startTrace(
     {
       kind: 'photo_ingest',
       ownerId,
@@ -329,8 +332,10 @@ async function visionIngestImageNode(
         },
       );
 
-      if (!result.text) return; // nothing to index; the trace records why.
+      if (!result.text) return null; // nothing to index; the trace records why.
 
+      // Persist data.text now (robustness — survives a later index failure),
+      // then hand the text back to extractNode to index in this same pass.
       await step({ name: 'persist_vision_text', kind: 'db_write' }, async (h) => {
         await db
           .update(nodes)
@@ -339,10 +344,9 @@ async function visionIngestImageNode(
             updatedAt: new Date(),
           })
           .where(and(eq(nodes.id, node.id), eq(nodes.ownerId, ownerId)));
-        // Re-fire so the next extractor pass indexes the now-textful node.
-        await db.execute(sql`SELECT pg_notify('node_ingested', ${node.id}::text)`);
         h.setMeta({ chars: result.text.length });
       });
+      return result.text;
     },
   );
 }
@@ -749,27 +753,29 @@ export async function extractNode(nodeId: string, ownerId: string): Promise<void
   // Image file nodes carry no text body until a vision worker reads them.
   // The chat / Telegram upload paths do that inline, but an image dropped
   // into /files (web upload, disk-sync watcher, or MCP file_upload) arrives
-  // here untouched — the extractor would otherwise skip it (body = filename,
-  // < 20 chars). Run the default vision worker once, persist the
-  // description/OCR as data.text, and re-fire node_ingested so the SECOND
-  // pass indexes it through the normal flow below (summary + embedding +
-  // facts). One code path turns image bytes into searchable text, however
-  // the image landed. Images that already carry data.text (chat/Telegram)
-  // fall through unchanged.
-  if (
+  // here untouched — readNodeBodyRaw returns just the filename for it. Run the
+  // default vision worker, which persists the description/OCR as data.text and
+  // returns it so we index it in THIS pass below (summary + embedding + facts)
+  // — no second extractor round-trip. One code path turns image bytes into
+  // searchable text however the image landed. Images that already carry
+  // data.text (e.g. re-extraction) fall through to readNodeBodyRaw unchanged.
+  const isImageNeedingVision =
     node.type === 'file' &&
     !existingData.text &&
     !existingData.content &&
     typeof existingData.filename === 'string' &&
-    mimeForExt(extOf(existingData.filename)).startsWith('image/')
-  ) {
-    await visionIngestImageNode(node, ownerId);
-    return;
-  }
+    mimeForExt(extOf(existingData.filename)).startsWith('image/');
 
   // Read the FULL extracted text once. `body` (truncated) is what the LLM
   // sees; `rawBody` is what we persist so the document stays retrievable.
-  const rawBody = await readNodeBodyRaw(node);
+  let rawBody: string;
+  if (isImageNeedingVision) {
+    const visionText = await visionIngestImageNode(node, ownerId);
+    if (!visionText) return; // worker unavailable / empty — nothing to index
+    rawBody = visionText;
+  } else {
+    rawBody = await readNodeBodyRaw(node);
+  }
   if (!rawBody || rawBody.trim().length < 20) {
     // Not enough content to extract meaningfully.
     await recordSkippedTrace({

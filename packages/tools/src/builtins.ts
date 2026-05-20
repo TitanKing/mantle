@@ -9,7 +9,7 @@
  */
 
 import { and, desc, eq, sql } from 'drizzle-orm';
-import { db, nodes, secrets, telegramChats } from '@mantle/db';
+import { db, nodes, notifyNodeIngested, secrets, telegramChats } from '@mantle/db';
 import { seal } from '@mantle/crypto';
 import {
   searchNodes,
@@ -655,7 +655,7 @@ const process_extraction: BuiltinToolDef = {
     const limit = num(input.limit, 100) ?? 100;
     if (typeof input.node_id === 'string' && input.node_id) {
       // Fire for exactly one node, no eligibility check — operator chose it.
-      await db.execute(sql`SELECT pg_notify('node_ingested', ${input.node_id}::text)`);
+      await notifyNodeIngested(input.node_id);
       ctx.step?.setOutput({ fired: 1, node_id: input.node_id });
       return { ok: true, output: { fired: 1, node_id: input.node_id } };
     }
@@ -678,7 +678,7 @@ const process_extraction: BuiltinToolDef = {
       .orderBy(desc(nodes.createdAt))
       .limit(limit);
     for (const r of rows) {
-      await db.execute(sql`SELECT pg_notify('node_ingested', ${r.id}::text)`);
+      await notifyNodeIngested(r.id);
     }
     ctx.step?.setOutput({ fired: rows.length });
     return { ok: true, output: { fired: rows.length } };
