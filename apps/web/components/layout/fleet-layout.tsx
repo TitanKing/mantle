@@ -41,9 +41,7 @@ export function FleetLayout({
         className,
       )}
     >
-      {header && (
-        <div className="flex-shrink-0 border-b px-4 py-4 md:px-6">{header}</div>
-      )}
+      {header && <div className="flex-shrink-0">{header}</div>}
 
       <div className="flex flex-1 gap-4 overflow-hidden px-4 py-4 md:px-6">
         <Scrollable scrollbar={scrollbar} className={cn('pr-1', leftClassName)}>

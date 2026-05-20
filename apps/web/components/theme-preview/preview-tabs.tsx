@@ -32,29 +32,27 @@ const TABS = [
  *  active theme on real components. */
 export function PreviewTabs() {
   return (
-    <Tabs defaultValue="cards" className="w-full">
-      <TabsList className="flex w-full flex-wrap justify-start gap-1 bg-transparent p-0">
-        {TABS.map((t) => (
-          <TabsTrigger
-            key={t.value}
-            value={t.value}
-            className="rounded-full data-[state=active]:bg-primary data-[state=active]:text-primary-foreground"
-          >
-            {t.label}
-          </TabsTrigger>
-        ))}
-      </TabsList>
-
-      <div className="mt-3 @container overflow-hidden rounded-lg border bg-background">
-        <div className="h-[72vh] overflow-auto scrollbar-thin">
-          <TabsContent value="cards" className="m-0"><CardsDemo /></TabsContent>
-          <TabsContent value="dashboard" className="m-0"><Dashboard /></TabsContent>
-          <TabsContent value="mail" className="m-0"><MailDemo /></TabsContent>
-          <TabsContent value="pricing" className="m-0"><Pricing /></TabsContent>
-          <TabsContent value="colors" className="m-0"><ColorPalette /></TabsContent>
-          <TabsContent value="typography" className="m-0"><Typography /></TabsContent>
-        </div>
+    <Tabs defaultValue="cards" className="@container w-full">
+      <div className="sticky top-0 z-10 -mx-1 mb-2 bg-background/95 px-1 py-2 backdrop-blur">
+        <TabsList className="flex w-full flex-wrap justify-start gap-1 bg-transparent p-0">
+          {TABS.map((t) => (
+            <TabsTrigger
+              key={t.value}
+              value={t.value}
+              className="rounded-full data-[state=active]:bg-primary data-[state=active]:text-primary-foreground"
+            >
+              {t.label}
+            </TabsTrigger>
+          ))}
+        </TabsList>
       </div>
+
+      <TabsContent value="cards" className="m-0"><CardsDemo /></TabsContent>
+      <TabsContent value="dashboard" className="m-0"><Dashboard /></TabsContent>
+      <TabsContent value="mail" className="m-0"><MailDemo /></TabsContent>
+      <TabsContent value="pricing" className="m-0"><Pricing /></TabsContent>
+      <TabsContent value="colors" className="m-0"><ColorPalette /></TabsContent>
+      <TabsContent value="typography" className="m-0"><Typography /></TabsContent>
     </Tabs>
   );
 }

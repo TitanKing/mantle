@@ -6,6 +6,8 @@ import { Check, Moon, Sun, Monitor, type LucideIcon } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { useColorTheme } from '@/components/color-theme-provider';
 import { COLOR_THEMES } from '@/lib/themes';
+import { FleetLayout } from '@/components/layout/fleet-layout';
+import { PageHeader } from '@/components/layout/page-header';
 import { PreviewTabs } from '@/components/theme-preview/preview-tabs';
 
 const MODES: Array<{ id: string; label: string; icon: LucideIcon }> = [
@@ -14,27 +16,19 @@ const MODES: Array<{ id: string; label: string; icon: LucideIcon }> = [
   { id: 'system', label: 'System', icon: Monitor },
 ];
 
-export default function AppearancePage() {
+function Controls() {
   const { theme, setTheme } = useTheme();
   const { colorTheme, setColorTheme } = useColorTheme();
   const [mounted, setMounted] = useState(false);
-
-  // next-themes resolves only on the client; gate to avoid a mismatch.
   useEffect(() => setMounted(true), []);
 
   return (
-    <div className="space-y-8 px-6 py-8">
-      <div className="mx-auto max-w-3xl space-y-8">
-      <header className="space-y-1">
-        <h1 className="text-2xl font-semibold">Appearance</h1>
-        <p className="text-sm text-muted-foreground">
-          Choose how Mantle looks. Mode controls light/dark; the color theme sets the palette.
-        </p>
-      </header>
-
-      <section className="space-y-3">
-        <h2 className="text-sm font-semibold">Mode</h2>
-        <div className="grid grid-cols-3 gap-3">
+    <div className="space-y-6 py-4 pr-2">
+      <section className="space-y-2">
+        <h2 className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
+          Mode
+        </h2>
+        <div className="grid grid-cols-3 gap-2">
           {MODES.map((m) => {
             const Icon = m.icon;
             const active = mounted && theme === m.id;
@@ -45,14 +39,14 @@ export default function AppearancePage() {
                 onClick={() => setTheme(m.id)}
                 aria-pressed={active}
                 className={cn(
-                  'flex flex-col items-center gap-2 rounded-lg border p-4 text-sm transition-colors',
+                  'flex flex-col items-center gap-1.5 rounded-lg border p-2.5 text-xs transition-colors',
                   'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring',
                   active
                     ? 'border-primary bg-accent/50 text-foreground'
                     : 'border-border text-muted-foreground hover:bg-accent/40 hover:text-foreground',
                 )}
               >
-                <Icon className="size-5" aria-hidden />
+                <Icon className="size-4" aria-hidden />
                 {m.label}
               </button>
             );
@@ -60,9 +54,11 @@ export default function AppearancePage() {
         </div>
       </section>
 
-      <section className="space-y-3">
-        <h2 className="text-sm font-semibold">Color theme</h2>
-        <div className="grid grid-cols-2 gap-3 sm:grid-cols-3">
+      <section className="space-y-2">
+        <h2 className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
+          Color theme
+        </h2>
+        <div className="space-y-1.5">
           {COLOR_THEMES.map((t) => {
             const active = colorTheme === t.id;
             return (
@@ -72,24 +68,24 @@ export default function AppearancePage() {
                 onClick={() => setColorTheme(t.id)}
                 aria-pressed={active}
                 className={cn(
-                  'flex items-center justify-between gap-3 rounded-lg border p-3 text-left text-sm transition-colors',
+                  'flex w-full items-center justify-between gap-2 rounded-lg border p-2 text-left text-sm transition-colors',
                   'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring',
                   active ? 'border-primary ring-1 ring-primary' : 'border-border hover:bg-accent/40',
                 )}
               >
-                <span className="flex items-center gap-2">
-                  <span className="flex">
+                <span className="flex min-w-0 items-center gap-2">
+                  <span className="flex shrink-0">
                     {t.swatches.map((c, i) => (
                       <span
                         key={i}
-                        className="size-4 rounded-full border border-border/50 -ml-1 first:ml-0"
+                        className="-ml-1 size-4 rounded-full border border-border/50 first:ml-0"
                         style={{ backgroundColor: c }}
                       />
                     ))}
                   </span>
-                  <span className="font-medium text-foreground">{t.label}</span>
+                  <span className="truncate font-medium text-foreground">{t.label}</span>
                 </span>
-                {active && <Check className="size-4 text-primary" aria-hidden />}
+                {active && <Check className="size-4 shrink-0 text-primary" aria-hidden />}
               </button>
             );
           })}
@@ -98,17 +94,23 @@ export default function AppearancePage() {
           More themes coming soon — generate them at tweakcn.com and drop them in.
         </p>
       </section>
-      </div>
-
-      <section className="space-y-3">
-        <div className="mx-auto max-w-3xl">
-          <h2 className="text-sm font-semibold">Preview</h2>
-          <p className="text-sm text-muted-foreground">
-            See the active theme on real surfaces. Switch mode/theme above and watch it update.
-          </p>
-        </div>
-        <PreviewTabs />
-      </section>
     </div>
+  );
+}
+
+export default function AppearancePage() {
+  return (
+    <FleetLayout
+      header={
+        <PageHeader
+          title="Appearance"
+          description="Pick a mode and color theme on the left; preview it on real surfaces."
+        />
+      }
+      leftClassName="flex-1 lg:flex-none lg:w-1/5 lg:min-w-[220px]"
+      rightClassName="lg:w-4/5"
+      left={<Controls />}
+      right={<PreviewTabs />}
+    />
   );
 }
