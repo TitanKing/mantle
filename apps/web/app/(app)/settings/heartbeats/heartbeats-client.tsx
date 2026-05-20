@@ -327,7 +327,7 @@ export function HeartbeatsClient({
       <div className="flex items-center justify-between">
         <p className="text-sm text-muted-foreground">{initial.length} configured</p>
         <Button onClick={openCreate} size="sm">
-          <HeartPulse className="mr-2 size-4" /> New heartbeat
+          <HeartPulse className="size-4" /> New heartbeat
         </Button>
       </div>
 

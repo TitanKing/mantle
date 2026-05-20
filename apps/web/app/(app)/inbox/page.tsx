@@ -82,7 +82,7 @@ export default async function InboxPage({
         </p>
         <Button asChild>
           <Link href="/settings/accounts">
-            <Plug className="mr-2 size-4" aria-hidden /> Connect an account
+            <Plug className="size-4" aria-hidden /> Connect an account
           </Link>
         </Button>
       </div>

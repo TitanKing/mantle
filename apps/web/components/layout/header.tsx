@@ -70,7 +70,7 @@ export function Header({
             <DropdownMenuSeparator />
             <DropdownMenuItem asChild>
               <Link href="/settings/profile" className="cursor-pointer">
-                <UserIcon className="mr-2 size-4" /> Profile
+                <UserIcon className="size-4" /> Profile
               </Link>
             </DropdownMenuItem>
             <DropdownMenuItem
@@ -78,7 +78,7 @@ export function Header({
               disabled={busy}
               className="cursor-pointer text-destructive focus:text-destructive"
             >
-              <LogOut className="mr-2 size-4" /> {busy ? 'Signing out…' : 'Sign out'}
+              <LogOut className="size-4" /> {busy ? 'Signing out…' : 'Sign out'}
             </DropdownMenuItem>
           </DropdownMenuContent>
         </DropdownMenu>
