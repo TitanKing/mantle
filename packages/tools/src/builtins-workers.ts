@@ -37,7 +37,7 @@ import {
   sendPhoto,
   sendVoice,
 } from '@mantle/telegram';
-import { createFolder, fileById, readFileById, upsertFile } from '@mantle/files';
+import { createFolder, dashToLtree, fileById, readFileById, upsertFile } from '@mantle/files';
 import {
   getChatAdapter,
   getImageGenAdapter,
@@ -515,7 +515,10 @@ function extForMime(mime: string): string {
 }
 
 const GENERATED_IMAGES_FOLDER_SLUG = 'generated-images';
-const GENERATED_IMAGES_FOLDER_LTREE = `files.${GENERATED_IMAGES_FOLDER_SLUG}`;
+// ltree labels use underscores, not dashes — createFolder stores the
+// dash slug as `generated_images`, so the path constant must match or the
+// per-day subfolder's parent lookup fails ("parent folder not found").
+const GENERATED_IMAGES_FOLDER_LTREE = `files.${dashToLtree(GENERATED_IMAGES_FOLDER_SLUG)}`;
 
 /** Ensure /files/generated-images/<yyyy-mm-dd>/ exists. Returns the
  *  ltree path the file should land in. Idempotent — re-creating an
