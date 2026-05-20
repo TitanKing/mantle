@@ -140,71 +140,108 @@ async function processUpload(
   return { kind, nodeId, extractedText: extract.text, note: extract.note, imageArtifact };
 }
 
-export async function POST(req: Request) {
+type TurnResult = { status: number; body: unknown };
+
+// In-memory idempotency. A duplicate request with the same Idempotency-Key
+// (a network retry, or the same submit sent twice) replays the first turn's
+// result instead of saving the file + running the LLM again. Single-process
+// scope (one web instance, single user); lost on restart, which is fine —
+// duplicates only matter within seconds.
+const TURN_DEDUP_TTL_MS = 2 * 60_000;
+const recentTurns = new Map<string, { at: number; result: TurnResult }>();
+const inflightTurns = new Map<string, Promise<TurnResult>>();
+
+function pruneRecentTurns() {
+  const now = Date.now();
+  for (const [k, v] of recentTurns) {
+    if (now - v.at > TURN_DEDUP_TTL_MS) recentTurns.delete(k);
+  }
+}
+
+export async function POST(req: Request): Promise<NextResponse> {
+  const toResponse = (r: TurnResult) => NextResponse.json(r.body, { status: r.status });
+  const key = req.headers.get('idempotency-key');
+  if (!key) return toResponse(await runTurn(req));
+
+  const cached = recentTurns.get(key);
+  if (cached && Date.now() - cached.at < TURN_DEDUP_TTL_MS) return toResponse(cached.result);
+
+  let pending = inflightTurns.get(key);
+  if (!pending) {
+    pending = runTurn(req);
+    inflightTurns.set(key, pending);
+    pending
+      .then((result) => {
+        recentTurns.set(key, { at: Date.now(), result });
+        pruneRecentTurns();
+      })
+      .finally(() => inflightTurns.delete(key));
+  }
+  return toResponse(await pending);
+}
+
+async function runTurn(req: Request): Promise<TurnResult> {
+  // requireOwner() before the try so an auth redirect propagates rather than
+  // being swallowed as a 500. (The route is also gated by middleware.)
   const user = await requireOwner();
   const contentType = req.headers.get('content-type') ?? '';
 
   let userText = '';
   let attachment: Attachment | null = null;
 
-  if (contentType.includes('multipart/form-data')) {
-    const form = await req.formData().catch(() => null);
-    if (!form) {
-      return NextResponse.json({ error: 'invalid multipart body' }, { status: 400 });
-    }
-    userText = ((form.get('text') as string | null) ?? '').trim();
-    // Images arrive under 'image', documents under 'file'; accept either.
-    const file = form.get('image') ?? form.get('file');
-    if (file instanceof Blob && file.size > 0) {
-      if (file.size > MAX_UPLOAD_BYTES) {
-        return NextResponse.json(
-          { error: `attachment too large (>${MAX_UPLOAD_BYTES / 1024 / 1024} MB)` },
-          { status: 413 },
-        );
-      }
-      // Form's File interface has a name; plain Blob doesn't.
-      const originalName =
-        'name' in file && typeof (file as File).name === 'string' ? (file as File).name : 'upload';
-      const ext = extOf(originalName);
-      const isImage = file.type.startsWith(IMAGE_MIME_PREFIX) || mimeForExt(ext).startsWith('image/');
-      const isDoc = INGESTABLE_EXTS.has(ext);
-      if (!isImage && !isDoc) {
-        return NextResponse.json(
-          {
-            error:
-              `unsupported file type '${file.type || ext || 'unknown'}'. ` +
-              'Supported: images, and documents (pdf, docx, xlsx, csv, txt, md, json, yaml).',
-          },
-          { status: 415 },
-        );
-      }
-      const bytes = Buffer.from(await file.arrayBuffer());
-      attachment = await processUpload(user.id, bytes, file.type || mimeForExt(ext), originalName, userText);
-    }
-    if (!userText && !attachment) {
-      return NextResponse.json({ error: 'either text or an attachment must be provided' }, { status: 400 });
-    }
-    // If only an attachment was sent with no text, give the LLM a default
-    // prompt so it has something to react to.
-    if (!userText && attachment) {
-      userText =
-        attachment.kind === 'image'
-          ? "Here's an image — tell me what you see."
-          : "I've attached a file — take a look and tell me what's in it.";
-    }
-  } else {
-    const raw = await req.json().catch(() => ({}));
-    const parsed = Body.safeParse(raw);
-    if (!parsed.success) {
-      return NextResponse.json(
-        { error: parsed.error.issues[0]?.message ?? 'invalid input' },
-        { status: 400 },
-      );
-    }
-    userText = parsed.data.text;
-  }
-
   try {
+    if (contentType.includes('multipart/form-data')) {
+      const form = await req.formData().catch(() => null);
+      if (!form) return { status: 400, body: { error: 'invalid multipart body' } };
+      userText = ((form.get('text') as string | null) ?? '').trim();
+      // Images arrive under 'image', documents under 'file'; accept either.
+      const file = form.get('image') ?? form.get('file');
+      if (file instanceof Blob && file.size > 0) {
+        if (file.size > MAX_UPLOAD_BYTES) {
+          return {
+            status: 413,
+            body: { error: `attachment too large (>${MAX_UPLOAD_BYTES / 1024 / 1024} MB)` },
+          };
+        }
+        // Form's File interface has a name; plain Blob doesn't.
+        const originalName =
+          'name' in file && typeof (file as File).name === 'string' ? (file as File).name : 'upload';
+        const ext = extOf(originalName);
+        const isImage = file.type.startsWith(IMAGE_MIME_PREFIX) || mimeForExt(ext).startsWith('image/');
+        const isDoc = INGESTABLE_EXTS.has(ext);
+        if (!isImage && !isDoc) {
+          return {
+            status: 415,
+            body: {
+              error:
+                `unsupported file type '${file.type || ext || 'unknown'}'. ` +
+                'Supported: images, and documents (pdf, docx, xlsx, csv, txt, md, json, yaml).',
+            },
+          };
+        }
+        const bytes = Buffer.from(await file.arrayBuffer());
+        attachment = await processUpload(user.id, bytes, file.type || mimeForExt(ext), originalName, userText);
+      }
+      if (!userText && !attachment) {
+        return { status: 400, body: { error: 'either text or an attachment must be provided' } };
+      }
+      // If only an attachment was sent with no text, give the LLM a default
+      // prompt so it has something to react to.
+      if (!userText && attachment) {
+        userText =
+          attachment.kind === 'image'
+            ? "Here's an image — tell me what you see."
+            : "I've attached a file — take a look and tell me what's in it.";
+      }
+    } else {
+      const raw = await req.json().catch(() => ({}));
+      const parsed = Body.safeParse(raw);
+      if (!parsed.success) {
+        return { status: 400, body: { error: parsed.error.issues[0]?.message ?? 'invalid input' } };
+      }
+      userText = parsed.data.text;
+    }
+
     // Hand the turn the attachment's extracted text (+ the raw image for a
     // vision-capable responder). The runtime is transcript-default: it folds
     // the text in and only inlines raw pixels when there's no transcript.
@@ -231,26 +268,29 @@ export async function POST(req: Request) {
     const inboundArtifacts: ToolArtifact[] = attachment?.imageArtifact
       ? [{ ...attachment.imageArtifact, base64: '' }]
       : [];
-    return NextResponse.json({
-      inbound: {
-        id: inbound.id,
-        text: inbound.text,
-        createdAt: inbound.createdAt.toISOString(),
-        artifacts: inboundArtifacts,
+    return {
+      status: 200,
+      body: {
+        inbound: {
+          id: inbound.id,
+          text: inbound.text,
+          createdAt: inbound.createdAt.toISOString(),
+          artifacts: inboundArtifacts,
+        },
+        outbound: {
+          id: outbound.id,
+          text: outbound.text,
+          model: outbound.model,
+          createdAt: outbound.createdAt.toISOString(),
+        },
+        reply,
+        artifacts,
+        ...(attachment?.note ? { warnings: [attachment.note] } : {}),
       },
-      outbound: {
-        id: outbound.id,
-        text: outbound.text,
-        model: outbound.model,
-        createdAt: outbound.createdAt.toISOString(),
-      },
-      reply,
-      artifacts,
-      ...(attachment?.note ? { warnings: [attachment.note] } : {}),
-    });
+    };
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
     console.error('[assistant/turn]', msg);
-    return NextResponse.json({ error: msg }, { status: 500 });
+    return { status: 500, body: { error: msg } };
   }
 }

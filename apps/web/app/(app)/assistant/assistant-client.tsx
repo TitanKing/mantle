@@ -103,6 +103,10 @@ export function AssistantClient({
 
     const hasFile = attachedFile != null;
     const isImage = hasFile && attachedFile.type.startsWith('image/');
+    // Idempotency key for this submit — lets the server replay (not re-run)
+    // the turn if the request is retried, so we never get duplicate file
+    // nodes / turns.
+    const idempotencyKey = crypto.randomUUID();
     const optimisticId = `pending-${Date.now()}`;
     const optimistic: Message = {
       id: optimisticId,
@@ -143,12 +147,13 @@ export function AssistantClient({
         formData.set(isImage ? 'image' : 'file', attachedFile);
         res = await fetch('/api/assistant/turn', {
           method: 'POST',
+          headers: { 'idempotency-key': idempotencyKey },
           body: formData,
         });
       } else {
         res = await fetch('/api/assistant/turn', {
           method: 'POST',
-          headers: { 'content-type': 'application/json' },
+          headers: { 'content-type': 'application/json', 'idempotency-key': idempotencyKey },
           body: JSON.stringify({ text }),
         });
       }
