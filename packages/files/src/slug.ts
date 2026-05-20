@@ -73,11 +73,13 @@ export function extOf(filename: string): string {
  *  - INGESTABLE_EXTS: extractor will try to read body (PDFs join here later).
  *  - PREVIEWABLE_EXTS: rendered as Markdown / code preview in the UI.
  */
-export const TEXT_EXTS = new Set<string>(['md', 'markdown', 'txt', 'json', 'yaml', 'yml']);
+export const TEXT_EXTS = new Set<string>(['md', 'markdown', 'txt', 'json', 'yaml', 'yml', 'csv']);
 export const PREVIEWABLE_MARKDOWN_EXTS = new Set<string>(['md', 'markdown']);
-/** TEXT_EXTS + binary types the extractor can pull readable text from
- *  (currently just PDFs via pdf-parse — see packages/files/src/pdf.ts). */
-export const INGESTABLE_EXTS = new Set<string>([...TEXT_EXTS, 'pdf']);
+/** TEXT_EXTS + binary types the extractor can pull readable text from:
+ *  PDFs via pdf-parse, Word via mammoth, Excel via SheetJS. Each binary
+ *  type has a parser module under packages/files/src/ and a branch in
+ *  the extractor's readNodeBodyRaw. */
+export const INGESTABLE_EXTS = new Set<string>([...TEXT_EXTS, 'pdf', 'docx', 'xlsx', 'xls']);
 
 /** Map an extension to a sensible MIME type. Falls back to octet-stream. */
 export function mimeForExt(ext: string): string {
@@ -109,6 +111,12 @@ export function mimeForExt(ext: string): string {
       return 'text/html; charset=utf-8';
     case 'csv':
       return 'text/csv; charset=utf-8';
+    case 'docx':
+      return 'application/vnd.openxmlformats-officedocument.wordprocessingml.document';
+    case 'xlsx':
+      return 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet';
+    case 'xls':
+      return 'application/vnd.ms-excel';
     default:
       return 'application/octet-stream';
   }

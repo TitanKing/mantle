@@ -248,6 +248,24 @@ async function readNodeBodyRaw(node: typeof nodes.$inferSelect): Promise<string>
       } catch {
         // PDF parse failed (encrypted, scanned-image, corrupt). Fall through.
       }
+    } else if (ext === 'docx') {
+      try {
+        const { promises: fs } = await import('node:fs');
+        const buf = await fs.readFile(diskPath);
+        const { parseDocx } = await import('@mantle/files/docx');
+        return await parseDocx(buf);
+      } catch {
+        // Word parse failed (legacy .doc, corrupt, password). Fall through.
+      }
+    } else if (ext === 'xlsx' || ext === 'xls') {
+      try {
+        const { promises: fs } = await import('node:fs');
+        const buf = await fs.readFile(diskPath);
+        const { parseXlsx } = await import('@mantle/files/xlsx');
+        return await parseXlsx(buf);
+      } catch {
+        // Spreadsheet parse failed (corrupt, password). Fall through.
+      }
     } else if (INGESTABLE_EXTS.has(ext)) {
       try {
         const { promises: fs } = await import('node:fs');

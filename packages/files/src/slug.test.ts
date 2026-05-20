@@ -149,6 +149,13 @@ describe('mimeForExt', () => {
     expect(mimeForExt('png')).toBe('image/png');
   });
 
+  it('maps the office formats', () => {
+    expect(mimeForExt('docx')).toMatch(/wordprocessingml/);
+    expect(mimeForExt('xlsx')).toMatch(/spreadsheetml/);
+    expect(mimeForExt('xls')).toBe('application/vnd.ms-excel');
+    expect(mimeForExt('csv')).toMatch(/^text\/csv/);
+  });
+
   it('falls back to octet-stream for unknown', () => {
     expect(mimeForExt('xyz123')).toBe('application/octet-stream');
   });
@@ -163,6 +170,22 @@ describe('extension sets', () => {
 
   it('INGESTABLE_EXTS includes pdf (the binary text source)', () => {
     expect(INGESTABLE_EXTS.has('pdf')).toBe(true);
+  });
+
+  it('INGESTABLE_EXTS includes the office formats', () => {
+    for (const ext of ['docx', 'xlsx', 'xls']) {
+      expect(INGESTABLE_EXTS.has(ext)).toBe(true);
+    }
+  });
+
+  it('csv is a text type (editable + cached at upload)', () => {
+    expect(TEXT_EXTS.has('csv')).toBe(true);
+  });
+
+  it('office binaries are NOT in TEXT_EXTS (parsed, not editable)', () => {
+    for (const ext of ['docx', 'xlsx', 'xls', 'pdf']) {
+      expect(TEXT_EXTS.has(ext)).toBe(false);
+    }
   });
 
   it('PREVIEWABLE_MARKDOWN_EXTS only contains markdown extensions', () => {
