@@ -102,7 +102,7 @@ export default function AppearancePage() {
         description="Pick a mode and color theme on the left; preview it on real surfaces."
       />
       <div className="flex flex-col gap-6 px-6 py-6 lg:flex-row">
-        <aside className="shrink-0 lg:w-1/5 lg:min-w-[220px]">
+        <aside className="scrollbar-thin shrink-0 lg:sticky lg:top-0 lg:max-h-[calc(100vh-4rem)] lg:w-1/5 lg:min-w-[220px] lg:self-start lg:overflow-y-auto lg:pr-1">
           <Controls />
         </aside>
         <div className="min-w-0 flex-1">
