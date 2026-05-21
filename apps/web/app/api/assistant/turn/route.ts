@@ -35,7 +35,10 @@ import {
 import type { ToolArtifact } from '@mantle/tools';
 import { recordIngest, startTrace, step } from '@mantle/tracing';
 
-const Body = z.object({ text: z.string().min(1).max(20_000) });
+const Body = z.object({
+  text: z.string().min(1).max(20_000),
+  agentSlug: z.string().optional(),
+});
 
 const ASSISTANT_UPLOADS_SLUG = 'assistant-uploads';
 const IMAGE_MIME_PREFIX = 'image/';
@@ -187,6 +190,7 @@ async function runTurn(req: Request): Promise<TurnResult> {
   const contentType = req.headers.get('content-type') ?? '';
 
   let userText = '';
+  let agentSlug: string | undefined;
   let attachment: Attachment | null = null;
 
   try {
@@ -194,6 +198,7 @@ async function runTurn(req: Request): Promise<TurnResult> {
       const form = await req.formData().catch(() => null);
       if (!form) return { status: 400, body: { error: 'invalid multipart body' } };
       userText = ((form.get('text') as string | null) ?? '').trim();
+      agentSlug = ((form.get('agentSlug') as string | null) ?? '').trim() || undefined;
       // Images arrive under 'image', documents under 'file'; accept either.
       const file = form.get('image') ?? form.get('file');
       if (file instanceof Blob && file.size > 0) {
@@ -240,16 +245,16 @@ async function runTurn(req: Request): Promise<TurnResult> {
         return { status: 400, body: { error: parsed.error.issues[0]?.message ?? 'invalid input' } };
       }
       userText = parsed.data.text;
+      agentSlug = parsed.data.agentSlug?.trim() || undefined;
     }
 
     // Hand the turn the attachment's extracted text (+ the raw image for a
     // vision-capable responder). The runtime is transcript-default: it folds
     // the text in and only inlines raw pixels when there's no transcript.
     // The persisted inbound row shows the user's own typed text (displayText).
-    const { inbound, outbound, reply, artifacts } = await runAssistantTurn(
-      user.id,
-      userText,
-      attachment
+    const { inbound, outbound, reply, artifacts } = await runAssistantTurn(user.id, userText, {
+      agentSlug,
+      ...(attachment
         ? {
             displayText: userText,
             attachmentKind: attachment.kind,
@@ -260,8 +265,8 @@ async function runTurn(req: Request): Promise<TurnResult> {
             imageNote: attachment.note || undefined,
             imageNodeId: attachment.nodeId || undefined,
           }
-        : undefined,
-    );
+        : {}),
+    });
     // Forward inbound image METADATA (no base64) — the client already holds
     // the bytes and renders them from a local object URL, so echoing the full
     // base64 back would just waste bandwidth. Documents carry no artifact.

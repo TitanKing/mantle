@@ -48,9 +48,12 @@ type Message = {
 export function AssistantClient({
   initialMessages,
   agentReady,
+  agentSlug,
 }: {
   initialMessages: Message[];
   agentReady: boolean;
+  /** Which agent the selector targets; sent with each turn. */
+  agentSlug?: string;
 }) {
   const [messages, setMessages] = useState<Message[]>(initialMessages);
   const [draft, setDraft] = useState('');
@@ -144,6 +147,7 @@ export function AssistantClient({
         // Images go under 'image' (vision); documents under 'file'.
         const formData = new FormData();
         if (text) formData.set('text', text);
+        if (agentSlug) formData.set('agentSlug', agentSlug);
         formData.set(isImage ? 'image' : 'file', attachedFile);
         res = await fetch('/api/assistant/turn', {
           method: 'POST',
@@ -154,7 +158,7 @@ export function AssistantClient({
         res = await fetch('/api/assistant/turn', {
           method: 'POST',
           headers: { 'content-type': 'application/json', 'idempotency-key': idempotencyKey },
-          body: JSON.stringify({ text }),
+          body: JSON.stringify({ text, agentSlug }),
         });
       }
       if (!res.ok) {

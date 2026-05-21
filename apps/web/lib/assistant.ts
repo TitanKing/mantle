@@ -91,7 +91,20 @@ export type AssistantTurnResult = {
 /** Pick the best agent to handle a web turn. Prefers `assistant`-role rows;
  *  if none enabled, falls back to a `responder` so one persona can serve
  *  both surfaces with minimal setup. */
-export async function resolveAssistantAgent(ownerId: string): Promise<Agent | null> {
+export async function resolveAssistantAgent(
+  ownerId: string,
+  slug?: string,
+): Promise<Agent | null> {
+  // Explicit pick (the /assistant agent selector). Owner-scoped + enabled;
+  // falls through to the default if the slug isn't valid.
+  if (slug) {
+    const [picked] = await db
+      .select()
+      .from(agents)
+      .where(and(eq(agents.ownerId, ownerId), eq(agents.slug, slug), eq(agents.enabled, true)))
+      .limit(1);
+    if (picked) return picked;
+  }
   const [primary] = await db
     .select()
     .from(agents)
@@ -116,6 +129,7 @@ async function loadContext(
   ownerId: string,
   agent: Agent,
   inboundText: string,
+  includeLegacy: boolean,
 ): Promise<{
   personaNotes: PersonaNote[];
   facts: FactSnippet[];
@@ -214,7 +228,14 @@ async function loadContext(
       createdAt: assistantMessages.createdAt,
     })
     .from(assistantMessages)
-    .where(eq(assistantMessages.ownerId, ownerId))
+    .where(
+      and(
+        eq(assistantMessages.ownerId, ownerId),
+        includeLegacy
+          ? or(eq(assistantMessages.agentId, agent.id), isNull(assistantMessages.agentId))
+          : eq(assistantMessages.agentId, agent.id),
+      ),
+    )
     .orderBy(desc(assistantMessages.createdAt))
     .limit(historyLimit);
 
@@ -266,18 +287,25 @@ export async function runAssistantTurn(
      *  the model can re-read it (extract_from_image / file_read) on a
      *  follow-up. */
     imageNodeId?: string;
+    /** Which agent answers this turn (the /assistant agent selector). Resolved
+     *  owner-scoped + enabled; falls back to the default assistant. */
+    agentSlug?: string;
   },
 ): Promise<AssistantTurnResult> {
   const trimmed = text.trim();
   if (!trimmed) throw new Error('runAssistantTurn: empty text');
   const displayText = options?.displayText?.trim() ?? trimmed;
 
-  const agent = await resolveAssistantAgent(ownerId);
+  const agent = await resolveAssistantAgent(ownerId, options?.agentSlug);
   if (!agent) {
     throw new Error(
       'No enabled assistant agent. Create one at /settings/agents (role=assistant or fallback responder).',
     );
   }
+  // Legacy (pre-agentId) rows belong to the original web persona — fold them
+  // into the assistant/responder thread, but keep custom agents (e.g. coder)
+  // on their own clean thread.
+  const includeLegacy = agent.role === 'assistant' || agent.role === 'responder';
   if (!agent.apiKeyId) {
     throw new Error(`Agent '${agent.slug}' has no api_key_id set — edit at /settings/agents.`);
   }
@@ -293,7 +321,7 @@ export async function runAssistantTurn(
   //    sent to the LLM as `newUserText` in buildChatMessages, and
   //    duplicating it makes the model think the user said the same
   //    thing twice ("you sent that twice — testing the double-tap?").
-  const ctx = await loadContext(ownerId, agent, trimmed);
+  const ctx = await loadContext(ownerId, agent, trimmed, includeLegacy);
   const filteredHistory = ctx.history;
 
   // 2. Persist inbound BEFORE the LLM call so the row survives a
@@ -307,6 +335,7 @@ export async function runAssistantTurn(
       ownerId,
       direction: 'inbound',
       text: displayText,
+      agentId: agent.id,
     })
     .returning();
   if (!inbound) throw new Error('failed to insert inbound row');
@@ -545,7 +574,13 @@ export type AssistantTimelineRow = {
 export async function recentAssistantMessages(
   ownerId: string,
   limit = 100,
+  opts?: { agentId?: string; includeLegacy?: boolean },
 ): Promise<AssistantTimelineRow[]> {
+  const agentFilter = opts?.agentId
+    ? opts.includeLegacy
+      ? or(eq(assistantMessages.agentId, opts.agentId), isNull(assistantMessages.agentId))
+      : eq(assistantMessages.agentId, opts.agentId)
+    : undefined;
   const rows = await db
     .select({
       id: assistantMessages.id,
@@ -555,7 +590,7 @@ export async function recentAssistantMessages(
       createdAt: assistantMessages.createdAt,
     })
     .from(assistantMessages)
-    .where(eq(assistantMessages.ownerId, ownerId))
+    .where(and(eq(assistantMessages.ownerId, ownerId), agentFilter))
     .orderBy(desc(assistantMessages.createdAt))
     .limit(limit);
   return rows
@@ -569,7 +604,30 @@ export async function recentAssistantMessages(
     }));
 }
 
+export type AssistantAgentOption = {
+  id: string;
+  slug: string;
+  name: string;
+  role: string;
+  model: string;
+};
+
+/** Enabled agents the /assistant selector can target. */
+export async function listAssistantAgents(ownerId: string): Promise<AssistantAgentOption[]> {
+  const rows = await db
+    .select({
+      id: agents.id,
+      slug: agents.slug,
+      name: agents.name,
+      role: agents.role,
+      model: agents.model,
+    })
+    .from(agents)
+    .where(and(eq(agents.ownerId, ownerId), eq(agents.enabled, true)))
+    .orderBy(desc(agents.priority));
+  return rows.map((r) => ({ id: r.id, slug: r.slug, name: r.name, role: r.role as string, model: r.model }));
+}
+
 // Marks below silence "unused import" lint warnings when the runtime
 // helpers are referenced indirectly.
 void ne;
-void or;
