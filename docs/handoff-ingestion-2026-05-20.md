@@ -42,26 +42,29 @@ for the live reply via the shared `extractAttachmentForTurn`. Shared primitives:
   and verified: Telegram photo → file saved under `files.telegram_uploads.<date>`
   → `photo_ingest`(extractor) → `extractor_run` → text+summary+embedding+fact.
 
-## ⚠️ Open — pick up here
+## ✅ Resolved (2026-05-21) — all three closed
 
-1. **V1 — vision cost shows `$0`** (cost visibility). `runVisionWorker`
-   (`packages/agent-runtime/src/attachments.ts`) sets token *metadata* but never
-   feeds the trace cost. Fix: after `adapter.extract`, attribute via
-   `currentStep()` + `fallbackCostMicroUsd(worker.model, {input,output})` (both
-   from `@mantle/tracing`). Caveat: the vision worker's model must be in the
-   pricing table (`packages/tracing/src/pricing.ts`) or cost still computes 0 —
-   check coverage for the configured vision model.
-2. **V2 — `data.vision_model` ends up empty** on indexed images (cosmetic). The
-   `extractor_run` `update_index` step in `apps/agent/src/extractor.ts`
-   overwrites the marker that `visionIngestImageNode`'s `persist_vision_text`
-   set. Fix: make the final index write MERGE `data` (`||`) instead of
-   replacing, or re-read `data` before it.
-3. **heic-convert (web)** — `apps/web/package.json` has `heic-convert` added as
-   a direct dep but it is **uncommitted in the worktree** and **not installed**.
-   Needed because Next can't externalize a transitive (`@mantle/files`-only)
-   package — without it, web HEIC uploads fail to transcode (degrade to no
-   metadata; non-HEIC unaffected). To finish: commit it, `pnpm install`,
-   restart. (Telegram/extractor HEIC already work — they're not bundled.)
+1. **V1 — vision cost showed `$0`.** ✅ Fixed (`5ab55ed`). Added
+   `recordStepUsage` to `@mantle/tracing` (attributes tokens+cost to the active
+   trace/step from outside the step body); `runVisionWorker`
+   (`packages/agent-runtime/src/attachments.ts`) calls it after `adapter.extract`,
+   priced via `fallbackCostMicroUsd`. Also added the **bare** OpenAI ids
+   (`gpt-4o-mini`/`gpt-4o`) to `packages/tracing/src/pricing.ts` — the direct
+   adapters pass the bare model id, not the `openai/` slug, which was the
+   "still reads 0" caveat. Regression test in `pricing.test.ts`. **Verified
+   live:** 64×64 PNG → `photo_ingest` cost 1310µ$, `extract_vision` step carries
+   model + cost.
+2. **V2 — `data.vision_model` ended up empty.** ✅ Fixed (`a390b3a`). The
+   `update_index` step in `apps/agent/src/extractor.ts` now MERGEs the index
+   fields onto the live row (jsonb `||`) instead of replacing it from the stale
+   in-memory snapshot, so the `vision_model` (+ `text`) that `persist_vision_text`
+   wrote in between survive. **Verified live:** indexed image retains
+   `vision_model=gpt-4o-mini` alongside summary + embedding.
+3. **heic-convert (web).** ✅ Fixed (`91cf43f`). Added as a direct dep of
+   `apps/web` (matching `@mantle/files`' `^2.1.0`, already in the lockfile);
+   it's already in `serverExternalPackages`, so Next now leaves its `.wasm`
+   alone. `pnpm install` run + stack restarted; `apps/web/node_modules/heic-convert`
+   linked. (Telegram/extractor HEIC already worked — they're not bundled.)
 
 ## Deferred (by decision — see file-ingestion.md §4)
 - L1 orphan-file-on-partial-save (watcher reconciles coincidentally).
@@ -70,12 +73,12 @@ for the live reply via the shared `extractAttachmentForTurn`. Shared primitives:
 - Whole-file in-memory buffering ≤25 MB (inherent).
 
 ## Git / deploy state
-- `main` is at `7e06892` (migration 0032). **`origin/main` is 1 commit behind —
-  not pushed yet.** Push when ready (`git push origin main`).
-- Worktree `.claude/worktrees/admiring-lichterman-1a978d` has the uncommitted
-  `apps/web/package.json` (heic-convert) — see open item 3.
+- `main` is at `91cf43f` (V1 `5ab55ed` · V2 `a390b3a` · heic `91cf43f`, on top
+  of migration 0032 `7e06892`). **`origin/main` is several commits behind — not
+  pushed yet.** Push when ready (`git push origin main`).
+- `pnpm install` run + stack restarted from `~/Projects/mantle`; the fixes are
+  live and verified against the running DB.
 - Workflow: work in the worktree, ff-merge to `main`, push only when asked.
-- After the open fixes: needs `pnpm install` (heic) + a stack restart.
 
 ## Tests still worth running (not yet exercised live)
 - Web `/assistant`: a **document** (PDF/docx/csv) attachment → answered + indexed.

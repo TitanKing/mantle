@@ -104,8 +104,8 @@ traced.
 | L4 | 🟡 | `node_ingested` notify scattered as raw SQL (implicit contract) | ✅ Fixed — `notifyNodeIngested` helper, 9 sites migrated |
 | L5 | 🟡 | Two-pass image extraction (re-fire round-trip) | ✅ Fixed — single pass; `visionIngestImageNode` returns text |
 | B1 | 🔴 | **Dated upload folders silently failed to save** for any second surface on the same day — `nodes_owner_slug_uq` made folder slugs globally unique, so e.g. `telegram-uploads/2026-05-20` collided with `assistant-uploads/2026-05-20` on slug `2026-05-20`; the INSERT was swallowed as a "duplicate" and the file never persisted (caught by **DB tracing during testing**) | ✅ **Fixed — migration `0032`** scopes the slug-unique index to `type <> 'branch'` (folders are path-unique). Verified live: Telegram photo → file saved + indexed. |
-| V1 | 🟡 | **Vision LLM cost shows `$0`** — `runVisionWorker` sets token metadata but never calls `captureLlmUsage`, so vision spend is invisible in `/debug` (a `photo_ingest` trace shows a 3s `extract_vision` LLM call at cost 0) | ⚠️ **Open** — fix: attribute via `currentStep()` + `fallbackCostMicroUsd(model, tokens)` in `runVisionWorker`. Caveat: the vision worker's model must be in the pricing table or it still reads 0. |
-| V2 | 🟡 | **`data.vision_model` ends up empty** on indexed images — the `extractor_run`'s `update_index` overwrites the marker that `persist_vision_text` set | ⚠️ **Open** — cosmetic; merge instead of replace, or re-read `data` before the final write. |
+| V1 | 🟡 | **Vision LLM cost showed `$0`** — `runVisionWorker` set token metadata but never fed the trace cost, so vision spend was invisible in `/debug` (a `photo_ingest` trace showed a 3s `extract_vision` LLM call at cost 0) | ✅ **Fixed (`5ab55ed`)** — `runVisionWorker` now attributes tokens+cost to the active trace/step via the new `recordStepUsage` (`@mantle/tracing`), priced through `fallbackCostMicroUsd`. The pricing table gained the **bare** OpenAI ids (`gpt-4o-mini`/`gpt-4o`) the direct adapters pass — the slug caveat that would otherwise still read 0. Verified live: a 64×64 PNG → `photo_ingest` cost 1310µ$, `extract_vision` step carries model+cost. |
+| V2 | 🟡 | **`data.vision_model` ended up empty** on indexed images — the `extractor_run`'s `update_index` overwrote the marker that `persist_vision_text` set | ✅ **Fixed (`a390b3a`)** — `update_index` now MERGEs the index fields onto the live row (jsonb `\|\|`) instead of replacing it from the stale in-memory snapshot, so `vision_model` (+ `text`) written in between survive. Verified live: indexed image retains `vision_model=gpt-4o-mini` alongside summary + embedding. |
 | L1 | 🟡 | **Orphan file on disk if the DB insert fails after the disk write** | ⚠️ **Deferred** — currently reconciled coincidentally by the disk-watcher (`syncFileFromDisk` re-creates the node). Acceptable; make the watcher the *designed* reconciler, or add cleanup-on-failure, if it ever bites. |
 | L6 | 🟡 | **HEIC image doesn't render in the chat bubble** (echoed/optimistic bytes are HEIC, which browsers can't display) | ⚠️ **Deferred** — cosmetic only; metadata + answer work. Would need a browser-renderable (JPEG) preview, i.e. surface the transcoded copy to the client. |
 | — | 🟡 | Telegram `audio`/`video` *file* attachments unhandled (voice notes work via STT) | ⚠️ Deferred — niche; out of scope by decision. |
@@ -120,9 +120,9 @@ persisted. Decoupling (neutral index vs specific chat answer) and L5 single-pass
 (one `photo_ingest`→`extractor_run`, no re-fire) confirmed against the live DB.
 
 ### What would reach a flat A
-Close V1 (vision cost) + V2 (`vision_model`); make the orphan-file reconciliation
-**deliberate** (L1) and add a renderable HEIC preview (L6); optionally stream
-large uploads instead of buffering.
+V1 (vision cost) + V2 (`vision_model`) are now closed. Remaining: make the
+orphan-file reconciliation **deliberate** (L1) and add a renderable HEIC
+preview (L6); optionally stream large uploads instead of buffering.
 
 ---
 
@@ -132,6 +132,9 @@ Newest first — all on `main`.
 
 | Commit | What |
 |---|---|
+| `91cf43f` | Add `heic-convert` as a direct web dep so Next externalizes it |
+| `a390b3a` | Preserve `data.vision_model` — merge the index write (V2) |
+| `5ab55ed` | Attribute vision-worker cost to the trace (V1) |
 | `7e06892` | Scope slug-unique index to non-branch nodes — migration `0032` (B1) |
 | `a7f08e3` | This doc — file-ingestion reference (flow table + audit) |
 | `fba1b8a` | Idempotent /assistant turns (L3) |
