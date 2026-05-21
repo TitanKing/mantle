@@ -23,7 +23,9 @@ export async function sendMessage(
   const ids: number[] = [];
   for (let i = 0; i < chunks.length; i++) {
     const sent = await bot.api.sendMessage(chatId, chunks[i]!, {
-      ...(replyTo != null && i === 0 ? { reply_parameters: { message_id: replyTo } } : {}),
+      ...(replyTo != null && i === 0
+        ? { reply_parameters: { message_id: replyTo, allow_sending_without_reply: true } }
+        : {}),
       ...(parseMode ? { parse_mode: parseMode } : {}),
     });
     ids.push(sent.message_id);
@@ -74,7 +76,9 @@ export async function sendPhoto(
   const replyTo = options?.replyTo != null ? Number(options.replyTo) : undefined;
   const filename = options?.filename ?? 'image.png';
   const sent = await bot.api.sendPhoto(chatId, new InputFile(image, filename), {
-    ...(replyTo != null ? { reply_parameters: { message_id: replyTo } } : {}),
+    ...(replyTo != null
+      ? { reply_parameters: { message_id: replyTo, allow_sending_without_reply: true } }
+      : {}),
     ...(options?.caption ? { caption: options.caption.slice(0, 1024) } : {}),
   });
   return sent.message_id;
@@ -95,7 +99,9 @@ export async function sendVoice(
   const replyTo = options?.replyTo != null ? Number(options.replyTo) : undefined;
   const filename = options?.filename ?? 'voice.ogg';
   const sent = await bot.api.sendVoice(chatId, new InputFile(audio, filename), {
-    ...(replyTo != null ? { reply_parameters: { message_id: replyTo } } : {}),
+    ...(replyTo != null
+      ? { reply_parameters: { message_id: replyTo, allow_sending_without_reply: true } }
+      : {}),
     ...(options?.caption ? { caption: options.caption.slice(0, 1024) } : {}),
     ...(typeof options?.durationSeconds === 'number'
       ? { duration: Math.round(options.durationSeconds) }
