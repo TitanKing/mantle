@@ -1,6 +1,7 @@
 import {
   DeleteObjectCommand,
   GetObjectCommand,
+  HeadBucketCommand,
   HeadObjectCommand,
   PutObjectCommand,
   S3Client,
@@ -118,4 +119,23 @@ export async function getContent(key: string): Promise<{
 
 export async function deleteContent(key: string): Promise<void> {
   await client().send(new DeleteObjectCommand({ Bucket: bucket(), Key: key }));
+}
+
+/**
+ * Liveness check for the object store — used by the dashboard health panel.
+ * Never throws. A 403 still means we reached the server (key lacks
+ * ListBucket/HeadBucket perms) → reachable=true; only a network/connection
+ * failure → false.
+ */
+export async function bucketReachable(): Promise<boolean> {
+  try {
+    await client().send(new HeadBucketCommand({ Bucket: bucket() }));
+    return true;
+  } catch (err: unknown) {
+    const e = err as { $metadata?: { httpStatusCode?: number }; name?: string };
+    const status = e.$metadata?.httpStatusCode;
+    // We got an HTTP response (e.g. 403/404) → the server is up and answered.
+    if (typeof status === 'number') return true;
+    return false;
+  }
 }
