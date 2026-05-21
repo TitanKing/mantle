@@ -29,3 +29,26 @@ export async function setEmailReadStatus(formData: FormData) {
 
   revalidatePath('/inbox');
 }
+
+/**
+ * Flip the starred flag on one email. Local-only (Mantle does not write back
+ * to the IMAP server). Owner-scoped exactly like `setEmailReadStatus`.
+ */
+export async function setEmailStarred(formData: FormData) {
+  const user = await requireOwner();
+  const emailId = String(formData.get('emailId') ?? '');
+  const next = formData.get('starred') === '1';
+  if (!emailId) return;
+
+  const ownedAccounts = db
+    .select({ id: emailAccounts.id })
+    .from(emailAccounts)
+    .where(eq(emailAccounts.userId, user.id));
+
+  await db
+    .update(emails)
+    .set({ isStarred: next })
+    .where(and(eq(emails.id, emailId), inArray(emails.accountId, ownedAccounts)));
+
+  revalidatePath('/inbox');
+}

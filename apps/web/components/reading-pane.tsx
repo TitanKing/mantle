@@ -1,7 +1,8 @@
-import { Inbox, Mail, MailOpen, Paperclip } from 'lucide-react';
+import { Inbox, Mail, MailOpen, Paperclip, Star } from 'lucide-react';
 import { sanitizeEmailHtml } from '@mantle/email';
 import type { Email, EmailAttachment } from '@mantle/db';
-import { setEmailReadStatus } from '@/app/(app)/email-actions';
+import { setEmailReadStatus, setEmailStarred } from '@/app/(app)/email-actions';
+import { cn } from '@/lib/utils';
 import { formatDateTime } from '@/lib/format-datetime';
 
 /**
@@ -29,26 +30,43 @@ export function ReadingPane({
       <header className="space-y-1 border-b border-border px-6 py-4">
         <div className="flex items-start justify-between gap-3">
           <h1 className="text-lg font-semibold leading-snug">{email.subject || '(no subject)'}</h1>
-          <form action={setEmailReadStatus}>
-            <input type="hidden" name="emailId" value={email.id} />
-            <input type="hidden" name="read" value={email.isRead ? '0' : '1'} />
-            <button
-              type="submit"
-              title={email.isRead ? 'Mark unread' : 'Mark read'}
-              aria-label={email.isRead ? 'Mark unread' : 'Mark read'}
-              className="inline-flex items-center gap-1 rounded-md border border-input bg-background px-2 py-1 text-xs text-muted-foreground hover:bg-accent hover:text-foreground"
-            >
-              {email.isRead ? (
-                <>
-                  <Mail className="size-3.5" aria-hidden /> Mark unread
-                </>
-              ) : (
-                <>
-                  <MailOpen className="size-3.5" aria-hidden /> Mark read
-                </>
-              )}
-            </button>
-          </form>
+          <div className="flex shrink-0 items-center gap-1">
+            <form action={setEmailStarred}>
+              <input type="hidden" name="emailId" value={email.id} />
+              <input type="hidden" name="starred" value={email.isStarred ? '0' : '1'} />
+              <button
+                type="submit"
+                title={email.isStarred ? 'Unstar' : 'Star'}
+                aria-label={email.isStarred ? 'Unstar' : 'Star'}
+                className="inline-flex items-center rounded-md border border-input bg-background p-1.5 text-xs text-muted-foreground hover:bg-accent hover:text-foreground"
+              >
+                <Star
+                  className={cn('size-3.5', email.isStarred && 'fill-amber-400 text-amber-400')}
+                  aria-hidden
+                />
+              </button>
+            </form>
+            <form action={setEmailReadStatus}>
+              <input type="hidden" name="emailId" value={email.id} />
+              <input type="hidden" name="read" value={email.isRead ? '0' : '1'} />
+              <button
+                type="submit"
+                title={email.isRead ? 'Mark unread' : 'Mark read'}
+                aria-label={email.isRead ? 'Mark unread' : 'Mark read'}
+                className="inline-flex items-center gap-1 rounded-md border border-input bg-background px-2 py-1 text-xs text-muted-foreground hover:bg-accent hover:text-foreground"
+              >
+                {email.isRead ? (
+                  <>
+                    <Mail className="size-3.5" aria-hidden /> Mark unread
+                  </>
+                ) : (
+                  <>
+                    <MailOpen className="size-3.5" aria-hidden /> Mark read
+                  </>
+                )}
+              </button>
+            </form>
+          </div>
         </div>
         <dl className="grid grid-cols-[auto_1fr] gap-x-3 gap-y-0.5 text-xs text-muted-foreground">
           <dt>From</dt>
