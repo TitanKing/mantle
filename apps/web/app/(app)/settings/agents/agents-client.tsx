@@ -14,6 +14,8 @@ import {
 } from '@/components/ui/dialog';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
+import type { PersonaNote } from '@mantle/db';
+import { PersonaNotesEditor } from './persona-notes-editor';
 
 /** Built-in node types the extractor can be allow-listed against. Matches
  *  the `node_type` enum in packages/db/src/schema/nodes.ts minus `branch`
@@ -96,6 +98,7 @@ type AgentSummary = {
   skillSlugs: string[];
   memoryConfig: MemoryConfig;
   params: { temperature?: number; max_tokens?: number; top_p?: number };
+  personaNotes: PersonaNote[];
   priority: number;
   enabled: boolean;
   lastUsedAt: string | null;
@@ -791,6 +794,14 @@ export function AgentsClient({
                 provider only re-processes the new user message.
               </p>
             </div>
+
+            {editing?.mode === 'edit' && (
+              <PersonaNotesEditor
+                key={editing.agent.id}
+                agentId={editing.agent.id}
+                initialNotes={editing.agent.personaNotes}
+              />
+            )}
 
             <fieldset className="space-y-3 rounded-md border border-border p-3">
               <legend className="px-1 text-xs font-semibold uppercase tracking-wider text-muted-foreground">

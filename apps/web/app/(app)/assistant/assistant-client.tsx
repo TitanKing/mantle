@@ -12,6 +12,7 @@ import {
   X,
 } from 'lucide-react';
 import { formatDateTime } from '@/lib/format-datetime';
+import { agentAccent, agentInitials } from '@/lib/agent-color';
 
 /** A sidecar artifact attached to a message. Mirrors @mantle/tools
  *  ToolArtifact, with the discriminated `kind` driving the rendering
@@ -49,12 +50,19 @@ export function AssistantClient({
   initialMessages,
   agentReady,
   agentSlug,
+  agentName,
 }: {
   initialMessages: Message[];
   agentReady: boolean;
   /** Which agent the selector targets; sent with each turn. */
   agentSlug?: string;
+  /** Display name of the active agent — drives the bubble avatar + greeting. */
+  agentName?: string;
 }) {
+  // Per-agent visual identity: a stable colour + monogram so it's obvious
+  // which agent you're talking to when you switch.
+  const accent = agentAccent(agentSlug ?? 'assistant');
+  const initials = agentInitials(agentName ?? 'Assistant');
   const [messages, setMessages] = useState<Message[]>(initialMessages);
   const [draft, setDraft] = useState('');
   const [sending, setSending] = useState(false);
@@ -291,25 +299,50 @@ export function AssistantClient({
     <>
       <div ref={scrollerRef} className="flex-1 overflow-y-auto px-6 py-4">
         {messages.length === 0 ? (
-          <p className="rounded-md border border-dashed border-border bg-muted/30 px-4 py-10 text-center text-sm text-muted-foreground">
-            No messages yet. Say hi to your assistant.
-          </p>
+          <div className="mx-auto flex max-w-3xl flex-col items-center gap-3 rounded-md border border-dashed border-border bg-muted/30 px-4 py-10 text-center">
+            <span
+              className="flex h-12 w-12 items-center justify-center rounded-full text-base font-semibold text-white ring-2"
+              style={{ backgroundColor: accent.solid, '--tw-ring-color': accent.border } as React.CSSProperties}
+              aria-hidden
+            >
+              {initials}
+            </span>
+            <p className="text-sm text-muted-foreground">
+              No messages yet. Say hi to{' '}
+              <span className="font-medium text-foreground">{agentName ?? 'your assistant'}</span>.
+            </p>
+          </div>
         ) : (
           <ul className="mx-auto flex max-w-3xl flex-col gap-3">
             {messages.map((m) => (
               <li
                 key={m.id}
                 className={
-                  'group/msg ' +
-                  (m.direction === 'inbound' ? 'flex justify-end' : 'flex justify-start')
+                  'group/msg flex items-end gap-2 ' +
+                  (m.direction === 'inbound' ? 'justify-end' : 'justify-start')
                 }
               >
+                {m.direction === 'outbound' && (
+                  <span
+                    className="mb-1 flex h-7 w-7 shrink-0 items-center justify-center rounded-full text-[10px] font-semibold text-white"
+                    style={{ backgroundColor: accent.solid }}
+                    title={agentName ?? 'Assistant'}
+                    aria-hidden
+                  >
+                    {initials}
+                  </span>
+                )}
                 <div
                   className={
                     'max-w-[80%] rounded-2xl px-3.5 py-2 text-sm ' +
                     (m.direction === 'inbound'
                       ? 'rounded-tr-sm bg-primary/10 text-foreground'
-                      : 'rounded-tl-sm bg-muted text-foreground')
+                      : 'rounded-tl-sm border-l-2 text-foreground')
+                  }
+                  style={
+                    m.direction === 'outbound'
+                      ? { backgroundColor: accent.soft, borderColor: accent.border }
+                      : undefined
                   }
                 >
                   <div className="prose prose-sm dark:prose-invert max-w-none [&>:first-child]:mt-0 [&>:last-child]:mb-0 [&_pre]:bg-background/60 [&_pre]:text-xs [&_code]:text-xs">

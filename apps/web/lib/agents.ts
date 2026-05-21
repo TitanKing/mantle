@@ -1,5 +1,15 @@
+import { randomUUID } from 'node:crypto';
 import { and, desc, eq } from 'drizzle-orm';
-import { db, agents, type Agent, type AgentMemoryConfig, type AgentParams } from '@mantle/db';
+import {
+  db,
+  agents,
+  applyPersonaUpdate,
+  noteRef,
+  type Agent,
+  type AgentMemoryConfig,
+  type AgentParams,
+  type PersonaNote,
+} from '@mantle/db';
 
 /**
  * Server-side CRUD wrapper for the `agents` table. Every call is owner-scoped
@@ -21,6 +31,10 @@ export type AgentSummary = {
   skillSlugs: string[];
   memoryConfig: AgentMemoryConfig;
   params: AgentParams;
+  /** Layer-1 persona: what the agent has *learned* about the user (written by
+   *  the reflector + the update_persona tool). Includes the soft-retired audit
+   *  tail — the UI filters with activeNotes(). */
+  personaNotes: PersonaNote[];
   priority: number;
   enabled: boolean;
   lastUsedAt: string | null;
@@ -44,6 +58,7 @@ function toSummary(a: Agent): AgentSummary {
     skillSlugs: a.skillSlugs ?? [],
     memoryConfig: a.memoryConfig ?? {},
     params: a.params ?? {},
+    personaNotes: (a.personaNotes ?? []) as PersonaNote[],
     priority: a.priority,
     enabled: a.enabled,
     lastUsedAt: a.lastUsedAt?.toISOString() ?? null,
@@ -170,4 +185,102 @@ export async function deleteAgent(userId: string, id: string): Promise<boolean> 
     .where(and(eq(agents.id, id), eq(agents.ownerId, userId)))
     .returning({ id: agents.id });
   return rows.length > 0;
+}
+
+/* ---------------------------------------------------------------------------
+ * Persona-note curation (Layer-1 persona, the "what it has learned" half).
+ *
+ * Notes are normally written by the reflector (passive) and the update_persona
+ * tool (in-turn). These let the human operator curate them from
+ * /settings/agents. We respect the soft-retire invariant: edits supersede,
+ * retire never deletes, restore un-retires — persona has no immutable source
+ * to re-derive from, so every change stays reversible.
+ * ------------------------------------------------------------------------- */
+
+/** Load+save guard: runs `transform` on the agent's current notes and persists
+ *  the result, owner-scoped. Returns the refreshed summary (or null if the
+ *  agent isn't this owner's). */
+async function mutatePersonaNotes(
+  userId: string,
+  id: string,
+  transform: (notes: PersonaNote[]) => PersonaNote[],
+): Promise<AgentSummary | null> {
+  const [row] = await db
+    .select({ id: agents.id, personaNotes: agents.personaNotes })
+    .from(agents)
+    .where(and(eq(agents.id, id), eq(agents.ownerId, userId)))
+    .limit(1);
+  if (!row) return null;
+  const next = transform((row.personaNotes ?? []) as PersonaNote[]);
+  const [updated] = await db
+    .update(agents)
+    .set({ personaNotes: next, updatedAt: new Date() })
+    .where(eq(agents.id, row.id))
+    .returning();
+  return updated ? toSummary(updated) : null;
+}
+
+export type PersonaNoteKind = PersonaNote['kind'];
+
+/** Add a human-authored note. */
+export function addPersonaNote(
+  userId: string,
+  id: string,
+  input: { kind: PersonaNoteKind; content: string },
+): Promise<AgentSummary | null> {
+  return mutatePersonaNotes(userId, id, (notes) =>
+    applyPersonaUpdate(
+      notes,
+      { add: { kind: input.kind, content: input.content } },
+      new Date().toISOString(),
+      randomUUID(),
+    ).notes,
+  );
+}
+
+/** Edit a note = supersede the old one with a new note carrying the edited
+ *  text (keeps the original in the audit tail). */
+export function editPersonaNote(
+  userId: string,
+  id: string,
+  input: { ref: string; kind: PersonaNoteKind; content: string },
+): Promise<AgentSummary | null> {
+  return mutatePersonaNotes(userId, id, (notes) =>
+    applyPersonaUpdate(
+      notes,
+      { add: { kind: input.kind, content: input.content }, supersedeRefs: [input.ref] },
+      new Date().toISOString(),
+      randomUUID(),
+    ).notes,
+  );
+}
+
+/** Soft-retire a note (hidden from future turns, kept for audit). */
+export function retirePersonaNote(
+  userId: string,
+  id: string,
+  ref: string,
+): Promise<AgentSummary | null> {
+  return mutatePersonaNotes(userId, id, (notes) =>
+    applyPersonaUpdate(notes, { removeRefs: [ref] }, new Date().toISOString(), randomUUID()).notes,
+  );
+}
+
+/** Un-retire a previously retired note (only the human can do this; the
+ *  reflector/tool only ever append or retire). */
+export function restorePersonaNote(
+  userId: string,
+  id: string,
+  ref: string,
+): Promise<AgentSummary | null> {
+  return mutatePersonaNotes(userId, id, (notes) =>
+    notes.map((n) => {
+      if (noteRef(n) !== ref || !n.retiredAt) return n;
+      const { retiredAt, retiredReason, supersededBy, ...rest } = n;
+      void retiredAt;
+      void retiredReason;
+      void supersededBy;
+      return rest;
+    }),
+  );
 }
