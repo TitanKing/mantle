@@ -33,6 +33,7 @@ import { WORKER_DELEGATION_TOOLS } from './builtins-workers';
 import { EVENT_TOOLS } from './builtins-events';
 import { TODO_TOOLS } from './builtins-todos';
 import { PERSONA_TOOLS } from './builtins-persona';
+import { TERMINAL_TOOLS } from './builtins-terminal';
 
 function str(v: unknown): string {
   return typeof v === 'string' ? v : '';
@@ -867,4 +868,8 @@ export const BUILTIN_TOOLS: BuiltinToolDef[] = [
   // notes when the user explicitly asks ("be more professional").
   // Scoped resolution + soft-retire; pure logic in @mantle/db.
   ...PERSONA_TOOLS,
+  // Free-form terminal — UNRESTRICTED shell access for a power-user's
+  // dedicated coder/ops agent (not for the untrusted-inbound responder).
+  // See builtins-terminal.ts for the safety rationale.
+  ...TERMINAL_TOOLS,
 ];
