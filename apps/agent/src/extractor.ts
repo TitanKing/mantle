@@ -924,17 +924,24 @@ export async function extractNode(nodeId: string, ownerId: string): Promise<void
       await step(
         { name: 'update_index', kind: 'db_write', input: { entities: uniqueMentions.length } },
         async (h) => {
+          // MERGE onto the LIVE row (jsonb `||`), not a spread of the
+          // in-memory `existingData` captured at function start. For image
+          // nodes, visionIngestImageNode ran in between and persisted
+          // `data.vision_model` (+ `data.text`); a replacing write keyed off
+          // the stale snapshot dropped vision_model (file-ingestion.md V2).
+          // The merge preserves any key written after the snapshot while
+          // still overwriting the index fields below.
+          const indexPatch: Record<string, unknown> = {
+            summary,
+            summary_model: worker.model,
+            summary_at: new Date().toISOString(),
+            entities: uniqueMentions.map((m) => m.name),
+            ...(persistedText ? { text: persistedText } : {}),
+          };
           await db
             .update(nodes)
             .set({
-              data: {
-                ...existingData,
-                summary,
-                summary_model: worker.model,
-                summary_at: new Date().toISOString(),
-                entities: uniqueMentions.map((m) => m.name),
-                ...(persistedText ? { text: persistedText } : {}),
-              },
+              data: sql`${nodes.data} || ${JSON.stringify(indexPatch)}::jsonb`,
               ...(embedding ? { embedding } : {}),
               updatedAt: new Date(),
             })
