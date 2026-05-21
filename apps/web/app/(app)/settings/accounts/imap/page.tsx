@@ -9,8 +9,8 @@ export default async function AddImapAccountPage() {
       <header className="space-y-1">
         <h1 className="text-2xl font-semibold">Add IMAP account</h1>
         <p className="text-sm text-muted-foreground">
-          Mantle will scan the last 12 months of headers to populate your senders list. Bodies and
-          attachments are only stored for senders you approve.
+          Mantle scans recent headers (you choose how far back below) to populate your senders list.
+          Bodies and attachments are only stored for senders you approve.
         </p>
       </header>
       <ImapForm />

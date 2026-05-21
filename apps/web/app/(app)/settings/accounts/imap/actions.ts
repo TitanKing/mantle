@@ -2,22 +2,29 @@
 
 import { redirect } from 'next/navigation';
 import { revalidatePath } from 'next/cache';
+import { and, eq } from 'drizzle-orm';
 import { z } from 'zod';
 import { seal } from '@mantle/crypto';
 import { db, emailAccounts } from '@mantle/db';
-import { probeImapConnection } from '@mantle/email';
+import { probeImapConnection, unsealImapPassword } from '@mantle/email';
 import { requireOwner } from '@/lib/auth';
 import { accountBranchPath } from '@/lib/account-branch';
 
 const FormSchema = z.object({
-  address: z.string().email(),
+  // Present only when editing an existing account.
+  accountId: z.string().uuid().optional(),
+  // Optional because edit uses the stored address (the account identity).
+  address: z.string().email().optional(),
   displayName: z.string().optional(),
   host: z.string().min(1),
   port: z.coerce.number().int().min(1).max(65535).default(993),
   secure: z
     .union([z.literal('on'), z.literal('true'), z.literal('false'), z.boolean()])
     .transform((v) => v === true || v === 'on' || v === 'true'),
-  password: z.string().min(1),
+  // Optional: blank on edit means "keep the stored password".
+  password: z.string().optional(),
+  // How far back the first scan reaches, in days. Default ≈ the old 12 months.
+  firstScanDays: z.coerce.number().int().min(1).max(3650).default(365),
 });
 
 export type ImapFormResult =
@@ -28,12 +35,14 @@ export type ImapFormResult =
 
 function parseForm(form: FormData) {
   return FormSchema.safeParse({
-    address: form.get('address'),
+    accountId: form.get('accountId') || undefined,
+    address: form.get('address') || undefined,
     displayName: form.get('displayName') ?? undefined,
     host: form.get('host'),
     port: form.get('port'),
     secure: form.get('secure') ?? false,
-    password: form.get('password'),
+    password: form.get('password') || undefined,
+    firstScanDays: form.get('firstScanDays'),
   });
 }
 
@@ -59,12 +68,57 @@ export async function handleImapForm(
   if (!parsed.success) {
     return { intent, ok: false, error: parsed.error.issues[0]?.message ?? 'Invalid input' };
   }
-  const { address, displayName, host, port, secure, password } = parsed.data;
+  const { accountId, address, displayName, host, port, secure, password, firstScanDays } = parsed.data;
+
+  // Edit mode: load the target account (owner-scoped). Its stored address is
+  // the identity — we never change it (it's the unique key + the seal AAD).
+  const existing = accountId
+    ? (
+        await db
+          .select()
+          .from(emailAccounts)
+          .where(and(eq(emailAccounts.id, accountId), eq(emailAccounts.userId, user.id)))
+          .limit(1)
+      )[0]
+    : undefined;
+  if (accountId && !existing) {
+    return { intent, ok: false, error: 'Account not found.' };
+  }
+
+  const effectiveAddress = existing?.address ?? address;
+  if (!effectiveAddress) {
+    return { intent, ok: false, error: 'Email address is required.' };
+  }
+
+  // Resolve the password to probe/save with. On edit a blank field reuses the
+  // stored one; on add it's required.
+  let effectivePassword = password;
+  if (!effectivePassword) {
+    if (existing) {
+      try {
+        effectivePassword = unsealImapPassword(existing);
+      } catch {
+        return {
+          intent,
+          ok: false,
+          error: 'Stored password could not be read — re-enter the app password.',
+        };
+      }
+    } else {
+      return { intent, ok: false, error: 'App password is required.' };
+    }
+  }
 
   // Always probe — for `test` it's the whole point, for `save` it's a guardrail.
   let probe;
   try {
-    probe = await probeImapConnection({ host, port, secure, user: address, pass: password });
+    probe = await probeImapConnection({
+      host,
+      port,
+      secure,
+      user: effectiveAddress,
+      pass: effectivePassword,
+    });
   } catch (err) {
     return { intent, ok: false, error: explainError(err) };
   }
@@ -81,35 +135,60 @@ export async function handleImapForm(
   }
 
   // intent === 'save'
-  const sealed = seal(JSON.stringify({ password }), `imap:${user.id}:${address}`);
-
-  await db
-    .insert(emailAccounts)
-    .values({
-      userId: user.id,
-      provider: 'imap',
-      address,
-      displayName: displayName ?? null,
-      imapHost: host,
-      imapPort: port,
-      imapSecure: secure,
-      imapConfigEnc: sealed.ciphertext,
-      ingestPolicy: 'approve_list',
-      branchPath: accountBranchPath(address),
-    })
-    .onConflictDoUpdate({
-      target: [emailAccounts.userId, emailAccounts.address],
-      set: {
+  if (existing) {
+    // Update connection knobs + history window. Re-seal the password only when
+    // a new one was typed (AAD bound to the unchanged stored address).
+    await db
+      .update(emailAccounts)
+      .set({
+        imapHost: host,
+        imapPort: port,
+        imapSecure: secure,
+        displayName: displayName ?? null,
+        firstScanDays,
+        enabled: true,
+        lastSyncError: null,
+        updatedAt: new Date(),
+        ...(password
+          ? {
+              imapConfigEnc: seal(JSON.stringify({ password }), `imap:${user.id}:${existing.address}`)
+                .ciphertext,
+            }
+          : {}),
+      })
+      .where(and(eq(emailAccounts.id, existing.id), eq(emailAccounts.userId, user.id)));
+  } else {
+    const sealed = seal(JSON.stringify({ password: effectivePassword }), `imap:${user.id}:${effectiveAddress}`);
+    await db
+      .insert(emailAccounts)
+      .values({
+        userId: user.id,
+        provider: 'imap',
+        address: effectiveAddress,
+        displayName: displayName ?? null,
         imapHost: host,
         imapPort: port,
         imapSecure: secure,
         imapConfigEnc: sealed.ciphertext,
-        enabled: true,
-        lastSyncError: null,
-        // branchPath is *not* reset on re-connect — preserves the existing
-        // ltree location for any mail already ingested under it.
-      },
-    });
+        ingestPolicy: 'approve_list',
+        branchPath: accountBranchPath(effectiveAddress),
+        firstScanDays,
+      })
+      .onConflictDoUpdate({
+        target: [emailAccounts.userId, emailAccounts.address],
+        set: {
+          imapHost: host,
+          imapPort: port,
+          imapSecure: secure,
+          imapConfigEnc: sealed.ciphertext,
+          firstScanDays,
+          enabled: true,
+          lastSyncError: null,
+          // branchPath is *not* reset on re-connect — preserves the existing
+          // ltree location for any mail already ingested under it.
+        },
+      });
+  }
 
   revalidatePath('/settings/accounts');
   redirect('/settings/accounts');

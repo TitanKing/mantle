@@ -1,6 +1,6 @@
 import Link from 'next/link';
 import { desc, eq, inArray } from 'drizzle-orm';
-import { Activity, FolderTree, Mail, SlidersHorizontal } from 'lucide-react';
+import { Activity, FolderTree, Mail, Pencil, SlidersHorizontal } from 'lucide-react';
 import { db, emailAccounts, syncRuns, type SyncRun } from '@mantle/db';
 import { requireOwner } from '@/lib/auth';
 import { formatDateTime } from '@/lib/format-datetime';
@@ -144,13 +144,27 @@ export default async function AccountsSettingsPage({
                           </div>
                         </div>
                       )}
-                      <div className="flex items-center gap-1.5">
-                        <SlidersHorizontal className="size-3 shrink-0" aria-hidden />
+                      <div className="flex items-start gap-1.5">
+                        <span className="w-3 shrink-0" aria-hidden />
+                        <div className="min-w-0">
+                          <span className="font-medium text-foreground/70">History:</span>{' '}
+                          first scan reaches back {r.firstScanDays} days
+                        </div>
+                      </div>
+                      <div className="flex items-center gap-3 pt-0.5">
                         <Link
                           href={`/settings/accounts/${r.id}/folders`}
-                          className="text-primary underline-offset-2 hover:underline"
+                          className="inline-flex items-center gap-1.5 text-primary underline-offset-2 hover:underline"
                         >
+                          <SlidersHorizontal className="size-3 shrink-0" aria-hidden />
                           Configure folders
+                        </Link>
+                        <Link
+                          href={`/settings/accounts/${r.id}/edit`}
+                          className="inline-flex items-center gap-1.5 text-primary underline-offset-2 hover:underline"
+                        >
+                          <Pencil className="size-3 shrink-0" aria-hidden />
+                          Edit account
                         </Link>
                       </div>
                     </div>

@@ -9,24 +9,42 @@ import { handleImapForm, type ImapFormResult } from './actions';
 
 const initial: ImapFormResult | undefined = undefined;
 
+/** Existing account passed in for edit mode (never includes the password). */
+export type ImapFormAccount = {
+  id: string;
+  address: string;
+  displayName: string | null;
+  imapHost: string | null;
+  imapPort: number | null;
+  imapSecure: boolean;
+  firstScanDays: number;
+};
+
 /**
+ * Add OR edit an IMAP account. In edit mode the address is fixed (it's the
+ * account identity / encryption AAD) and the password field is optional —
+ * blank keeps the stored one.
+ *
  * React 19 resets uncontrolled inputs after every server action submission,
  * which would blow away everything you just typed when you hit "Test".
  * Keeping inputs controlled in component state side-steps that — typed
  * values survive across test → fix → save cycles.
  */
-export function ImapForm() {
+export function ImapForm({ account }: { account?: ImapFormAccount }) {
+  const isEdit = !!account;
   const [state, formAction, pending] = useActionState(handleImapForm, initial);
 
-  const [address, setAddress] = useState('');
-  const [displayName, setDisplayName] = useState('');
-  const [host, setHost] = useState('');
-  const [port, setPort] = useState(993);
-  const [secure, setSecure] = useState(true);
+  const [address, setAddress] = useState(account?.address ?? '');
+  const [displayName, setDisplayName] = useState(account?.displayName ?? '');
+  const [host, setHost] = useState(account?.imapHost ?? '');
+  const [port, setPort] = useState(account?.imapPort ?? 993);
+  const [secure, setSecure] = useState(account?.imapSecure ?? true);
   const [password, setPassword] = useState('');
+  const [firstScanDays, setFirstScanDays] = useState(account?.firstScanDays ?? 365);
 
   return (
     <form action={formAction} className="space-y-4">
+      {isEdit && <input type="hidden" name="accountId" value={account.id} />}
       <div className="space-y-2">
         <Label htmlFor="address">Email address</Label>
         <Input
@@ -34,10 +52,16 @@ export function ImapForm() {
           name="address"
           type="email"
           placeholder="you@yourdomain.com"
-          required
+          required={!isEdit}
+          disabled={isEdit}
           value={address}
           onChange={(e) => setAddress(e.target.value)}
         />
+        {isEdit && (
+          <p className="text-xs text-muted-foreground">
+            The address can&apos;t be changed. Remove the account and add it again to use a different one.
+          </p>
+        )}
       </div>
       <div className="space-y-2">
         <Label htmlFor="displayName">Display name (optional)</Label>
@@ -95,14 +119,35 @@ export function ImapForm() {
           id="password"
           name="password"
           type="password"
-          required
+          required={!isEdit}
           autoComplete="off"
+          placeholder={isEdit ? 'Leave blank to keep current password' : undefined}
           value={password}
           onChange={(e) => setPassword(e.target.value)}
         />
         <p className="text-xs text-muted-foreground">
-          Use a provider-issued app password (Fastmail, iCloud, Gmail-as-IMAP). Mantle encrypts this at rest
-          with your master key before storing it.
+          {isEdit
+            ? 'Only enter a password if you want to replace the stored one.'
+            : 'Use a provider-issued app password (Fastmail, iCloud, Gmail-as-IMAP). Mantle encrypts this at rest with your master key before storing it.'}
+        </p>
+      </div>
+      <div className="space-y-2">
+        <Label htmlFor="firstScanDays">Scan history (days)</Label>
+        <Input
+          id="firstScanDays"
+          name="firstScanDays"
+          type="number"
+          min={1}
+          max={3650}
+          required
+          value={firstScanDays}
+          onChange={(e) => setFirstScanDays(Number(e.target.value) || 0)}
+        />
+        <p className="text-xs text-muted-foreground">
+          How far back to scan headers on the first sync (e.g. 30 for the last month, 365 for a year).
+          {isEdit
+            ? ' Applies to folders not yet scanned — lowering it later won’t delete already-synced mail.'
+            : ''}
         </p>
       </div>
 
@@ -120,7 +165,7 @@ export function ImapForm() {
           {pending && state?.intent !== 'save' ? 'Testing…' : 'Test connection'}
         </Button>
         <Button type="submit" name="intent" value="save" disabled={pending} className="flex-1">
-          {pending ? 'Saving…' : 'Connect & save'}
+          {pending ? 'Saving…' : isEdit ? 'Save changes' : 'Connect & save'}
         </Button>
       </div>
     </form>
