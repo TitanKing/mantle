@@ -1,8 +1,9 @@
 'use client';
 
-import { useMemo, useState, useTransition } from 'react';
+import { useEffect, useMemo, useState, useTransition } from 'react';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
+import { useRealtime } from '@/components/realtime/use-realtime';
 import { Bell, Calendar, MapPin, Plus, Trash2 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import {
@@ -89,6 +90,16 @@ export function EventsClient({
   });
   const [error, setError] = useState<string | null>(null);
   const [isPending, startTransition] = useTransition();
+
+  // Keep the lists current when the server re-renders (e.g. a realtime refresh
+  // below). The props are the source of truth; local optimistic edits reconcile
+  // on the next refresh.
+  useEffect(() => setUpcoming(initialUpcoming), [initialUpcoming]);
+  useEffect(() => setPast(initialPast), [initialPast]);
+
+  // Live db-watch: when an event node lands (Saskia creates one, a reminder
+  // edit, another tab) the SSE stream fires and we refetch — no manual refresh.
+  useRealtime(['event'], () => router.refresh());
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
