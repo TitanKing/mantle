@@ -1,93 +1,56 @@
 'use client';
 
-import { useEffect, useRef, useState } from 'react';
 import Link from 'next/link';
 import { Activity, AlertCircle, Loader2 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { formatMicroUsd } from '@/lib/traces-format';
+import { ActionIcon } from '@/components/journey/action-icon';
+import {
+  ageSeconds,
+  relativeTime,
+  STALL_THRESHOLD_S,
+  useLiveActivity,
+} from '@/components/journey/use-live-activity';
+import type { ActivityItem } from '@/lib/journey';
 
-type Trace = {
-  id: string;
-  kind: string;
-  status: string;
-  startedAt: string;
-  durationMs: number | null;
-  costMicroUsd: number;
-  tokensIn: number;
-  tokensOut: number;
-  stepCount: number;
-  agentName: string | null;
-  agentSlug: string | null;
-};
+/**
+ * Always-on Activity column in the app shell. Shows what's processing right now
+ * (active-first, with stall detection), anything that recently failed, and the
+ * stream of what entered the brain — human-labelled with outcome counts, not
+ * raw trace kinds. Links into the Journey story. Polls /api/activity every 5s.
+ */
 
-const KIND_LABEL: Record<string, string> = {
-  responder_turn: 'Responder',
-  extractor_run: 'Extractor',
-  summarizer_run: 'Summarizer',
-  reflector_run: 'Reflector',
-  content_ingest: 'Ingest',
-  photo_ingest: 'Photo',
-  heartbeat_fire: 'Heartbeat',
-  manual: 'Manual',
-};
-
-const POLL_MS = 5000;
-
-function relativeTime(iso: string): string {
-  const diff = Date.now() - new Date(iso).getTime();
-  const s = Math.round(diff / 1000);
-  if (s < 60) return `${s}s`;
-  const m = Math.round(s / 60);
-  if (m < 60) return `${m}m`;
-  const h = Math.round(m / 60);
-  if (h < 24) return `${h}h`;
-  return `${Math.round(h / 24)}d`;
+/** "what entered the brain" — outcome summary for content actions. */
+function outcomeText(it: ActivityItem): string | null {
+  if (it.category !== 'content') return null;
+  const parts: string[] = [];
+  if (it.factCount > 0) parts.push(`${it.factCount} fact${it.factCount === 1 ? '' : 's'}`);
+  if (it.mentionCount > 0)
+    parts.push(`${it.mentionCount} ${it.mentionCount === 1 ? 'entity' : 'entities'}`);
+  return parts.length ? parts.join(' · ') : 'indexed';
 }
 
 export function LiveColumn() {
-  const [traces, setTraces] = useState<Trace[]>([]);
-  const [loaded, setLoaded] = useState(false);
-  const [, force] = useState(0);
-  const timer = useRef<ReturnType<typeof setInterval> | null>(null);
-
-  useEffect(() => {
-    let alive = true;
-    const fetchActivity = async () => {
-      try {
-        const res = await fetch('/api/activity', { cache: 'no-store' });
-        if (!res.ok) return;
-        const data = (await res.json()) as { traces: Trace[] };
-        if (alive) setTraces(data.traces);
-      } catch {
-        // network blip — keep last state, try again next tick
-      } finally {
-        if (alive) setLoaded(true);
-      }
-    };
-    void fetchActivity();
-    timer.current = setInterval(fetchActivity, POLL_MS);
-    // Re-render every 15s so relative timestamps stay fresh.
-    const ticker = setInterval(() => force((n) => n + 1), 15000);
-    return () => {
-      alive = false;
-      if (timer.current) clearInterval(timer.current);
-      clearInterval(ticker);
-    };
-  }, []);
-
-  const running = traces.some((t) => t.status === 'running');
+  const { data, loaded, tick } = useLiveActivity();
+  void tick; // re-render cue for relative timestamps
+  const active = data?.active ?? [];
+  const failures = data?.failures ?? [];
+  const recent = data?.recent ?? [];
+  const live = active.length > 0;
+  const hasAny = active.length + failures.length + recent.length > 0;
 
   return (
     <aside className="fixed inset-y-0 right-0 z-30 hidden w-80 flex-col border-l bg-sidebar pt-16 lg:flex">
       <div className="flex items-center justify-between border-b px-4 py-3">
         <div className="flex items-center gap-2">
           <Activity
-            className={cn('size-4', running ? 'animate-pulse text-primary' : 'text-muted-foreground')}
+            className={cn('size-4', live ? 'animate-pulse text-emerald-500' : 'text-muted-foreground')}
             aria-hidden
           />
           <h2 className="text-sm font-semibold">Activity</h2>
+          {live && <span className="text-xs text-emerald-500">{active.length} live</span>}
         </div>
-        <Link href="/traces" className="text-xs text-muted-foreground hover:text-foreground">
+        <Link href="/debug/journey" className="text-xs text-muted-foreground hover:text-foreground">
           View all
         </Link>
       </div>
@@ -97,58 +60,121 @@ export function LiveColumn() {
           <div className="flex items-center justify-center py-12 text-muted-foreground">
             <Loader2 className="size-5 animate-spin" aria-hidden />
           </div>
-        ) : traces.length === 0 ? (
+        ) : !hasAny ? (
           <div className="flex flex-col items-center justify-center px-4 py-12 text-center text-sm text-muted-foreground">
             <Activity className="mb-3 size-10 opacity-30" aria-hidden />
             <p className="font-medium">No recent activity</p>
-            <p className="mt-1 text-xs">
-              Agent runs, ingests, and heartbeats will stream in here.
-            </p>
+            <p className="mt-1 text-xs">Agent runs, ingests, and heartbeats will stream in here.</p>
           </div>
         ) : (
-          <ul className="divide-y divide-border">
-            {traces.map((t) => (
-              <li key={t.id}>
-                <Link
-                  href={`/traces/${t.id}`}
-                  className="flex flex-col gap-1 px-4 py-2.5 transition-colors hover:bg-accent/50"
-                >
-                  <div className="flex items-center gap-2">
-                    <StatusDot status={t.status} />
-                    <span className="text-sm font-medium">{KIND_LABEL[t.kind] ?? t.kind}</span>
-                    <span className="ml-auto text-xs tabular-nums text-muted-foreground">
-                      {relativeTime(t.startedAt)}
-                    </span>
-                  </div>
-                  <div className="flex items-center gap-2 pl-4 text-xs text-muted-foreground">
-                    <span className="truncate">{t.agentName ?? t.agentSlug ?? 'system'}</span>
-                    {t.costMicroUsd > 0 && (
-                      <span className="ml-auto tabular-nums">{formatMicroUsd(t.costMicroUsd)}</span>
-                    )}
-                  </div>
-                  {t.status === 'error' && (
-                    <div className="flex items-center gap-1 pl-4 text-xs text-destructive">
-                      <AlertCircle className="size-3" aria-hidden /> failed
+          <>
+            {active.length > 0 && (
+              <Section label="Active now">
+                {active.map((it) => {
+                  const stalled = ageSeconds(it.startedAt) > STALL_THRESHOLD_S;
+                  return (
+                    <Row key={it.traceId} it={it}>
+                      <div className="flex items-center gap-2">
+                        <Loader2
+                          className={cn(
+                            'size-3.5 shrink-0',
+                            stalled ? 'text-amber-500' : 'animate-spin text-emerald-500',
+                          )}
+                          aria-hidden
+                        />
+                        <ActionIcon iconKey={it.iconKey} className="size-3.5 shrink-0 text-muted-foreground" />
+                        <span className="truncate text-sm font-medium">{it.label}</span>
+                        <span className="ml-auto shrink-0 text-xs tabular-nums text-muted-foreground">
+                          {relativeTime(it.startedAt)}
+                        </span>
+                      </div>
+                      {stalled && (
+                        <div className="pl-5 text-xs text-amber-600 dark:text-amber-400">
+                          running unusually long — may be stalled
+                        </div>
+                      )}
+                    </Row>
+                  );
+                })}
+              </Section>
+            )}
+
+            {failures.length > 0 && (
+              <Section label="Needs attention">
+                {failures.map((it) => (
+                  <Row key={it.traceId} it={it}>
+                    <div className="flex items-center gap-2">
+                      <AlertCircle className="size-3.5 shrink-0 text-destructive" aria-hidden />
+                      <ActionIcon iconKey={it.iconKey} className="size-3.5 shrink-0 text-destructive" />
+                      <span className="truncate text-sm font-medium">{it.label}</span>
+                      <span className="ml-auto shrink-0 text-xs tabular-nums text-muted-foreground">
+                        {relativeTime(it.startedAt)}
+                      </span>
                     </div>
-                  )}
-                </Link>
-              </li>
-            ))}
-          </ul>
+                    <div className="pl-5 text-xs text-destructive">failed</div>
+                  </Row>
+                ))}
+              </Section>
+            )}
+
+            {recent.length > 0 && (
+              <Section label="Recent">
+                {recent.map((it) => {
+                  const outcome = outcomeText(it);
+                  return (
+                    <Row key={it.traceId} it={it}>
+                      <div className="flex items-center gap-2">
+                        <ActionIcon iconKey={it.iconKey} className="size-3.5 shrink-0 text-muted-foreground" />
+                        <span className="truncate text-sm font-medium">{it.label}</span>
+                        <span className="ml-auto shrink-0 text-xs tabular-nums text-muted-foreground">
+                          {relativeTime(it.startedAt)}
+                        </span>
+                      </div>
+                      <div className="flex items-center gap-2 pl-5 text-xs text-muted-foreground">
+                        {it.title && <span className="truncate">{it.title}</span>}
+                        {outcome && (
+                          <span className="ml-auto shrink-0 rounded bg-emerald-500/10 px-1.5 py-0.5 text-emerald-700 dark:text-emerald-300">
+                            {outcome}
+                          </span>
+                        )}
+                        {!outcome && it.costMicroUsd > 0 && (
+                          <span className="ml-auto shrink-0 tabular-nums">
+                            {formatMicroUsd(it.costMicroUsd)}
+                          </span>
+                        )}
+                      </div>
+                    </Row>
+                  );
+                })}
+              </Section>
+            )}
+          </>
         )}
       </div>
     </aside>
   );
 }
 
-function StatusDot({ status }: { status: string }) {
-  const color =
-    status === 'success'
-      ? 'bg-chart-2'
-      : status === 'error'
-        ? 'bg-destructive'
-        : status === 'running'
-          ? 'bg-primary animate-pulse'
-          : 'bg-muted-foreground/40';
-  return <span className={cn('size-2 shrink-0 rounded-full', color)} aria-label={status} />;
+function Section({ label, children }: { label: string; children: React.ReactNode }) {
+  return (
+    <div>
+      <div className="sticky top-0 z-10 bg-sidebar/95 px-4 py-1.5 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground backdrop-blur">
+        {label}
+      </div>
+      <ul className="divide-y divide-border">{children}</ul>
+    </div>
+  );
+}
+
+function Row({ it, children }: { it: ActivityItem; children: React.ReactNode }) {
+  return (
+    <li>
+      <Link
+        href={`/debug/journey/${it.traceId}`}
+        className="flex flex-col gap-0.5 px-4 py-2.5 transition-colors hover:bg-accent/50"
+      >
+        {children}
+      </Link>
+    </li>
+  );
 }

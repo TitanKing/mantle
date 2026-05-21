@@ -7,7 +7,7 @@ import { formatDuration, formatMicroUsd } from '@/lib/traces-format';
 import { getJourney } from '@/lib/journey';
 import { deriveAction, sourceLabel } from '@/lib/journey-format';
 import { DebugTabs } from '../../debug-tabs';
-import { ActionIcon } from '../action-icon';
+import { ActionIcon } from '@/components/journey/action-icon';
 
 /**
  * Journey detail — the reaction story for one action: the trace step timeline,

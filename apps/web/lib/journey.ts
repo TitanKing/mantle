@@ -25,6 +25,18 @@ export type ActivityItem = ActionPresentation & {
   title: string | null;
   subjectKind: string | null;
   subjectId: string | null;
+  /** Outcome — what entered the brain. Facts mined + entities linked from this
+   *  action's node (0 for non-content / dialog actions). */
+  factCount: number;
+  mentionCount: number;
+};
+
+/** Live snapshot for the always-on Activity surfaces: what's running right now,
+ *  what recently succeeded, and what failed. */
+export type LiveActivity = {
+  active: ActivityItem[];
+  recent: ActivityItem[];
+  failures: ActivityItem[];
 };
 
 export type LandedLayers = {
@@ -50,28 +62,54 @@ function strOf(v: unknown): string | null {
   return typeof v === 'string' && v.length > 0 ? v : null;
 }
 
-export async function listActivity(
-  userId: string,
-  opts: {
-    sinceHours?: number;
-    limit?: number;
-    category?: ActionCategory;
-    /** Hide no-op skips (body_too_short, already_extracted, no_new_activity, …)
-     *  — show only traces that actually did work. */
-    processedOnly?: boolean;
-  } = {},
-): Promise<ActivityItem[]> {
-  const limit = Math.min(opts.limit ?? 80, 300);
-  const conds = [eq(traces.ownerId, userId)];
-  if (opts.sinceHours && opts.sinceHours > 0) {
-    conds.push(gte(traces.startedAt, new Date(Date.now() - opts.sinceHours * 3600_000)));
-  }
-  if (opts.processedOnly) {
-    conds.push(ne(traces.status, 'skipped'));
-  }
+/** Shared row → ActivityItem mapping (presentation + outcome counts). */
+function mapActivityRow(r: {
+  id: string;
+  kind: string;
+  status: string;
+  startedAt: Date;
+  durationMs: number | null;
+  costMicroUsd: number | null;
+  stepCount: number | null;
+  subjectKind: string | null;
+  subjectId: string | null;
+  data: unknown;
+  nodeType: string | null;
+  nodeTitle: string | null;
+  nodeData: unknown;
+  factCount: number | null;
+  mentionCount: number | null;
+}): ActivityItem {
+  const traceData = (r.data ?? {}) as Record<string, unknown>;
+  const nodeData = (r.nodeData ?? {}) as Record<string, unknown>;
+  const source = strOf(traceData.source);
+  const mime = strOf(nodeData.mimeType) ?? strOf(nodeData.mime);
+  const pres = deriveAction({ kind: r.kind, nodeType: r.nodeType, mime, source });
+  const title = r.nodeTitle ?? strOf(traceData.filename) ?? strOf(traceData.title);
+  return {
+    ...pres,
+    traceId: r.id,
+    kind: r.kind,
+    status: r.status,
+    startedAt: r.startedAt.toISOString(),
+    durationMs: r.durationMs,
+    costMicroUsd: r.costMicroUsd ?? 0,
+    stepCount: r.stepCount ?? 0,
+    title,
+    subjectKind: r.subjectKind,
+    subjectId: r.subjectId,
+    factCount: r.factCount ?? 0,
+    mentionCount: r.mentionCount ?? 0,
+  };
+}
 
-  // Over-fetch a little so category filtering (done in JS, since it depends on
-  // the derived presentation) still returns a useful page.
+/** Core query shared by the feed + the live snapshot. The outcome counts are
+ *  correlated subqueries on the indexed source_node_id / target_id columns. */
+async function queryActivity(
+  userId: string,
+  extraConds: ReturnType<typeof eq>[],
+  limit: number,
+): Promise<ActivityItem[]> {
   const rows = await db
     .select({
       id: traces.id,
@@ -87,45 +125,62 @@ export async function listActivity(
       nodeType: nodes.type,
       nodeTitle: nodes.title,
       nodeData: nodes.data,
+      factCount: sql<number>`(select count(*)::int from ${facts} where ${facts.sourceNodeId} = ${traces.subjectId} and ${facts.validTo} is null)`,
+      mentionCount: sql<number>`(select count(*)::int from ${entityEdges} where ${entityEdges.targetId} = ${traces.subjectId} and ${entityEdges.targetKind} = 'node' and ${entityEdges.relation} = 'mentioned_in')`,
     })
     .from(traces)
     .leftJoin(
       nodes,
       and(eq(traces.subjectId, nodes.id), eq(traces.subjectKind, sql`'node'`), eq(nodes.ownerId, userId)),
     )
-    .where(and(...conds))
+    .where(and(eq(traces.ownerId, userId), ...extraConds))
     .orderBy(desc(traces.startedAt))
-    .limit(opts.category ? limit * 3 : limit);
+    .limit(limit);
+  return rows.map((r) => mapActivityRow(r as Parameters<typeof mapActivityRow>[0]));
+}
 
-  const items = rows.map((r) => {
-    const traceData = (r.data ?? {}) as Record<string, unknown>;
-    const nodeData = (r.nodeData ?? {}) as Record<string, unknown>;
-    const source = strOf(traceData.source);
-    const mime = strOf(nodeData.mimeType) ?? strOf(nodeData.mime);
-    const pres = deriveAction({
-      kind: r.kind as string,
-      nodeType: (r.nodeType as string | null) ?? null,
-      mime,
-      source,
-    });
-    const title = r.nodeTitle ?? strOf(traceData.filename) ?? strOf(traceData.title);
-    return {
-      ...pres,
-      traceId: r.id,
-      kind: r.kind as string,
-      status: r.status as string,
-      startedAt: r.startedAt.toISOString(),
-      durationMs: r.durationMs,
-      costMicroUsd: r.costMicroUsd ?? 0,
-      stepCount: r.stepCount ?? 0,
-      title,
-      subjectKind: r.subjectKind,
-      subjectId: r.subjectId,
-    } satisfies ActivityItem;
-  });
-
+export async function listActivity(
+  userId: string,
+  opts: {
+    sinceHours?: number;
+    limit?: number;
+    category?: ActionCategory;
+    /** Hide no-op skips (body_too_short, already_extracted, no_new_activity, …)
+     *  — show only traces that actually did work. */
+    processedOnly?: boolean;
+  } = {},
+): Promise<ActivityItem[]> {
+  const limit = Math.min(opts.limit ?? 80, 300);
+  const extra: ReturnType<typeof eq>[] = [];
+  if (opts.sinceHours && opts.sinceHours > 0) {
+    extra.push(gte(traces.startedAt, new Date(Date.now() - opts.sinceHours * 3600_000)) as never);
+  }
+  if (opts.processedOnly) {
+    extra.push(ne(traces.status, 'skipped') as never);
+  }
+  // Over-fetch when filtering by category, which depends on the derived
+  // presentation (computed in JS, not the DB).
+  const items = await queryActivity(userId, extra, opts.category ? limit * 3 : limit);
   const filtered = opts.category ? items.filter((i) => i.category === opts.category) : items;
   return filtered.slice(0, limit);
+}
+
+/** The always-on live snapshot: in-flight runs, recent successes (what entered
+ *  the brain), and recent failures. */
+export async function getLiveActivity(userId: string): Promise<LiveActivity> {
+  const [active, recent, failures] = await Promise.all([
+    queryActivity(userId, [eq(traces.status, 'running') as never], 12),
+    queryActivity(userId, [eq(traces.status, 'success') as never], 30),
+    queryActivity(
+      userId,
+      [
+        eq(traces.status, 'error') as never,
+        gte(traces.startedAt, new Date(Date.now() - 24 * 3600_000)) as never,
+      ],
+      12,
+    ),
+  ]);
+  return { active, recent, failures };
 }
 
 /** A single action + the brain layers it produced. */

@@ -6,7 +6,8 @@ import { formatDuration, formatMicroUsd } from '@/lib/traces-format';
 import { listActivity } from '@/lib/journey';
 import { PIPELINE_LEGEND, type ActionCategory } from '@/lib/journey-format';
 import { DebugTabs } from '../debug-tabs';
-import { ActionIcon } from './action-icon';
+import { ActionIcon } from '@/components/journey/action-icon';
+import { ActiveNow } from '@/components/journey/active-now';
 
 /**
  * Journey view — Activity → Reaction. A feed of actions (you uploaded a PDF,
@@ -65,6 +66,9 @@ export default async function JourneyPage({
           digestion and which memory layers it wrote.
         </p>
       </header>
+
+      {/* Always-on live header: what's running now + recent failures */}
+      <ActiveNow />
 
       {/* Pipeline legend — what lands where */}
       <div className="grid gap-2 sm:grid-cols-3">

@@ -1,13 +1,17 @@
 import { NextResponse } from 'next/server';
 import { requireOwner } from '@/lib/auth';
-import { listTraces } from '@/lib/traces';
+import { getLiveActivity } from '@/lib/journey';
 
 /**
- * Recent agent/system activity for the live column in the app shell.
- * Polled client-side; owner-scoped via requireOwner.
+ * Live activity for the always-on Activity surfaces (the app-shell column and
+ * the /debug/journey header). Returns what's running now, what recently
+ * succeeded (what entered the brain), and recent failures — human-labelled +
+ * with outcome counts. Polled client-side; owner-scoped via requireOwner.
  */
+export const dynamic = 'force-dynamic';
+
 export async function GET() {
   const user = await requireOwner();
-  const rows = await listTraces(user.id, { sinceHours: 24, limit: 40 });
-  return NextResponse.json({ traces: rows });
+  const live = await getLiveActivity(user.id);
+  return NextResponse.json(live, { headers: { 'Cache-Control': 'no-store' } });
 }

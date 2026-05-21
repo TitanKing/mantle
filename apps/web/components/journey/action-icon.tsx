@@ -32,7 +32,8 @@ const ICONS: Record<ActionIconKey, LucideIcon> = {
   tool: Wrench,
 };
 
-/** Renders the lucide icon for an action's iconKey. Pure server component. */
+/** Renders the lucide icon for an action's iconKey. Shared by the Journey
+ *  pages and the always-on Activity column. */
 export function ActionIcon({ iconKey, className }: { iconKey: ActionIconKey; className?: string }) {
   const Icon = ICONS[iconKey] ?? File;
   return <Icon className={className} />;
