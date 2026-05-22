@@ -75,9 +75,11 @@ import {
   deleteTodo,
   getEvent,
   getNote,
+  getPage,
   getTodo,
   listEvents,
   listNotes,
+  listPages,
   listTodos,
   updateEvent,
   updateNote,
@@ -815,6 +817,36 @@ server.tool(
   async ({ id }) => {
     const ok = await deleteNote(OWNER_ID!, id);
     return { content: [{ type: 'text', text: ok ? 'deleted' : 'not found' }] };
+  },
+);
+
+// ─── Pages (read-only) ─────────────────────────────────────────────────────
+//
+// Rich TipTap documents (type='page'). Read-only over MCP for now — pages are
+// authored in the web editor; the assistant finds and reads them. page_list
+// omits the document body; page_get returns the full ProseMirror JSON.
+
+server.tool(
+  'page_list',
+  "List the owner's pages. Optional `query` substring-matches title/body/summary; `tag` filters to pages carrying that tag. Bodies are omitted — use page_get for the full document.",
+  {
+    query: z.string().optional(),
+    tag: z.string().optional(),
+  },
+  async ({ query, tag }) => {
+    const rows = await listPages(OWNER_ID!, { query, tag });
+    return { content: [{ type: 'text', text: JSON.stringify(rows, null, 2) }] };
+  },
+);
+
+server.tool(
+  'page_get',
+  'Get a single page by id, including its full ProseMirror/TipTap document.',
+  { id: z.string() },
+  async ({ id }) => {
+    const row = await getPage(OWNER_ID!, id);
+    if (!row) return { content: [{ type: 'text', text: 'not found' }] };
+    return { content: [{ type: 'text', text: JSON.stringify(row, null, 2) }] };
   },
 );
 
