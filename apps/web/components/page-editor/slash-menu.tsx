@@ -11,6 +11,9 @@ import {
 import type { Editor, Range } from '@tiptap/core';
 import {
   Code2,
+  Columns2,
+  Columns3,
+  Columns4,
   Heading1,
   Heading2,
   Heading3,
@@ -23,6 +26,7 @@ import {
   type LucideIcon,
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
+import { columnsContent } from './column';
 
 export type SlashItem = {
   title: string;
@@ -131,6 +135,33 @@ const ITEMS: SlashItem[] = [
     keywords: ['hr', 'rule', 'separator', '---'],
     command: ({ editor, range }) =>
       editor.chain().focus().deleteRange(range).setHorizontalRule().run(),
+  },
+  {
+    group: 'Columns',
+    title: '2 columns',
+    description: 'Two side-by-side columns.',
+    icon: Columns2,
+    keywords: ['column', 'grid', 'layout', 'split', '2'],
+    command: ({ editor, range }) =>
+      editor.chain().focus().deleteRange(range).insertContent(columnsContent(2)).run(),
+  },
+  {
+    group: 'Columns',
+    title: '3 columns',
+    description: 'Three side-by-side columns.',
+    icon: Columns3,
+    keywords: ['column', 'grid', 'layout', 'split', '3'],
+    command: ({ editor, range }) =>
+      editor.chain().focus().deleteRange(range).insertContent(columnsContent(3)).run(),
+  },
+  {
+    group: 'Columns',
+    title: '4 columns',
+    description: 'Four side-by-side columns.',
+    icon: Columns4,
+    keywords: ['column', 'grid', 'layout', 'split', '4'],
+    command: ({ editor, range }) =>
+      editor.chain().focus().deleteRange(range).insertContent(columnsContent(4)).run(),
   },
 ];
 

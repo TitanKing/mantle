@@ -3124,3 +3124,27 @@
 .ProseMirror blockquote p:last-of-type::after {
   content: none;
 }
+
+/* Pages multi-column layout (2–4 equal columns). Flex row that stacks on
+   narrow widths (mobile / narrow public pages). */
+.ProseMirror .column-list {
+  display: flex;
+  gap: 1.5rem;
+  margin-block: 1rem;
+}
+.ProseMirror .column-list > .column {
+  flex: 1 1 0;
+  min-width: 0;
+}
+.ProseMirror .column > :first-child {
+  margin-top: 0;
+}
+.ProseMirror .column > :last-child {
+  margin-bottom: 0;
+}
+@media (max-width: 640px) {
+  .ProseMirror .column-list {
+    flex-direction: column;
+    gap: 0.5rem;
+  }
+}

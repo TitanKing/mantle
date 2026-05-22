@@ -27,6 +27,8 @@ const BLOCK_TYPES = new Set([
   'orderedList',
   'taskList',
   'callout',
+  'columnList',
+  'column',
   'horizontalRule',
   'table',
   'tableRow',
