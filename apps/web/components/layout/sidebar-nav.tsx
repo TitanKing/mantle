@@ -4,6 +4,7 @@ import Link from 'next/link';
 import { usePathname } from 'next/navigation';
 import {
   Activity,
+  BookText,
   Bot,
   CalendarDays,
   CheckSquare,
@@ -61,6 +62,7 @@ export function SidebarNav({
         { name: 'Assistant', href: '/assistant', icon: MessageCircle },
         { name: 'Files', href: '/files', icon: FolderTree },
         { name: 'Notes', href: '/notes', icon: FileText },
+        { name: 'Pages', href: '/pages', icon: BookText },
         { name: 'Todos', href: '/todos', icon: CheckSquare },
         { name: 'Events', href: '/events', icon: CalendarDays },
         { name: 'Secrets', href: '/secrets', icon: Lock },
