@@ -5,7 +5,7 @@ import Link from 'next/link';
 import { usePathname, useRouter } from 'next/navigation';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
-import { ChevronLeft, ChevronRight, FileText, Pencil, Plus, Search, Sparkles, Trash2 } from 'lucide-react';
+import { ChevronLeft, ChevronRight, FileText, Pencil, Plus, Search, Trash2 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import {
   Dialog,
@@ -405,15 +405,6 @@ function NotePreview({ note, onDelete }: { note: NoteRow; onDelete: () => void }
           <p className="text-sm italic text-muted-foreground">No content yet.</p>
         )}
       </article>
-
-      {note.summary && (
-        <aside className="rounded-md border border-border bg-muted/40 p-3">
-          <div className="mb-1 flex items-center gap-1.5 text-xs font-medium text-muted-foreground">
-            <Sparkles className="size-3.5" aria-hidden /> Indexed summary
-          </div>
-          <p className="text-sm text-muted-foreground">{note.summary}</p>
-        </aside>
-      )}
 
       <div className="border-t border-border pt-3 text-xs text-muted-foreground">
         Updated {formatDateTime(note.updatedAt)} · created {formatDateTime(note.createdAt)}
