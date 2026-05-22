@@ -1,4 +1,5 @@
 import StarterKit from '@tiptap/starter-kit';
+import Placeholder from '@tiptap/extension-placeholder';
 import type { Extensions } from '@tiptap/react';
 
 /**
@@ -6,12 +7,20 @@ import type { Extensions } from '@tiptap/react';
  * and the read-only renderer (`PageView`) MUST use the same extension set, or
  * a doc authored in one renders wrong in the other.
  *
- * Phase 3a is StarterKit only (paragraphs, headings, lists, quote, code,
- * marks, history). Custom nodes — callout, image/file embed, icon, mentions —
- * land in 3b/3c and get appended here.
+ * The editor itself is "invisible" — no chrome. Formatting comes from markdown
+ * shortcuts (StarterKit input rules), the selection bubble menu, and (next
+ * slice) the slash menu. The Placeholder gives the empty-canvas hint.
+ *
+ * Custom nodes — callout, image/file embed, toggle, mentions — land in later
+ * slices and get appended here.
  */
 export const pageExtensions: Extensions = [
   StarterKit.configure({
     heading: { levels: [1, 2, 3] },
+  }),
+  Placeholder.configure({
+    // Only the first empty line shows it (showOnlyWhenEditable defaults true,
+    // so the read-only PageView never renders a placeholder).
+    placeholder: 'Write something…',
   }),
 ];

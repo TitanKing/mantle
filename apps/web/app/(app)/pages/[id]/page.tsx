@@ -12,9 +12,7 @@ export default async function PageEditorRoute({
   const { id } = await params;
   const row = await getPage(user.id, id);
   if (!row) notFound();
-  return (
-    <div className="mx-auto max-w-3xl px-6 py-8">
-      <PageDetailClient initial={row} />
-    </div>
-  );
+  // No wrapper: the client owns its width (narrow/wide toggle) and the
+  // chromeless canvas layout.
+  return <PageDetailClient initial={row} />;
 }

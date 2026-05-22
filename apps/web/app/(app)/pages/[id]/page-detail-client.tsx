@@ -2,15 +2,22 @@
 
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { useRouter } from 'next/navigation';
-import type { JSONContent } from '@tiptap/react';
-import { Check, Loader2, Save, Sparkles, Trash2 } from 'lucide-react';
+import type { Editor, JSONContent } from '@tiptap/react';
+import { Check, Loader2, MoreHorizontal, Trash2 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
-import { Label } from '@/components/ui/label';
 import { TagInput } from '@/components/tag-input';
 import { BackLink } from '@/components/layout/back-link';
 import { SetPageTitle } from '@/components/layout/page-title';
 import { PageEditor } from '@/components/page-editor/page-editor';
+import {
+  DropdownMenu,
+  DropdownMenuCheckboxItem,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from '@/components/ui/dropdown-menu';
 import {
   AlertDialog,
   AlertDialogAction,
@@ -22,7 +29,9 @@ import {
   AlertDialogTitle,
 } from '@/components/ui/alert-dialog';
 import { useToast } from '@/components/ui/toast';
-import { formatDateTime } from '@/lib/format-datetime';
+import { cn } from '@/lib/utils';
+
+type PageWidth = 'narrow' | 'wide';
 
 type PageDetail = {
   id: string;
@@ -31,6 +40,7 @@ type PageDetail = {
   tags: string[];
   summary: string | null;
   visibility: 'private' | 'public';
+  width: PageWidth;
   createdAt: string;
   updatedAt: string;
   doc: Record<string, unknown>;
@@ -40,8 +50,7 @@ type SaveState = 'saved' | 'saving' | 'dirty';
 
 // Persistence is cheap (one UPDATE) so it runs often, for durability.
 // Indexing is expensive (extractor: LLM summary + embedding + facts) so it
-// runs only when editing has clearly settled. These two cadences are the
-// whole point — frequent saves, rare re-indexing.
+// runs only when editing has clearly settled. Two cadences on purpose.
 const PERSIST_DEBOUNCE_MS = 1500; // quiet period before a cheap save
 const PERSIST_MAX_WAIT_MS = 8000; // …but never let unsaved text get older than this
 const INDEX_IDLE_MS = 12000; // stop typing this long → re-index once
@@ -52,15 +61,15 @@ export function PageDetailClient({ initial }: { initial: PageDetail }) {
 
   const [title, setTitle] = useState(initial.title);
   const [tags, setTags] = useState<string[]>(initial.tags);
+  const [width, setWidth] = useState<PageWidth>(initial.width);
   const docRef = useRef<JSONContent>(initial.doc as JSONContent);
+  const editorRef = useRef<Editor | null>(null);
 
   const [saveState, setSaveState] = useState<SaveState>('saved');
-  const [updatedAt, setUpdatedAt] = useState(initial.updatedAt);
   const [deleteOpen, setDeleteOpen] = useState(false);
 
   // `persistedRef` = what's in the DB; `indexedRef` = what the extractor last
-  // saw (doc only — title/tags don't affect a page's index). The initial doc
-  // arrives already indexed.
+  // saw (doc only). The initial doc arrives already indexed.
   const persistedRef = useRef(
     JSON.stringify({ title: initial.title, tags: initial.tags, doc: initial.doc }),
   );
@@ -91,10 +100,8 @@ export function PageDetailClient({ initial }: { initial: PageDetail }) {
       setSaveState('dirty');
       return;
     }
-    const { page } = (await res.json()) as { page: PageDetail };
     persistedRef.current = serialized;
     lastPersistAtRef.current = Date.now();
-    setUpdatedAt(page.updatedAt);
     setSaveState('saved');
   }, [title, tags, initial.id, toast]);
 
@@ -118,12 +125,10 @@ export function PageDetailClient({ initial }: { initial: PageDetail }) {
 
   const scheduleSave = useCallback(() => {
     setSaveState('dirty');
-    // Persist: debounce, but force it through if text has been unsaved too long.
     if (persistTimer.current) clearTimeout(persistTimer.current);
     const sincePersist = Date.now() - lastPersistAtRef.current;
     const wait = sincePersist >= PERSIST_MAX_WAIT_MS ? 0 : PERSIST_DEBOUNCE_MS;
     persistTimer.current = setTimeout(() => void persistRef.current(), wait);
-    // Re-index: only after a long idle (every edit pushes it further out).
     if (indexTimer.current) clearTimeout(indexTimer.current);
     indexTimer.current = setTimeout(() => void commitRef.current(), INDEX_IDLE_MS);
   }, []);
@@ -157,11 +162,30 @@ export function PageDetailClient({ initial }: { initial: PageDetail }) {
 
   // Blur of the editor body is a natural "I paused" signal → index now.
   const onEditorBlur = useCallback(() => void commitRef.current(), []);
+  const onEditorReady = useCallback((editor: Editor) => {
+    editorRef.current = editor;
+  }, []);
 
-  const saveNow = async () => {
-    if (persistTimer.current) clearTimeout(persistTimer.current);
-    if (indexTimer.current) clearTimeout(indexTimer.current);
-    await commitRef.current();
+  // Enter in the title drops focus into the body, like Notion.
+  const onTitleKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
+    if (e.key === 'Enter') {
+      e.preventDefault();
+      editorRef.current?.commands.focus('start');
+    }
+  };
+
+  const applyWidth = async (next: PageWidth) => {
+    if (next === width) return;
+    setWidth(next); // optimistic
+    try {
+      await fetch(`/api/pages/${initial.id}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ width: next, reindex: false }),
+      });
+    } catch {
+      // Width is a cosmetic preference; a failed write just reverts next load.
+    }
   };
 
   const confirmDelete = async () => {
@@ -177,71 +201,64 @@ export function PageDetailClient({ initial }: { initial: PageDetail }) {
   };
 
   return (
-    <div className="space-y-4">
+    <div className="flex min-h-full flex-col">
       <SetPageTitle title={title || 'Untitled page'} />
-      <div className="flex items-center justify-between gap-3">
+
+      {/* Whisper-quiet top strip — the only chrome on the canvas. */}
+      <div className="sticky top-0 z-10 flex items-center justify-between gap-3 border-b border-border bg-background/80 px-4 py-2 backdrop-blur">
         <BackLink href="/pages">All pages</BackLink>
-        <SaveIndicator state={saveState} />
+        <div className="flex items-center gap-2">
+          <SaveIndicator state={saveState} />
+          <DropdownMenu>
+            <DropdownMenuTrigger asChild>
+              <Button variant="ghost" size="icon" className="size-8" aria-label="Page options">
+                <MoreHorizontal />
+              </Button>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="end" className="w-44">
+              <DropdownMenuCheckboxItem
+                checked={width === 'wide'}
+                onCheckedChange={(c) => void applyWidth(c ? 'wide' : 'narrow')}
+              >
+                Full width
+              </DropdownMenuCheckboxItem>
+              <DropdownMenuSeparator />
+              <DropdownMenuItem
+                className="text-destructive focus:text-destructive"
+                onSelect={() => setDeleteOpen(true)}
+              >
+                <Trash2 /> Delete page
+              </DropdownMenuItem>
+            </DropdownMenuContent>
+          </DropdownMenu>
+        </div>
       </div>
 
-      <div className="space-y-1.5">
-        <Label htmlFor="title">Title</Label>
+      {/* The canvas — width follows the per-page toggle. */}
+      <div
+        className={cn(
+          'mx-auto w-full px-6 py-10',
+          width === 'wide' ? 'max-w-none' : 'max-w-3xl',
+        )}
+      >
         <Input
-          id="title"
           value={title}
           onChange={(e) => setTitle(e.target.value)}
-          placeholder="Untitled page"
-          className="text-lg font-semibold"
+          onKeyDown={onTitleKeyDown}
+          placeholder="New page"
+          aria-label="Page title"
+          className="h-auto border-0 bg-transparent px-0 py-0 text-3xl font-bold shadow-none placeholder:text-muted-foreground/40 focus-visible:ring-0 md:text-3xl"
         />
-      </div>
-
-      <PageEditor
-        content={initial.doc as JSONContent}
-        onChange={onDocChange}
-        onBlur={onEditorBlur}
-      />
-
-      <div className="space-y-1.5">
-        <Label htmlFor="tags">Tags</Label>
-        <TagInput
-          id="tags"
-          value={tags}
-          onChange={setTags}
-          placeholder="Type and press comma or Enter…"
-        />
-      </div>
-
-      {initial.summary && (
-        <aside className="rounded-md border border-border bg-muted/40 p-3">
-          <div className="mb-1 flex items-center gap-1.5 text-xs font-medium text-muted-foreground">
-            <Sparkles className="size-3.5" aria-hidden /> Indexed summary
-          </div>
-          <p className="text-sm text-muted-foreground">{initial.summary}</p>
-        </aside>
-      )}
-
-      <div className="flex items-center justify-between gap-3 border-t border-border pt-3">
-        <span className="text-xs text-muted-foreground">
-          Updated {formatDateTime(updatedAt)} · created {formatDateTime(initial.createdAt)}
-        </span>
-        <div className="flex gap-2">
-          <Button
-            variant="ghost"
-            size="sm"
-            className="text-muted-foreground hover:text-destructive"
-            onClick={() => setDeleteOpen(true)}
-            aria-label="Delete page"
-          >
-            <Trash2 />
-          </Button>
-          <Button
-            size="sm"
-            variant="outline"
-            onClick={saveNow}
-            disabled={saveState === 'saving'}
-          >
-            <Save /> {saveState === 'saving' ? 'Saving…' : 'Save'}
-          </Button>
+        <div className="mt-3">
+          <TagInput value={tags} onChange={setTags} placeholder="Add tags…" />
+        </div>
+        <div className="mt-6">
+          <PageEditor
+            content={initial.doc as JSONContent}
+            onChange={onDocChange}
+            onBlur={onEditorBlur}
+            onEditorReady={onEditorReady}
+          />
         </div>
       </div>
 

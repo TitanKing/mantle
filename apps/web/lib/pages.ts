@@ -13,6 +13,7 @@ export {
   type PageRow,
   type PageDetail,
   type PageVisibility,
+  type PageWidth,
   type CreatePageInput,
   type UpdatePageInput,
 } from '@mantle/content/pages';

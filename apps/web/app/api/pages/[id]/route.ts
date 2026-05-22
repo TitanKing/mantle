@@ -11,6 +11,7 @@ const PatchBody = z.object({
   icon: z.string().max(16).optional(),
   tags: z.array(z.string().max(40)).max(20).optional(),
   visibility: z.enum(['private', 'public']).optional(),
+  width: z.enum(['narrow', 'wide']).optional(),
   // When false, persist the document without re-running the extractor — the
   // editor's cheap autosave path. Indexing happens via POST .../reindex.
   reindex: z.boolean().optional(),

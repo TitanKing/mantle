@@ -27,6 +27,8 @@ export const EMPTY_DOC: Record<string, unknown> = {
 };
 
 export type PageVisibility = 'private' | 'public';
+/** Notion-style content width: centered/narrow vs full available space. */
+export type PageWidth = 'narrow' | 'wide';
 
 export type PageRow = {
   id: string;
@@ -35,6 +37,7 @@ export type PageRow = {
   tags: string[];
   summary: string | null;
   visibility: PageVisibility;
+  width: PageWidth;
   createdAt: string;
   updatedAt: string;
 };
@@ -50,6 +53,7 @@ function rowOf(n: Node): PageRow {
     tags: n.tags ?? [],
     summary: typeof d.summary === 'string' ? d.summary : null,
     visibility: d.visibility === 'public' ? 'public' : 'private',
+    width: d.width === 'wide' ? 'wide' : 'narrow',
     createdAt: n.createdAt.toISOString(),
     updatedAt: n.updatedAt.toISOString(),
   };
@@ -185,6 +189,7 @@ export type UpdatePageInput = Partial<{
   tags: string[];
   icon: string;
   visibility: PageVisibility;
+  width: PageWidth;
 }>;
 
 export async function updatePage(
@@ -210,6 +215,7 @@ export async function updatePage(
   const newData: Record<string, unknown> = { ...oldData };
   if (input.icon !== undefined) newData.icon = input.icon;
   if (input.visibility !== undefined) newData.visibility = input.visibility;
+  if (input.width !== undefined) newData.width = input.width;
   // A re-index invalidates the extractor's prior summary/embedding.
   if (willReindex) {
     delete newData.summary;

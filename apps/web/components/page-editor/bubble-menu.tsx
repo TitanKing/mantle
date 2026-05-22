@@ -2,19 +2,17 @@
 
 import type { Editor } from '@tiptap/react';
 import { useEditorState } from '@tiptap/react';
+import { BubbleMenu } from '@tiptap/react/menus';
 import {
   Bold,
   Code2,
   Heading1,
   Heading2,
-  Heading3,
   Italic,
   List,
   ListOrdered,
   Quote,
-  Redo2,
   Strikethrough,
-  Undo2,
   type LucideIcon,
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
@@ -25,13 +23,11 @@ function ToolButton({
   label,
   icon: Icon,
   active,
-  disabled,
   onClick,
 }: {
   label: string;
   icon: LucideIcon;
   active?: boolean;
-  disabled?: boolean;
   onClick: () => void;
 }) {
   return (
@@ -41,7 +37,6 @@ function ToolButton({
       size="icon"
       aria-label={label}
       aria-pressed={active}
-      disabled={disabled}
       onClick={onClick}
       className={cn('size-8', active && 'bg-accent text-accent-foreground')}
     >
@@ -50,9 +45,12 @@ function ToolButton({
   );
 }
 
-/** Fixed formatting toolbar. Active states are read reactively via
- *  `useEditorState` so they stay in sync as the selection moves. */
-export function EditorToolbar({ editor }: { editor: Editor }) {
+/**
+ * Selection bubble menu — the chromeless replacement for a fixed toolbar.
+ * It floats above selected text so formatting controls appear only when you
+ * reach for them, then vanish. Active states track the selection reactively.
+ */
+export function EditorBubbleMenu({ editor }: { editor: Editor }) {
   const s = useEditorState({
     editor,
     selector: ({ editor }) => ({
@@ -62,38 +60,17 @@ export function EditorToolbar({ editor }: { editor: Editor }) {
       code: editor.isActive('codeBlock'),
       h1: editor.isActive('heading', { level: 1 }),
       h2: editor.isActive('heading', { level: 2 }),
-      h3: editor.isActive('heading', { level: 3 }),
       bullet: editor.isActive('bulletList'),
       ordered: editor.isActive('orderedList'),
       quote: editor.isActive('blockquote'),
-      canUndo: editor.can().undo(),
-      canRedo: editor.can().redo(),
     }),
   });
 
   return (
-    <div className="flex flex-wrap items-center gap-0.5 border-b border-border p-1.5">
-      <ToolButton
-        label="Heading 1"
-        icon={Heading1}
-        active={s.h1}
-        onClick={() => editor.chain().focus().toggleHeading({ level: 1 }).run()}
-      />
-      <ToolButton
-        label="Heading 2"
-        icon={Heading2}
-        active={s.h2}
-        onClick={() => editor.chain().focus().toggleHeading({ level: 2 }).run()}
-      />
-      <ToolButton
-        label="Heading 3"
-        icon={Heading3}
-        active={s.h3}
-        onClick={() => editor.chain().focus().toggleHeading({ level: 3 }).run()}
-      />
-
-      <Separator orientation="vertical" className="mx-1 h-6" />
-
+    <BubbleMenu
+      editor={editor}
+      className="flex items-center gap-0.5 rounded-md border border-border bg-popover p-1 text-popover-foreground shadow-md"
+    >
       <ToolButton
         label="Bold"
         icon={Bold}
@@ -112,9 +89,27 @@ export function EditorToolbar({ editor }: { editor: Editor }) {
         active={s.strike}
         onClick={() => editor.chain().focus().toggleStrike().run()}
       />
+      <ToolButton
+        label="Inline code block"
+        icon={Code2}
+        active={s.code}
+        onClick={() => editor.chain().focus().toggleCodeBlock().run()}
+      />
 
       <Separator orientation="vertical" className="mx-1 h-6" />
 
+      <ToolButton
+        label="Heading 1"
+        icon={Heading1}
+        active={s.h1}
+        onClick={() => editor.chain().focus().toggleHeading({ level: 1 }).run()}
+      />
+      <ToolButton
+        label="Heading 2"
+        icon={Heading2}
+        active={s.h2}
+        onClick={() => editor.chain().focus().toggleHeading({ level: 2 }).run()}
+      />
       <ToolButton
         label="Bullet list"
         icon={List}
@@ -133,27 +128,6 @@ export function EditorToolbar({ editor }: { editor: Editor }) {
         active={s.quote}
         onClick={() => editor.chain().focus().toggleBlockquote().run()}
       />
-      <ToolButton
-        label="Code block"
-        icon={Code2}
-        active={s.code}
-        onClick={() => editor.chain().focus().toggleCodeBlock().run()}
-      />
-
-      <Separator orientation="vertical" className="mx-1 h-6" />
-
-      <ToolButton
-        label="Undo"
-        icon={Undo2}
-        disabled={!s.canUndo}
-        onClick={() => editor.chain().focus().undo().run()}
-      />
-      <ToolButton
-        label="Redo"
-        icon={Redo2}
-        disabled={!s.canRedo}
-        onClick={() => editor.chain().focus().redo().run()}
-      />
-    </div>
+    </BubbleMenu>
   );
 }

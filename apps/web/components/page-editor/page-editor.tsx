@@ -1,39 +1,41 @@
 'use client';
 
 import { useEffect, useRef } from 'react';
-import { EditorContent, useEditor, type JSONContent } from '@tiptap/react';
-import { cn } from '@/lib/utils';
+import { EditorContent, useEditor, type Editor, type JSONContent } from '@tiptap/react';
 import { pageExtensions } from './extensions';
-import { EditorToolbar } from './toolbar';
+import { EditorBubbleMenu } from './bubble-menu';
 
 /**
- * The live, editable TipTap surface for a page. `content` is the initial
- * ProseMirror doc (the editor owns its state thereafter); `onChange` fires on
- * every edit with the current JSON. We keep `onChange` in a ref so the
- * editor's `onUpdate` closure always calls the latest handler — otherwise a
- * debounced autosave that re-creates its callback would go stale.
+ * The "invisible" editing surface: no border, no card, no fixed toolbar — just
+ * text on the page. Formatting comes from markdown shortcuts and the selection
+ * bubble menu (and, next slice, the slash menu).
+ *
+ * `content` is the initial doc (the editor owns its state after). Callbacks are
+ * kept in refs so the editor's once-bound handlers always call the latest
+ * closures — otherwise a debounced autosave that re-creates them goes stale.
  */
 export function PageEditor({
   content,
   onChange,
   onBlur,
-  className,
+  onEditorReady,
 }: {
   content: JSONContent;
   onChange: (doc: JSONContent) => void;
-  /** Fires when the editor loses focus — a natural "settle" signal the
-   *  caller can use to flush / re-index. */
+  /** Editor lost focus — a natural "settle" signal to flush / re-index. */
   onBlur?: () => void;
-  className?: string;
+  /** Hands the editor instance up once ready (e.g. so the title can move focus
+   *  into the body on Enter). */
+  onEditorReady?: (editor: Editor) => void;
 }) {
-  // Keep callbacks in refs so the editor's once-bound handlers always call the
-  // latest closures (a debounced autosave re-creates them every render).
   const onChangeRef = useRef(onChange);
   const onBlurRef = useRef(onBlur);
+  const onReadyRef = useRef(onEditorReady);
   useEffect(() => {
     onChangeRef.current = onChange;
     onBlurRef.current = onBlur;
-  }, [onChange, onBlur]);
+    onReadyRef.current = onEditorReady;
+  }, [onChange, onBlur, onEditorReady]);
 
   const editor = useEditor({
     extensions: pageExtensions,
@@ -41,20 +43,23 @@ export function PageEditor({
     immediatelyRender: false, // required for Next.js SSR (avoids hydration mismatch)
     editorProps: {
       attributes: {
-        class:
-          'prose prose-sm dark:prose-invert max-w-none min-h-[60vh] px-4 py-3 focus:outline-none',
+        class: 'prose prose-sm dark:prose-invert max-w-none min-h-[50vh] focus:outline-none',
       },
     },
     onUpdate: ({ editor }) => onChangeRef.current(editor.getJSON()),
     onBlur: () => onBlurRef.current?.(),
   });
 
+  useEffect(() => {
+    if (editor) onReadyRef.current?.(editor);
+  }, [editor]);
+
   if (!editor) return null;
 
   return (
-    <div className={cn('rounded-md border border-border bg-card', className)}>
-      <EditorToolbar editor={editor} />
+    <>
+      <EditorBubbleMenu editor={editor} />
       <EditorContent editor={editor} />
-    </div>
+    </>
   );
 }
