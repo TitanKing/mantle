@@ -4,6 +4,7 @@ import { useEffect, useRef } from 'react';
 import { EditorContent, useEditor, type Editor, type JSONContent } from '@tiptap/react';
 import { pageExtensions } from './extensions';
 import { EditorBubbleMenu } from './bubble-menu';
+import { EditorDragHandle } from './drag-handle';
 import { SlashCommand } from './slash-command';
 
 /**
@@ -61,6 +62,7 @@ export function PageEditor({
   return (
     <>
       <EditorBubbleMenu editor={editor} />
+      <EditorDragHandle editor={editor} />
       <EditorContent editor={editor} />
     </>
   );

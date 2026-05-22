@@ -14,6 +14,7 @@ import {
   Heading1,
   Heading2,
   Heading3,
+  Info,
   List,
   ListOrdered,
   Minus,
@@ -94,6 +95,24 @@ const ITEMS: SlashItem[] = [
     keywords: ['blockquote', 'citation'],
     command: ({ editor, range }) =>
       editor.chain().focus().deleteRange(range).toggleBlockquote().run(),
+  },
+  {
+    group: 'Blocks',
+    title: 'Callout',
+    description: 'A highlighted info box.',
+    icon: Info,
+    keywords: ['note', 'aside', 'tip', 'warning', 'info'],
+    command: ({ editor, range }) =>
+      editor
+        .chain()
+        .focus()
+        .deleteRange(range)
+        .insertContent({
+          type: 'callout',
+          attrs: { variant: 'info' },
+          content: [{ type: 'paragraph' }],
+        })
+        .run(),
   },
   {
     group: 'Blocks',

@@ -1,6 +1,7 @@
 import StarterKit from '@tiptap/starter-kit';
 import Placeholder from '@tiptap/extension-placeholder';
 import type { Extensions } from '@tiptap/react';
+import { Callout } from './callout';
 
 /**
  * Shared editor schema for the pages surface. The live editor (`PageEditor`)
@@ -18,6 +19,7 @@ export const pageExtensions: Extensions = [
   StarterKit.configure({
     heading: { levels: [1, 2, 3] },
   }),
+  Callout,
   Placeholder.configure({
     // Only the first empty line shows it (showOnlyWhenEditable defaults true,
     // so the read-only PageView never renders a placeholder).
