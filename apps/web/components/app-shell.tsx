@@ -12,8 +12,8 @@ import { PageTitleProvider } from '@/components/layout/page-title';
 /**
  * App shell — three fixed regions (header, left sidebar, right live
  * column) framing a scrollable content area. The sidebar collapses into
- * a Sheet drawer below md. Server-rendered nodes (context+cost card,
- * branches tree) are passed in as props.
+ * a Sheet drawer below md. The server-rendered context+cost card is
+ * passed in as a prop.
  */
 export function AppShell({
   email,
@@ -21,7 +21,6 @@ export function AppShell({
   pendingSenders,
   pendingApprovals,
   contextCard,
-  tree,
   children,
 }: {
   email: string | null;
@@ -29,7 +28,6 @@ export function AppShell({
   pendingSenders: number;
   pendingApprovals: number;
   contextCard: React.ReactNode;
-  tree: React.ReactNode;
   children: React.ReactNode;
 }) {
   const [mobileOpen, setMobileOpen] = useState(false);
@@ -48,12 +46,6 @@ export function AppShell({
         pendingApprovals={pendingApprovals}
         onNavigate={onNavigate}
       />
-      <div className="mt-1 px-3 pb-4">
-        <p className="px-3 pb-1 text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">
-          Branches
-        </p>
-        {tree}
-      </div>
     </>
   );
 

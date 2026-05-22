@@ -3,7 +3,6 @@ import { db, emailSenders } from '@mantle/db';
 import { countPending } from '@mantle/tools';
 import { loadProfilePreferences } from '@mantle/content';
 import { requireOwner } from '@/lib/auth';
-import { TreeRail } from '@/components/tree-rail';
 import { AppShell } from '@/components/app-shell';
 import { UsageCard } from '@/components/usage-card';
 
@@ -34,7 +33,6 @@ export default async function AppLayout({ children }: { children: React.ReactNod
       pendingSenders={pendingCount}
       pendingApprovals={pendingApprovals}
       contextCard={<UsageCard ownerId={user.id} />}
-      tree={<TreeRail ownerId={user.id} />}
     >
       {children}
     </AppShell>
