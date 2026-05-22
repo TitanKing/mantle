@@ -8,8 +8,9 @@ import { Pencil, Save, Sparkles, Trash2, X } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
-import { Badge } from '@/components/ui/badge';
 import { MarkdownEditor } from '@/components/markdown-editor';
+import { TagPill } from '@/components/tag-pill';
+import { TagInput } from '@/components/tag-input';
 import { BackLink } from '@/components/layout/back-link';
 import {
   AlertDialog,
@@ -40,16 +41,16 @@ export function NoteDetailClient({ initial }: { initial: NoteRow }) {
   const toast = useToast();
   const [note, setNote] = useState(initial);
   const [editing, setEditing] = useState(false);
-  const [form, setForm] = useState({
+  const [form, setForm] = useState<{ title: string; content: string; tags: string[] }>({
     title: note.title,
     content: note.content,
-    tags: note.tags.join(', '),
+    tags: note.tags,
   });
   const [isPending, startTransition] = useTransition();
   const [deleteOpen, setDeleteOpen] = useState(false);
 
   const resetForm = () =>
-    setForm({ title: note.title, content: note.content, tags: note.tags.join(', ') });
+    setForm({ title: note.title, content: note.content, tags: note.tags });
 
   const save = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -59,10 +60,7 @@ export function NoteDetailClient({ initial }: { initial: NoteRow }) {
       body: JSON.stringify({
         title: form.title.trim(),
         content: form.content,
-        tags: form.tags
-          .split(',')
-          .map((t) => t.trim().toLowerCase())
-          .filter(Boolean),
+        tags: form.tags,
       }),
     });
     if (!res.ok) {
@@ -97,9 +95,7 @@ export function NoteDetailClient({ initial }: { initial: NoteRow }) {
           <div className="flex items-start justify-between gap-3">
             <div className="flex min-w-0 flex-1 flex-wrap gap-1">
               {note.tags.map((t) => (
-                <Badge key={t} variant="secondary">
-                  {t}
-                </Badge>
+                <TagPill key={t} tag={t} />
               ))}
             </div>
             <div className="flex shrink-0 gap-2">
@@ -180,13 +176,12 @@ export function NoteDetailClient({ initial }: { initial: NoteRow }) {
             />
           </div>
           <div className="space-y-1.5">
-            <Label htmlFor="tags">
-              Tags <span className="font-normal text-muted-foreground">(comma-separated)</span>
-            </Label>
-            <Input
+            <Label htmlFor="tags">Tags</Label>
+            <TagInput
               id="tags"
               value={form.tags}
-              onChange={(e) => setForm({ ...form, tags: e.target.value })}
+              onChange={(tags) => setForm({ ...form, tags })}
+              placeholder="Type and press comma or Enter…"
             />
           </div>
         </form>

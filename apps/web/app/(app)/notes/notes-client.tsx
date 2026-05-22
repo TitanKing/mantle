@@ -25,8 +25,9 @@ import {
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Textarea } from '@/components/ui/textarea';
-import { Badge } from '@/components/ui/badge';
 import { useToast } from '@/components/ui/toast';
+import { TagPill } from '@/components/tag-pill';
+import { TagInput } from '@/components/tag-input';
 
 type NoteRow = {
   id: string;
@@ -63,7 +64,11 @@ export function NotesClient({
   const [navPending, startNav] = useTransition();
 
   const [open, setOpen] = useState(false);
-  const [form, setForm] = useState({ title: '', content: '', tags: '' });
+  const [form, setForm] = useState<{ title: string; content: string; tags: string[] }>({
+    title: '',
+    content: '',
+    tags: [],
+  });
   const [saving, setSaving] = useState(false);
   const [deleteTarget, setDeleteTarget] = useState<NoteRow | null>(null);
 
@@ -112,10 +117,7 @@ export function NotesClient({
         body: JSON.stringify({
           title: form.title.trim(),
           content: form.content,
-          tags: form.tags
-            .split(',')
-            .map((t) => t.trim().toLowerCase())
-            .filter(Boolean),
+          tags: form.tags,
         }),
       });
       if (!res.ok) {
@@ -123,7 +125,7 @@ export function NotesClient({
         toast.error(j.error ?? `request failed (${res.status})`);
         return;
       }
-      setForm({ title: '', content: '', tags: '' });
+      setForm({ title: '', content: '', tags: [] });
       setOpen(false);
       toast.success('Note created');
       // Land on the unfiltered first page so the new note is visible at top.
@@ -223,13 +225,7 @@ export function NotesClient({
                 {n.tags.length > 0 && (
                   <div className="mt-1 flex flex-wrap gap-1">
                     {n.tags.map((t) => (
-                      <Badge
-                        key={t}
-                        variant="secondary"
-                        className="px-1.5 py-0 text-[10px] font-medium"
-                      >
-                        {t}
-                      </Badge>
+                      <TagPill key={t} tag={t} />
                     ))}
                   </div>
                 )}
@@ -307,14 +303,12 @@ export function NotesClient({
               />
             </div>
             <div className="space-y-1.5">
-              <Label htmlFor="tags">
-                Tags <span className="font-normal text-muted-foreground">(comma-separated)</span>
-              </Label>
-              <Input
+              <Label htmlFor="tags">Tags</Label>
+              <TagInput
                 id="tags"
                 value={form.tags}
-                onChange={(e) => setForm({ ...form, tags: e.target.value })}
-                placeholder="idea, draft, follow-up"
+                onChange={(tags) => setForm({ ...form, tags })}
+                placeholder="Type and press comma or Enter…"
               />
             </div>
             <div className="flex justify-end gap-2">
