@@ -1,16 +1,16 @@
 'use client';
 
 import { useState, useTransition } from 'react';
-import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
-import { ArrowLeft, Pencil, Save, Trash2, X } from 'lucide-react';
+import { Pencil, Save, Sparkles, Trash2, X } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Textarea } from '@/components/ui/textarea';
 import { Badge } from '@/components/ui/badge';
+import { BackLink } from '@/components/layout/back-link';
 import {
   AlertDialog,
   AlertDialogAction,
@@ -90,55 +90,50 @@ export function NoteDetailClient({ initial }: { initial: NoteRow }) {
   return (
     <div className="space-y-4">
       <SetPageTitle title={note.title} />
-      <Link
-        href="/notes"
-        className="inline-flex items-center gap-1 text-sm text-muted-foreground hover:text-foreground"
-      >
-        <ArrowLeft className="size-3" /> All notes
-      </Link>
+      <BackLink href="/notes">All notes</BackLink>
 
       {!editing ? (
         <>
-          <header className="space-y-2">
-            <div className="flex items-start justify-between gap-3">
-              <div className="min-w-0 flex-1 space-y-1.5">
-                {note.summary && (
-                  <p className="text-xs italic text-muted-foreground">Indexed: {note.summary}</p>
-                )}
-                {note.tags.length > 0 && (
-                  <div className="flex flex-wrap gap-1">
-                    {note.tags.map((t) => (
-                      <Badge key={t} variant="secondary">
-                        {t}
-                      </Badge>
-                    ))}
-                  </div>
-                )}
-              </div>
-              <div className="flex shrink-0 gap-2">
-                <Button variant="outline" size="sm" onClick={() => setEditing(true)}>
-                  <Pencil /> Edit
-                </Button>
-                <Button
-                  variant="ghost"
-                  size="sm"
-                  className="text-muted-foreground hover:text-destructive"
-                  onClick={() => setDeleteOpen(true)}
-                  aria-label="Delete note"
-                >
-                  <Trash2 />
-                </Button>
-              </div>
+          <div className="flex items-start justify-between gap-3">
+            <div className="flex min-w-0 flex-1 flex-wrap gap-1">
+              {note.tags.map((t) => (
+                <Badge key={t} variant="secondary">
+                  {t}
+                </Badge>
+              ))}
             </div>
-          </header>
+            <div className="flex shrink-0 gap-2">
+              <Button variant="outline" size="sm" onClick={() => setEditing(true)}>
+                <Pencil /> Edit
+              </Button>
+              <Button
+                variant="ghost"
+                size="sm"
+                className="text-muted-foreground hover:text-destructive"
+                onClick={() => setDeleteOpen(true)}
+                aria-label="Delete note"
+              >
+                <Trash2 />
+              </Button>
+            </div>
+          </div>
 
-          <article className="prose prose-sm dark:prose-invert max-w-none rounded-md border border-border bg-card p-4">
+          <article className="prose prose-sm dark:prose-invert max-w-none rounded-md border border-border bg-card p-5">
             {note.content ? (
               <ReactMarkdown remarkPlugins={[remarkGfm]}>{note.content}</ReactMarkdown>
             ) : (
               <p className="text-sm italic text-muted-foreground">No content yet.</p>
             )}
           </article>
+
+          {note.summary && (
+            <aside className="rounded-md border border-border bg-muted/40 p-3">
+              <div className="mb-1 flex items-center gap-1.5 text-xs font-medium text-muted-foreground">
+                <Sparkles className="size-3.5" aria-hidden /> Indexed summary
+              </div>
+              <p className="text-sm text-muted-foreground">{note.summary}</p>
+            </aside>
+          )}
 
           <div className="border-t border-border pt-3 text-xs text-muted-foreground">
             Updated {formatDateTime(note.updatedAt)} · created {formatDateTime(note.createdAt)}
