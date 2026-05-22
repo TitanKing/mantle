@@ -28,11 +28,11 @@ export type ProfilePreferences = {
    *  format-datetime behaviour, so existing UI doesn't shift for
    *  users who haven't visited /settings/profile yet. */
   locale: string;
-  /** DiceBear avatar style id (see apps/web/lib/dicebear). Undefined →
+  /** Avatar style id (boring-avatars; see apps/web/lib/avatar). Undefined →
    *  the UI falls back to an initials avatar. */
   avatarStyle?: string;
-  /** Seed for the DiceBear avatar; the UI defaults it to the user id when
-   *  unset so an avatar still renders. */
+  /** Seed for the avatar; the UI defaults it to the user id when unset so an
+   *  avatar still renders. */
   avatarSeed?: string;
 };
 
