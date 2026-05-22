@@ -191,7 +191,7 @@ export function FileEditor({
             <ToggleGroup
               type="single"
               variant="outline"
-              size="sm"
+              size="default"
               value={mode}
               onValueChange={(v) => v && setMode(v as Mode)}
             >
