@@ -46,7 +46,7 @@ export function PageEditor({
     immediatelyRender: false, // required for Next.js SSR (avoids hydration mismatch)
     editorProps: {
       attributes: {
-        class: 'prose prose-sm dark:prose-invert max-w-none min-h-[50vh] focus:outline-none',
+        class: 'prose dark:prose-invert max-w-none min-h-[50vh] focus:outline-none',
       },
     },
     onUpdate: ({ editor }) => onChangeRef.current(editor.getJSON()),

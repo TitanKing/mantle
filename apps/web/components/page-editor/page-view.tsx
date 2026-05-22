@@ -20,7 +20,7 @@ export function PageView({ content }: { content: JSONContent }) {
     editable: false,
     immediatelyRender: false,
     editorProps: {
-      attributes: { class: 'prose prose-sm dark:prose-invert max-w-none focus:outline-none' },
+      attributes: { class: 'prose dark:prose-invert max-w-none focus:outline-none' },
     },
   });
 
