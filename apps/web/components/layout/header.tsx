@@ -13,7 +13,8 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu';
-import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
+import { Avatar, AvatarFallback } from '@/components/ui/avatar';
+import { BoringAvatar } from '@/components/boring-avatar';
 import { ThemeToggle } from '@/components/theme-toggle';
 
 export function Header({
@@ -22,7 +23,7 @@ export function Header({
   onMenuClick,
 }: {
   email: string | null;
-  userAvatar?: string | null;
+  userAvatar?: { style: string; seed: string } | null;
   onMenuClick: () => void;
 }) {
   const router = useRouter();
@@ -57,10 +58,13 @@ export function Header({
         <DropdownMenu>
           <DropdownMenuTrigger asChild>
             <Button variant="ghost" className="h-10 gap-2 px-2">
-              <Avatar className="size-8">
-                {userAvatar && <AvatarImage src={userAvatar} alt="" />}
-                <AvatarFallback className="text-xs">{initials}</AvatarFallback>
-              </Avatar>
+              {userAvatar ? (
+                <BoringAvatar variant={userAvatar.style} seed={userAvatar.seed} size={32} className="size-8" />
+              ) : (
+                <Avatar className="size-8">
+                  <AvatarFallback className="text-xs">{initials}</AvatarFallback>
+                </Avatar>
+              )}
               {email && (
                 <span className="hidden max-w-[12rem] truncate text-sm md:inline">{email}</span>
               )}

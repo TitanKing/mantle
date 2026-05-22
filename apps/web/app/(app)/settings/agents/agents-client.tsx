@@ -16,7 +16,7 @@ import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import type { AgentAvatar, PersonaNote } from '@mantle/db';
 import { AvatarPicker } from '@/components/avatar-picker';
-import { avatarUrl } from '@/lib/avatar';
+import { BoringAvatar } from '@/components/boring-avatar';
 import { agentAccent, agentInitials } from '@/lib/agent-color';
 import { PersonaNotesEditor } from './persona-notes-editor';
 
@@ -595,13 +595,7 @@ export function AgentsClient({
             return (
               <li key={a.id} className="flex items-center gap-3 px-3 py-3">
                 {a.avatar ? (
-                  // eslint-disable-next-line @next/next/no-img-element
-                  <img
-                    src={avatarUrl(a.avatar.style, a.avatar.seed)}
-                    alt=""
-                    className="size-9 shrink-0 rounded-full"
-                    aria-hidden
-                  />
+                  <BoringAvatar variant={a.avatar.style} seed={a.avatar.seed} size={36} className="size-9" />
                 ) : (
                   <span
                     className="flex size-9 shrink-0 items-center justify-center rounded-full text-xs font-semibold text-white"

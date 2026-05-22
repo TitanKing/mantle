@@ -1,7 +1,7 @@
 import { requireOwner } from '@/lib/auth';
 import { listAssistantAgents, recentAssistantMessages, resolveAssistantAgent } from '@/lib/assistant';
 import { agentAccent, agentInitials } from '@/lib/agent-color';
-import { avatarUrl } from '@/lib/avatar';
+import { BoringAvatar } from '@/components/boring-avatar';
 import { AssistantClient } from './assistant-client';
 import { AgentSelect } from './agent-select';
 
@@ -25,20 +25,18 @@ export default async function AssistantPage({
     : [];
 
   const accent = agent ? agentAccent(agent.slug) : null;
-  const agentAvatarUri = agent?.avatar ? avatarUrl(agent.avatar.style, agent.avatar.seed) : null;
 
   return (
     <div className="flex h-full flex-col">
       <header className="flex flex-wrap items-center justify-between gap-2 border-b border-border px-6 py-3">
         <div className="flex items-center gap-3">
-          {agent && agentAvatarUri ? (
-            // eslint-disable-next-line @next/next/no-img-element
-            <img
-              src={agentAvatarUri}
-              alt=""
-              className="size-10 shrink-0 rounded-full ring-2"
+          {agent && agent.avatar ? (
+            <BoringAvatar
+              variant={agent.avatar.style}
+              seed={agent.avatar.seed}
+              size={40}
+              className="size-10 ring-2"
               style={{ '--tw-ring-color': accent?.border } as React.CSSProperties}
-              aria-hidden
             />
           ) : (
             agent &&
@@ -82,7 +80,7 @@ export default async function AssistantPage({
         agentReady={!!agent}
         agentSlug={agent?.slug}
         agentName={agent?.name}
-        agentAvatar={agentAvatarUri}
+        agentAvatar={agent?.avatar ?? null}
       />
     </div>
   );

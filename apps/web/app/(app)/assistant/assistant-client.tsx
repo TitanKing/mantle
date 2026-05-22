@@ -13,6 +13,7 @@ import {
 } from 'lucide-react';
 import { formatDateTime } from '@/lib/format-datetime';
 import { agentAccent, agentInitials } from '@/lib/agent-color';
+import { BoringAvatar } from '@/components/boring-avatar';
 
 /** A sidecar artifact attached to a message. Mirrors @mantle/tools
  *  ToolArtifact, with the discriminated `kind` driving the rendering
@@ -62,8 +63,8 @@ export function AssistantClient({
   agentSlug?: string;
   /** Display name of the active agent — drives the bubble avatar + greeting. */
   agentName?: string;
-  /** Avatar URL for the active agent; falls back to initials. */
-  agentAvatar?: string | null;
+  /** Avatar {style, seed} for the active agent; falls back to initials. */
+  agentAvatar?: { style: string; seed: string } | null;
 }) {
   // Per-agent visual identity: a stable colour + monogram so it's obvious
   // which agent you're talking to when you switch.
@@ -355,13 +356,12 @@ export function AssistantClient({
         {messages.length === 0 ? (
           <div className="mx-auto flex max-w-3xl flex-col items-center gap-3 rounded-md border border-dashed border-border bg-muted/30 px-4 py-10 text-center">
             {agentAvatar ? (
-              // eslint-disable-next-line @next/next/no-img-element
-              <img
-                src={agentAvatar}
-                alt=""
-                className="size-12 rounded-full ring-2"
+              <BoringAvatar
+                variant={agentAvatar.style}
+                seed={agentAvatar.seed}
+                size={48}
+                className="size-12 ring-2"
                 style={{ '--tw-ring-color': accent.border } as React.CSSProperties}
-                aria-hidden
               />
             ) : (
               <span
@@ -400,13 +400,11 @@ export function AssistantClient({
               >
                 {m.direction === 'outbound' &&
                   (agentAvatar ? (
-                    // eslint-disable-next-line @next/next/no-img-element
-                    <img
-                      src={agentAvatar}
-                      alt=""
-                      className="mb-1 size-7 shrink-0 rounded-full"
-                      title={agentName ?? 'Assistant'}
-                      aria-hidden
+                    <BoringAvatar
+                      variant={agentAvatar.style}
+                      seed={agentAvatar.seed}
+                      size={28}
+                      className="mb-1 size-7"
                     />
                   ) : (
                     <span
@@ -471,8 +469,7 @@ export function AssistantClient({
             {sending && (
               <div className="mx-auto mt-3 flex max-w-3xl items-end gap-2 text-foreground">
                 {agentAvatar ? (
-                  // eslint-disable-next-line @next/next/no-img-element
-                  <img src={agentAvatar} alt="" className="mb-1 size-7 shrink-0 rounded-full" aria-hidden />
+                  <BoringAvatar variant={agentAvatar.style} seed={agentAvatar.seed} size={28} className="mb-1 size-7" />
                 ) : (
                   <span
                     className="mb-1 flex h-7 w-7 shrink-0 items-center justify-center rounded-full text-[10px] font-semibold text-white"

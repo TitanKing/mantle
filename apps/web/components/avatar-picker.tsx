@@ -1,7 +1,8 @@
 'use client';
 
 import { Shuffle, X } from 'lucide-react';
-import { DEFAULT_AVATAR_STYLE, avatarUrl, randomSeed, randomStyle } from '@/lib/avatar';
+import { DEFAULT_AVATAR_STYLE, randomSeed, randomStyle } from '@/lib/avatar';
+import { BoringAvatar } from '@/components/boring-avatar';
 
 export type AvatarValue = { style: string; seed: string };
 
@@ -9,8 +10,8 @@ export type AvatarValue = { style: string; seed: string };
  * Avatar picker — a live preview you reroll with Randomize (random style +
  * seed each click). `value` is null when no custom avatar is set (the host
  * shows an initials fallback); Randomize commits a value, and "Use initials
- * instead" clears back to null. The preview loads from the cacheable
- * /api/avatar endpoint, so no avatar-generator code ships to the client.
+ * instead" clears back to null. The preview renders <BoringAvatar> directly
+ * (boring-avatars is tiny, so client-side rendering is fine).
  */
 export function AvatarPicker({
   value,
@@ -29,12 +30,7 @@ export function AvatarPicker({
 
   return (
     <div className="flex items-center gap-4">
-      {/* eslint-disable-next-line @next/next/no-img-element */}
-      <img
-        src={avatarUrl(style, seed)}
-        alt="Avatar preview"
-        className="size-16 shrink-0 rounded-full border bg-muted"
-      />
+      <BoringAvatar variant={style} seed={seed} size={64} className="size-16 border bg-muted" />
       <div className="flex flex-col items-start gap-2">
         <button
           type="button"

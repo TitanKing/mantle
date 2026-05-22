@@ -24,7 +24,7 @@ export function AppShell({
   children,
 }: {
   email: string | null;
-  userAvatar?: string | null;
+  userAvatar?: { style: string; seed: string } | null;
   pendingSenders: number;
   pendingApprovals: number;
   contextCard: React.ReactNode;
