@@ -1,9 +1,15 @@
 # apps/web — UI conventions
 
 **Before any styling/UI work, read [`docs/ui-style-guide.md`](../../docs/ui-style-guide.md).**
-It's the rulebook; match existing screens (Notes, Files, Appearance) when unsure.
+It's the rulebook; match existing screens (Notes + the settings screens) when unsure.
 
 Non-negotiables (full detail in the guide):
+
+- **Master-detail is the standard** for any list+editor screen (Notes, Traces, and all
+  settings: Accounts/Agents/AI-workers/Heartbeats/Skills/Tools/Keys). Full-height
+  `md:grid md:grid-cols-[340px_1fr]`; left = accent-card list, right = detail/form;
+  Enabled/flags as header `Switch`es top-right + ghost Delete; auto-select first row.
+  **Every scroll pane needs `min-h-0`** or `<main>` double-scrolls. See guide §8.
 
 - **shadcn-first** — compose from `components/ui/*`; avoid raw `<button>`/`<input>`/`<select>`.
 - **Theme tokens only** — `bg-background`, `text-foreground`, `text-muted-foreground`,

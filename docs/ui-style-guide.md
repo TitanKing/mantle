@@ -1,8 +1,10 @@
 # Mantle UI / Theme Style Guide
 
 A rulebook for keeping the `apps/web` front-end consistent. Read this before
-doing any styling work. When in doubt, **match an existing screen** — Notes,
-Files, and Appearance are the reference implementations.
+doing any styling work. When in doubt, **match an existing screen** — Notes and
+the settings screens (Agents, Tools, API keys, …) are the reference
+**master-detail** implementations (§8); Appearance is the reference for theme
+widgets.
 
 > TL;DR — shadcn primitives, semantic theme tokens only, never native
 > `prompt/confirm/alert`, bare icons inside buttons, toasts for feedback,
@@ -70,6 +72,9 @@ Rules:
 - Headings: page title lives in the **top bar** (see §8) — don't add a big
   on-page `<h1>` that duplicates it. Section headings: `h2`,
   `text-base`/`text-lg font-semibold`.
+- **Sizing — keep it readable.** Primary text `text-sm`, secondary/meta
+  `text-xs`. Avoid `text-[10px]`/`text-[11px]` except for tiny corner
+  tags/badges — list/table meta was deliberately bumped up a notch this round.
 
 ---
 
@@ -140,33 +145,89 @@ Shared app-level patterns (`components/`):
 
 ---
 
-## 8. Page layout patterns
+## 8. Page layout & the master-detail pattern
 
-- **Centered content pages** (settings, forms, simple lists):
-  `mx-auto max-w-{2xl..6xl} space-y-6 px-6 py-8`.
-- **Full-height / split pages** (Files, Notes): the app `<main>` is a fixed
-  full-height, `overflow-y-auto scrollbar-thin` region. Make the page's root
-  `h-full` and let inner panes scroll:
-  ```tsx
-  <div className="md:grid md:h-full md:grid-cols-2 md:overflow-hidden">
-    <div className="flex flex-col md:h-full md:min-h-0 md:border-r …">
-      {/* header (fixed) */}
-      <div className="md:flex-1 md:overflow-y-auto md:scrollbar-thin">…</div>
-      {/* footer (fixed) */}
+### Centered content pages
+Simple/standalone pages: `mx-auto max-w-{2xl..6xl} space-y-6 px-6 py-8`.
+
+### Full-height pages
+The app `<main>` is a fixed, full-height `overflow-y-auto scrollbar-thin`
+region. For full-height screens the **page wrapper returns the client directly**
+(no `max-w` box; just `<><SetPageTitle/><Client/></>`) and the root takes the
+height. **Every flex/grid scroll pane must carry `min-h-0`** — grid items and
+flex children default to `min-height:auto`, so without it the pane grows to its
+content and `<main>` scrolls *behind* it (the dreaded double scrollbar / bottom
+gap / cut-off). Use `scrollbar-thin` on scroll areas (`scrollbar-hidden` also
+exists; both are utilities in `globals.css`).
+
+### Master-detail — THE pattern for list+editor screens
+Used by **Notes, Traces**, and every settings list screen: **Accounts, Agents,
+AI workers, Heartbeats, Skills, Tools, API keys.** Left = scrollable list of
+**accent cards**; right = detail/form for the selected item. Proven scaffold
+(double-scrollbar-free):
+
+```tsx
+<div className="md:grid md:h-full md:grid-cols-[340px_1fr] md:overflow-hidden">
+  {/* LEFT: list */}
+  <div className="flex flex-col border-b border-border md:h-full md:min-h-0 md:border-b-0 md:border-r">
+    <div className="flex items-center justify-between gap-2 border-b border-border p-3">
+      <h2 className="text-sm font-semibold uppercase tracking-wider text-muted-foreground">Things</h2>
+      <Button size="sm" onClick={openCreate}><Plus /> New</Button>
     </div>
-    <div className="md:h-full md:overflow-y-auto md:scrollbar-thin">…</div>
+    <div className="space-y-2 p-3 md:flex-1 md:overflow-y-auto md:scrollbar-thin">
+      {items.map((it) => /* accent card */)}
+    </div>
+    {/* optional fixed footer, e.g. pager */}
   </div>
+  {/* RIGHT: editor / detail */}
+  <div className="md:h-full md:min-h-0 md:overflow-y-auto md:scrollbar-thin">
+    {selected ? /* editor */ : /* empty state */}
+  </div>
+</div>
+```
+
+Rules:
+- **Both panes need `md:min-h-0`** (see double-scrollbar note above). Left is a
+  flex column; only its list div scrolls (`md:flex-1 md:overflow-y-auto`).
+- **Accent card** (selectable list item) — keep the left border *visible* so
+  rounded corners don't break; only its colour flips on select:
+  ```tsx
+  <button className={cn(
+    'block w-full rounded-lg border border-l-[3px] border-border border-l-border bg-card p-2.5 text-left transition-colors hover:bg-accent/40',
+    selected && 'border-l-primary bg-accent/50',
+    disabled && 'opacity-70',
+  )} />
   ```
-  (The page wrapper for these returns the client directly — no `max-w` box.)
-- **Master-detail** (Notes): list of cards left, live preview right; selected
-  card gets the left primary accent; the preview reads already-loaded data
-  (no extra fetch) and defaults to the first row.
-- **Scrollbars:** use `scrollbar-thin` on scroll areas (`scrollbar-hidden`
-  exists too). Both are utilities in `globals.css`.
-- **Detail pages** start with `<BackLink href>`; the page title goes in the top
-  bar via `<SetPageTitle>`.
-- **Radius/spacing:** `rounded-md` (controls), `rounded-lg` (cards); gaps in
-  multiples of `0.25rem` (`gap-1.5`, `gap-2`, `space-y-4`).
+- **Auto-select the first item** so the right pane is never blank:
+  `selected ?? items[0]`.
+- **Editor header (right pane):** title + one-line description on the left;
+  top-right holds boolean flags as shadcn **`Switch`es** (Enabled,
+  Default-for-kind, …) and a ghost **Delete** (`text-destructive`). Form body
+  has the rest; Save/Cancel footer. Delete → `AlertDialog`. Don't put the
+  Enabled toggle in the form body — it lives in the header.
+- **Selection model — pick one:**
+  - *Client state* when the list rows already hold everything the detail needs
+    (e.g. Notes rows include content) → instant, no fetch. `useState` for
+    selection; re-derive the selected object from fresh props each render so
+    saves reflect immediately.
+  - *URL-driven* (`?selected=id`, `?mode=add|edit|…`) when the detail needs a
+    server fetch or reuses server-action forms (Traces, AI workers, Accounts) →
+    cards are `<Link>`s, the server page renders the right pane. Make a create
+    action redirect back to `?selected=<newId>` so it lands on the same screen.
+- **Grouped lists** (AI workers by kind, Tools builtin/user-defined) → sections
+  inside the left scroll area, each with its own sub-header / `+ Add`.
+- **Read-only oversight:** when a record's fields are code/seed-managed (built-in
+  tools), still let it be selected and show the fields **read-only** (disabled
+  inputs / muted blocks); only send the editable subset on save.
+
+### Detail (deep-link) pages
+Start with `<BackLink href>`; title via `<SetPageTitle>`. **Keep these working
+as deep links** even after a master-detail supersedes the in-app navigation
+(e.g. `/traces/[id]`, `/settings/accounts/[id]/*`) — other screens link to them.
+
+### Radius / spacing
+`rounded-md` (controls), `rounded-lg` (cards); gaps in multiples of `0.25rem`
+(`gap-1.5`, `gap-2`, `space-y-4`).
 
 ---
 
@@ -233,3 +294,8 @@ Shared app-level patterns (`components/`):
 - ❌ A big on-page `<h1>` duplicating the top-bar page title.
 - ❌ Per-theme or decorative fonts beyond Inter + the Bukhari logo.
 - ❌ Dynamically built Tailwind class names.
+- ❌ A flex/grid scroll pane without `min-h-0` (causes a second, outer
+  scrollbar — see §8).
+- ❌ `text-[10px]`/`text-[11px]` for normal list/table text (use `text-xs`+).
+- ❌ The Enabled toggle buried in the form body on a master-detail editor — it
+  goes top-right in the header as a `Switch`.
