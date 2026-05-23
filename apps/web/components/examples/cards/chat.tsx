@@ -2,7 +2,7 @@
 
 import * as React from "react";
 
-import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
+import { Avatar, AvatarFallback } from "@/components/ui/avatar";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardFooter, CardHeader } from "@/components/ui/card";
 import {
@@ -26,56 +26,35 @@ import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/comp
 import { cn } from "@/lib/utils";
 import { ArrowUpIcon, CheckIcon, PlusIcon } from "lucide-react";
 
-const users = [
-  {
-    name: "Olivia Martin",
-    email: "m@example.com",
-    avatar: "/avatars/01.png",
-  },
-  {
-    name: "Isabella Nguyen",
-    email: "isabella.nguyen@email.com",
-    avatar: "/avatars/03.png",
-  },
-  {
-    name: "Emma Wilson",
-    email: "emma@example.com",
-    avatar: "/avatars/05.png",
-  },
-  {
-    name: "Jackson Lee",
-    email: "lee@example.com",
-    avatar: "/avatars/02.png",
-  },
-  {
-    name: "William Kim",
-    email: "will@email.com",
-    avatar: "/avatars/04.png",
-  },
+const agents = [
+  { name: "Remy", role: "Memory recall", initials: "Re" },
+  { name: "Researcher", role: "Web search", initials: "Rs" },
+  { name: "Ingest", role: "Local extractor", initials: "In" },
+  { name: "Heartbeat", role: "Scheduled runs", initials: "Hb" },
 ] as const;
 
-type User = (typeof users)[number];
+type Agent = (typeof agents)[number];
 
 export function CardsChat() {
   const [open, setOpen] = React.useState(false);
-  const [selectedUsers, setSelectedUsers] = React.useState<User[]>([]);
+  const [selectedAgents, setSelectedAgents] = React.useState<Agent[]>([]);
 
   const [messages, setMessages] = React.useState([
     {
       role: "agent",
-      content: "Hi, how can I help you today?",
+      content: "Hi, I'm Saskia. Ask me anything about your brain.",
     },
     {
       role: "user",
-      content: "Hey, I'm having trouble with my account.",
+      content: "What did I decide about the memory architecture?",
     },
     {
       role: "agent",
-      content: "What seems to be the problem?",
+      content: "On 2026-05-17 you chose eager summarization on ingest — citable over write-cost.",
     },
     {
       role: "user",
-      content: "I can't log in.",
+      content: "Pull the full thread.",
     },
   ]);
   const [input, setInput] = React.useState("");
@@ -87,12 +66,11 @@ export function CardsChat() {
         <CardHeader className="flex flex-row items-center">
           <div className="flex items-center gap-4">
             <Avatar className="border">
-              <AvatarImage src="/avatars/01.png" alt="Image" />
-              <AvatarFallback>S</AvatarFallback>
+              <AvatarFallback>Sa</AvatarFallback>
             </Avatar>
             <div className="flex flex-col gap-0.5">
-              <p className="text-sm leading-none font-medium">Sofia Davis</p>
-              <p className="text-muted-foreground text-xs">m@example.com</p>
+              <p className="text-sm leading-none font-medium">Saskia</p>
+              <p className="text-muted-foreground text-xs">Assistant · Claude Sonnet 4.6</p>
             </div>
           </div>
           <TooltipProvider delayDuration={0}>
@@ -105,10 +83,10 @@ export function CardsChat() {
                   onClick={() => setOpen(true)}
                 >
                   <PlusIcon />
-                  <span className="sr-only">New message</span>
+                  <span className="sr-only">Invoke an agent</span>
                 </Button>
               </TooltipTrigger>
-              <TooltipContent sideOffset={10}>New message</TooltipContent>
+              <TooltipContent sideOffset={10}>Invoke an agent</TooltipContent>
             </Tooltip>
           </TooltipProvider>
         </CardHeader>
@@ -147,7 +125,7 @@ export function CardsChat() {
           >
             <Input
               id="message"
-              placeholder="Type your message..."
+              placeholder="Ask your brain..."
               className="flex-1 pr-10"
               autoComplete="off"
               value={input}
@@ -168,42 +146,41 @@ export function CardsChat() {
       <ResponsiveDialog open={open} onOpenChange={setOpen}>
         <ResponsiveDialogContent className="flex max-h-[85%] flex-col gap-0">
           <ResponsiveDialogHeader className="p-4 pt-0 sm:pt-5">
-            <ResponsiveDialogTitle>New message</ResponsiveDialogTitle>
+            <ResponsiveDialogTitle>Invoke an agent</ResponsiveDialogTitle>
             <ResponsiveDialogDescription>
-              Invite a user to this thread. This will create a new group message.
+              Saskia can hand work to a sub-agent. Pick who joins this thread.
             </ResponsiveDialogDescription>
           </ResponsiveDialogHeader>
 
           <Command className="overflow-hidden rounded-t-none border-t bg-transparent">
-            <CommandInput placeholder="Search user..." />
+            <CommandInput placeholder="Search agents..." />
             <CommandList>
-              <CommandEmpty>No users found.</CommandEmpty>
+              <CommandEmpty>No agents found.</CommandEmpty>
               <CommandGroup>
-                {users.map((user) => (
+                {agents.map((agent) => (
                   <CommandItem
-                    key={user.email}
-                    data-active={selectedUsers.includes(user)}
+                    key={agent.name}
+                    data-active={selectedAgents.includes(agent)}
                     className="gap-2 data-[active=true]:opacity-50"
                     onSelect={() => {
-                      if (selectedUsers.includes(user)) {
-                        return setSelectedUsers(
-                          selectedUsers.filter((selectedUser) => selectedUser !== user)
+                      if (selectedAgents.includes(agent)) {
+                        return setSelectedAgents(
+                          selectedAgents.filter((selected) => selected !== agent)
                         );
                       }
-                      return setSelectedUsers(
-                        [...users].filter((u) => [...selectedUsers, user].includes(u))
+                      return setSelectedAgents(
+                        [...agents].filter((a) => [...selectedAgents, agent].includes(a))
                       );
                     }}
                   >
                     <Avatar className="size-7.5 border">
-                      <AvatarImage src={user.avatar} alt="Image" />
-                      <AvatarFallback>{user.name[0]}</AvatarFallback>
+                      <AvatarFallback className="text-xs">{agent.initials}</AvatarFallback>
                     </Avatar>
                     <div className="ml-2">
-                      <p className="text-sm leading-none font-medium">{user.name}</p>
-                      <p className="text-muted-foreground text-sm">{user.email}</p>
+                      <p className="text-sm leading-none font-medium">{agent.name}</p>
+                      <p className="text-muted-foreground text-sm">{agent.role}</p>
                     </div>
-                    {selectedUsers.includes(user) ? (
+                    {selectedAgents.includes(agent) ? (
                       <CheckIcon className="text-primary ml-auto flex size-4" />
                     ) : null}
                   </CommandItem>
@@ -213,25 +190,24 @@ export function CardsChat() {
           </Command>
 
           <ResponsiveDialogFooter className="items-center border-t p-4 sm:justify-between">
-            {selectedUsers.length > 0 ? (
+            {selectedAgents.length > 0 ? (
               <div className="flex -space-x-2 overflow-hidden">
-                {selectedUsers.map((user) => (
-                  <Avatar key={user.email} className="inline-block size-7.5 border">
-                    <AvatarImage src={user.avatar} />
-                    <AvatarFallback>{user.name[0]}</AvatarFallback>
+                {selectedAgents.map((agent) => (
+                  <Avatar key={agent.name} className="inline-block size-7.5 border">
+                    <AvatarFallback className="text-xs">{agent.initials}</AvatarFallback>
                   </Avatar>
                 ))}
               </div>
             ) : (
-              <p className="text-muted-foreground text-sm">Select users to add to this thread.</p>
+              <p className="text-muted-foreground text-sm">Select agents to add to this thread.</p>
             )}
             <Button
               onClick={() => {
                 setOpen(false);
               }}
-              disabled={selectedUsers.length < 2}
+              disabled={selectedAgents.length < 1}
             >
-              Continue
+              Invoke
             </Button>
           </ResponsiveDialogFooter>
         </ResponsiveDialogContent>

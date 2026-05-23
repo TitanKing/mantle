@@ -16,14 +16,14 @@ const Loading = () => (
 const CardsDemo = dynamic(() => import('@/components/examples/cards'), { loading: Loading, ssr: false });
 const Dashboard = dynamic(() => import('@/components/examples/dashboard'), { loading: Loading, ssr: false });
 const MailDemo = dynamic(() => import('@/components/examples/mail'), { loading: Loading, ssr: false });
-const Pricing = dynamic(() => import('@/components/examples/pricing/pricing'), { loading: Loading, ssr: false });
+const MemoryTiers = dynamic(() => import('@/components/examples/pricing/pricing'), { loading: Loading, ssr: false });
 const Typography = dynamic(() => import('@/components/examples/typography/typography-demo'), { loading: Loading, ssr: false });
 
 const TABS = [
   { value: 'cards', label: 'Cards' },
   { value: 'dashboard', label: 'Dashboard' },
   { value: 'mail', label: 'Mail' },
-  { value: 'pricing', label: 'Pricing' },
+  { value: 'memory', label: 'Memory tiers' },
   { value: 'colors', label: 'Color Palette' },
   { value: 'typography', label: 'Typography' },
 ];
@@ -48,7 +48,7 @@ export function PreviewTabs() {
       <TabsContent value="cards" className="m-0"><CardsDemo /></TabsContent>
       <TabsContent value="dashboard" className="m-0"><Dashboard /></TabsContent>
       <TabsContent value="mail" className="m-0"><MailDemo /></TabsContent>
-      <TabsContent value="pricing" className="m-0"><Pricing /></TabsContent>
+      <TabsContent value="memory" className="m-0"><MemoryTiers /></TabsContent>
       <TabsContent value="colors" className="m-0"><ColorPalette /></TabsContent>
       <TabsContent value="typography" className="m-0"><Typography /></TabsContent>
     </Tabs>

@@ -1,20 +1,19 @@
 import * as React from "react";
 import {
-  ArrowUpCircleIcon,
-  BarChartIcon,
-  CameraIcon,
-  ClipboardListIcon,
-  DatabaseIcon,
-  FileCodeIcon,
+  ActivityIcon,
+  BotIcon,
+  BrainIcon,
+  CalendarIcon,
+  CheckSquareIcon,
+  DownloadIcon,
   FileIcon,
   FileTextIcon,
   FolderIcon,
   HelpCircleIcon,
   LayoutDashboardIcon,
-  ListIcon,
+  NetworkIcon,
   SearchIcon,
   SettingsIcon,
-  UsersIcon,
 } from "lucide-react";
 
 import { NavDocuments } from "@/components/examples/dashboard/components/nav-documents";
@@ -33,83 +32,40 @@ import {
 
 const data = {
   user: {
-    name: "shadcn",
-    email: "m@example.com",
-    avatar: "/avatars/shadcn.jpg",
+    name: "Jason",
+    email: "jason@schoeman.me",
+    avatar: "",
   },
   navMain: [
     {
-      title: "Dashboard",
+      title: "Overview",
       url: "#",
       icon: LayoutDashboardIcon,
     },
     {
-      title: "Lifecycle",
+      title: "Memory",
       url: "#",
-      icon: ListIcon,
+      icon: BrainIcon,
     },
     {
-      title: "Analytics",
+      title: "Agents",
       url: "#",
-      icon: BarChartIcon,
+      icon: BotIcon,
     },
     {
-      title: "Projects",
+      title: "Traces",
       url: "#",
-      icon: FolderIcon,
+      icon: ActivityIcon,
     },
     {
-      title: "Team",
+      title: "Entities",
       url: "#",
-      icon: UsersIcon,
-    },
-  ],
-  navClouds: [
-    {
-      title: "Capture",
-      icon: CameraIcon,
-      isActive: true,
-      url: "#",
-      items: [
-        {
-          title: "Active Proposals",
-          url: "#",
-        },
-        {
-          title: "Archived",
-          url: "#",
-        },
-      ],
+      icon: NetworkIcon,
     },
     {
-      title: "Proposal",
-      icon: FileTextIcon,
+      title: "Ingest",
       url: "#",
-      items: [
-        {
-          title: "Active Proposals",
-          url: "#",
-        },
-        {
-          title: "Archived",
-          url: "#",
-        },
-      ],
-    },
-    {
-      title: "Prompts",
-      icon: FileCodeIcon,
-      url: "#",
-      items: [
-        {
-          title: "Active Proposals",
-          url: "#",
-        },
-        {
-          title: "Archived",
-          url: "#",
-        },
-      ],
+      icon: DownloadIcon,
     },
   ],
   navSecondary: [
@@ -119,31 +75,41 @@ const data = {
       icon: SettingsIcon,
     },
     {
-      title: "Get Help",
-      url: "#",
-      icon: HelpCircleIcon,
-    },
-    {
       title: "Search",
       url: "#",
       icon: SearchIcon,
     },
+    {
+      title: "Get Help",
+      url: "#",
+      icon: HelpCircleIcon,
+    },
   ],
   documents: [
     {
-      name: "Data Library",
+      name: "Notes",
       url: "#",
-      icon: DatabaseIcon,
+      icon: FileTextIcon,
     },
     {
-      name: "Reports",
-      url: "#",
-      icon: ClipboardListIcon,
-    },
-    {
-      name: "Word Assistant",
+      name: "Pages",
       url: "#",
       icon: FileIcon,
+    },
+    {
+      name: "Events",
+      url: "#",
+      icon: CalendarIcon,
+    },
+    {
+      name: "Todos",
+      url: "#",
+      icon: CheckSquareIcon,
+    },
+    {
+      name: "Files",
+      url: "#",
+      icon: FolderIcon,
     },
   ],
 };
@@ -159,8 +125,8 @@ export function AppSidebar({ ...props }: React.ComponentProps<typeof Sidebar>) {
               className="data-[slot=sidebar-menu-button]:!p-1.5"
             >
               <a href="#">
-                <ArrowUpCircleIcon className="h-5 w-5" />
-                <span className="text-base font-semibold">Acme Inc.</span>
+                <BrainIcon className="h-5 w-5" />
+                <span className="text-base font-semibold">Mantle</span>
               </a>
             </SidebarMenuButton>
           </SidebarMenuItem>

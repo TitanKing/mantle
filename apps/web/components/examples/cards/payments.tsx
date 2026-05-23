@@ -35,53 +35,53 @@ import {
   TableRow,
 } from "@/components/ui/table";
 
-const data: Payment[] = [
+const data: Trace[] = [
   {
     id: "m5gr84i9",
-    amount: 316,
-    status: "success",
-    email: "ken99@example.com",
+    tokens: 3160,
+    status: "done",
+    agent: "Saskia",
   },
   {
     id: "3u1reuv4",
-    amount: 242,
-    status: "success",
-    email: "Abe45@example.com",
+    tokens: 2420,
+    status: "done",
+    agent: "Remy",
   },
   {
     id: "derv1ws0",
-    amount: 837,
-    status: "processing",
-    email: "Monserrat44@example.com",
+    tokens: 8370,
+    status: "running",
+    agent: "Researcher",
   },
   {
     id: "bhqecj4p",
-    amount: 721,
+    tokens: 7210,
     status: "failed",
-    email: "carmella@example.com",
+    agent: "Ingest",
   },
   {
     id: "k9f2m3n4",
-    amount: 450,
-    status: "pending",
-    email: "jason78@example.com",
+    tokens: 4500,
+    status: "queued",
+    agent: "Heartbeat",
   },
   {
     id: "p5q6r7s8",
-    amount: 1280,
-    status: "success",
-    email: "sarah23@example.com",
+    tokens: 12800,
+    status: "done",
+    agent: "Saskia",
   },
 ];
 
-export type Payment = {
+export type Trace = {
   id: string;
-  amount: number;
-  status: "pending" | "processing" | "success" | "failed";
-  email: string;
+  tokens: number;
+  status: "queued" | "running" | "done" | "failed";
+  agent: string;
 };
 
-export const columns: ColumnDef<Payment>[] = [
+export const columns: ColumnDef<Trace>[] = [
   {
     id: "select",
     header: ({ table }) => (
@@ -109,30 +109,24 @@ export const columns: ColumnDef<Payment>[] = [
     cell: ({ row }) => <div className="capitalize">{row.getValue("status")}</div>,
   },
   {
-    accessorKey: "email",
-    header: "Email",
-    cell: ({ row }) => <div className="lowercase">{row.getValue("email")}</div>,
+    accessorKey: "agent",
+    header: "Agent",
+    cell: ({ row }) => <div>{row.getValue("agent")}</div>,
   },
   {
-    accessorKey: "amount",
-    header: () => <div className="text-right">Amount</div>,
+    accessorKey: "tokens",
+    header: () => <div className="text-right">Tokens</div>,
     cell: ({ row }) => {
-      const amount = parseFloat(row.getValue("amount"));
-
-      // Format the amount as a dollar amount
-      const formatted = new Intl.NumberFormat("en-US", {
-        style: "currency",
-        currency: "USD",
-      }).format(amount);
-
-      return <div className="text-right font-medium">{formatted}</div>;
+      const tokens = parseFloat(row.getValue("tokens"));
+      const formatted = new Intl.NumberFormat("en-US").format(tokens);
+      return <div className="text-right font-medium tabular-nums">{formatted}</div>;
     },
   },
   {
     id: "actions",
     enableHiding: false,
     cell: ({ row }) => {
-      const payment = row.original;
+      const trace = row.original;
 
       return (
         <DropdownMenu>
@@ -144,12 +138,12 @@ export const columns: ColumnDef<Payment>[] = [
           </DropdownMenuTrigger>
           <DropdownMenuContent align="end">
             <DropdownMenuLabel>Actions</DropdownMenuLabel>
-            <DropdownMenuItem onClick={() => navigator.clipboard.writeText(payment.id)}>
-              Copy payment ID
+            <DropdownMenuItem onClick={() => navigator.clipboard.writeText(trace.id)}>
+              Copy trace ID
             </DropdownMenuItem>
             <DropdownMenuSeparator />
-            <DropdownMenuItem>View customer</DropdownMenuItem>
-            <DropdownMenuItem>View payment details</DropdownMenuItem>
+            <DropdownMenuItem>View agent</DropdownMenuItem>
+            <DropdownMenuItem>Open trace</DropdownMenuItem>
           </DropdownMenuContent>
         </DropdownMenu>
       );
@@ -185,8 +179,8 @@ export function CardsPayments() {
   return (
     <Card>
       <CardHeader>
-        <CardTitle className="text-xl">Payments</CardTitle>
-        <CardDescription>Manage your payments.</CardDescription>
+        <CardTitle className="text-xl">Recent traces</CardTitle>
+        <CardDescription>The latest agent runs.</CardDescription>
       </CardHeader>
       <CardContent className="flex flex-col gap-4">
         <div className="rounded-md border">
@@ -198,7 +192,7 @@ export function CardsPayments() {
                     return (
                       <TableHead
                         key={header.id}
-                        className="data-[name=actions]:w-10 data-[name=amount]:w-24 data-[name=select]:w-10 data-[name=status]:w-24 [&:has([role=checkbox])]:pl-3"
+                        className="data-[name=actions]:w-10 data-[name=select]:w-10 data-[name=status]:w-24 data-[name=tokens]:w-24 [&:has([role=checkbox])]:pl-3"
                         data-name={header.id}
                       >
                         {header.isPlaceholder
@@ -217,7 +211,7 @@ export function CardsPayments() {
                     {row.getVisibleCells().map((cell) => (
                       <TableCell
                         key={cell.id}
-                        className="data-[name=actions]:w-10 data-[name=amount]:w-24 data-[name=select]:w-10 data-[name=status]:w-24 [&:has([role=checkbox])]:pl-3"
+                        className="data-[name=actions]:w-10 data-[name=select]:w-10 data-[name=status]:w-24 data-[name=tokens]:w-24 [&:has([role=checkbox])]:pl-3"
                         data-name={cell.column.id}
                       >
                         {flexRender(cell.column.columnDef.cell, cell.getContext())}

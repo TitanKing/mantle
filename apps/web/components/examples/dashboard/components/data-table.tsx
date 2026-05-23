@@ -168,7 +168,7 @@ const columns: ColumnDef<z.infer<typeof schema>>[] = [
   },
   {
     accessorKey: "type",
-    header: "Section Type",
+    header: "Kind",
     cell: ({ row }) => (
       <div className="w-32">
         <Badge variant="outline" className="px-1.5 text-muted-foreground">
@@ -179,7 +179,7 @@ const columns: ColumnDef<z.infer<typeof schema>>[] = [
   },
   {
     accessorKey: "target",
-    header: () => <div className="w-full text-right">Target</div>,
+    header: () => <div className="w-full text-right">Tokens</div>,
     cell: ({ row }) => (
       <form
         onSubmit={(e) => {
@@ -204,7 +204,7 @@ const columns: ColumnDef<z.infer<typeof schema>>[] = [
   },
   {
     accessorKey: "limit",
-    header: () => <div className="w-full text-right">Limit</div>,
+    header: () => <div className="w-full text-right">Tools</div>,
     cell: ({ row }) => (
       <form
         onSubmit={(e) => {
@@ -229,9 +229,9 @@ const columns: ColumnDef<z.infer<typeof schema>>[] = [
   },
   {
     accessorKey: "reviewer",
-    header: "Reviewer",
+    header: "Agent",
     cell: ({ row }) => {
-      const isAssigned = row.original.reviewer !== "Assign reviewer";
+      const isAssigned = row.original.reviewer !== "Assign agent";
 
       if (isAssigned) {
         return row.original.reviewer;
@@ -240,20 +240,19 @@ const columns: ColumnDef<z.infer<typeof schema>>[] = [
       return (
         <>
           <Label htmlFor={`${row.original.id}-reviewer`} className="sr-only">
-            Reviewer
+            Agent
           </Label>
           <Select>
             <SelectTrigger
               className="h-8 w-40"
               id={`${row.original.id}-reviewer`}
             >
-              <SelectValue placeholder="Assign reviewer" />
+              <SelectValue placeholder="Assign agent" />
             </SelectTrigger>
             <SelectContent align="end">
-              <SelectItem value="Eddie Lake">Eddie Lake</SelectItem>
-              <SelectItem value="Jamik Tashpulatov">
-                Jamik Tashpulatov
-              </SelectItem>
+              <SelectItem value="Saskia">Saskia</SelectItem>
+              <SelectItem value="Remy">Remy</SelectItem>
+              <SelectItem value="Researcher">Researcher</SelectItem>
             </SelectContent>
           </Select>
         </>
@@ -395,16 +394,16 @@ export function DataTable({
             <SelectValue placeholder="Select a view" />
           </SelectTrigger>
           <SelectContent>
-            <SelectItem value="outline">Outline</SelectItem>
-            <SelectItem value="past-performance">Past Performance</SelectItem>
-            <SelectItem value="key-personnel">Key Personnel</SelectItem>
-            <SelectItem value="focus-documents">Focus Documents</SelectItem>
+            <SelectItem value="outline">Recent</SelectItem>
+            <SelectItem value="past-performance">Errors</SelectItem>
+            <SelectItem value="key-personnel">Pending</SelectItem>
+            <SelectItem value="focus-documents">Archived</SelectItem>
           </SelectContent>
         </Select>
         <TabsList className="@4xl/main:flex hidden">
-          <TabsTrigger value="outline">Outline</TabsTrigger>
+          <TabsTrigger value="outline">Recent</TabsTrigger>
           <TabsTrigger value="past-performance" className="gap-1">
-            Past Performance{" "}
+            Errors{" "}
             <Badge
               variant="secondary"
               className="flex h-5 w-5 items-center justify-center rounded-full bg-muted-foreground/30"
@@ -413,7 +412,7 @@ export function DataTable({
             </Badge>
           </TabsTrigger>
           <TabsTrigger value="key-personnel" className="gap-1">
-            Key Personnel{" "}
+            Pending{" "}
             <Badge
               variant="secondary"
               className="flex h-5 w-5 items-center justify-center rounded-full bg-muted-foreground/30"
@@ -421,7 +420,7 @@ export function DataTable({
               2
             </Badge>
           </TabsTrigger>
-          <TabsTrigger value="focus-documents">Focus Documents</TabsTrigger>
+          <TabsTrigger value="focus-documents">Archived</TabsTrigger>
         </TabsList>
         <div className="flex items-center gap-2">
           <DropdownMenu>
@@ -459,7 +458,7 @@ export function DataTable({
           </DropdownMenu>
           <Button variant="outline" size="sm">
             <PlusIcon />
-            <span className="hidden lg:inline">Add Section</span>
+            <span className="hidden lg:inline">New trace</span>
           </Button>
         </div>
       </div>
@@ -626,11 +625,11 @@ const chartData = [
 
 const chartConfig = {
   desktop: {
-    label: "Desktop",
+    label: "Input",
     color: "var(--primary)",
   },
   mobile: {
-    label: "Mobile",
+    label: "Output",
     color: "var(--primary)",
   },
 } satisfies ChartConfig;
@@ -649,7 +648,7 @@ function TableCellViewer({ item }: { item: z.infer<typeof schema> }) {
         <SheetHeader className="gap-1">
           <SheetTitle>{item.header}</SheetTitle>
           <SheetDescription>
-            Showing total visitors for the last 6 months
+            Input vs output tokens for the last 6 months
           </SheetDescription>
         </SheetHeader>
         <div className="flex flex-1 flex-col gap-4 overflow-y-auto py-4 text-sm">
@@ -702,9 +701,9 @@ function TableCellViewer({ item }: { item: z.infer<typeof schema> }) {
                   <TrendingUpIcon className="size-4" />
                 </div>
                 <div className="text-muted-foreground">
-                  Showing total visitors for the last 6 months. This is just
-                  some random text to test the layout. It spans multiple lines
-                  and should wrap around.
+                  Token spend for this trace over the last 6 months. Most of the
+                  cost is output tokens; routing more steps to a local model
+                  would bring it down.
                 </div>
               </div>
               <Separator />
@@ -712,59 +711,49 @@ function TableCellViewer({ item }: { item: z.infer<typeof schema> }) {
           )}
           <form className="flex flex-col gap-4">
             <div className="flex flex-col gap-3">
-              <Label htmlFor="header">Header</Label>
+              <Label htmlFor="header">Action</Label>
               <Input id="header" defaultValue={item.header} />
             </div>
             <div className="grid grid-cols-2 gap-4">
               <div className="flex flex-col gap-3">
-                <Label htmlFor="type">Type</Label>
+                <Label htmlFor="type">Kind</Label>
                 <Select defaultValue={item.type}>
                   <SelectTrigger id="type" className="w-full">
-                    <SelectValue placeholder="Select a type" />
+                    <SelectValue placeholder="Select a kind" />
                   </SelectTrigger>
                   <SelectContent>
-                    <SelectItem value="Table of Contents">
-                      Table of Contents
-                    </SelectItem>
-                    <SelectItem value="Executive Summary">
-                      Executive Summary
-                    </SelectItem>
-                    <SelectItem value="Technical Approach">
-                      Technical Approach
-                    </SelectItem>
-                    <SelectItem value="Design">Design</SelectItem>
-                    <SelectItem value="Capabilities">Capabilities</SelectItem>
-                    <SelectItem value="Focus Documents">
-                      Focus Documents
-                    </SelectItem>
-                    <SelectItem value="Narrative">Narrative</SelectItem>
-                    <SelectItem value="Cover Page">Cover Page</SelectItem>
+                    <SelectItem value="Recall">Recall</SelectItem>
+                    <SelectItem value="Web search">Web search</SelectItem>
+                    <SelectItem value="Ingest">Ingest</SelectItem>
+                    <SelectItem value="Summarize">Summarize</SelectItem>
+                    <SelectItem value="Email">Email</SelectItem>
+                    <SelectItem value="Note">Note</SelectItem>
+                    <SelectItem value="Event">Event</SelectItem>
+                    <SelectItem value="Entity">Entity</SelectItem>
                   </SelectContent>
                 </Select>
               </div>
             </div>
             <div className="grid grid-cols-2 gap-4">
               <div className="flex flex-col gap-3">
-                <Label htmlFor="target">Target</Label>
+                <Label htmlFor="target">Tokens</Label>
                 <Input id="target" defaultValue={item.target} />
               </div>
               <div className="flex flex-col gap-3">
-                <Label htmlFor="limit">Limit</Label>
+                <Label htmlFor="limit">Tools</Label>
                 <Input id="limit" defaultValue={item.limit} />
               </div>
             </div>
             <div className="flex flex-col gap-3">
-              <Label htmlFor="reviewer">Reviewer</Label>
+              <Label htmlFor="reviewer">Agent</Label>
               <Select defaultValue={item.reviewer}>
                 <SelectTrigger id="reviewer" className="w-full">
-                  <SelectValue placeholder="Select a reviewer" />
+                  <SelectValue placeholder="Select an agent" />
                 </SelectTrigger>
                 <SelectContent>
-                  <SelectItem value="Eddie Lake">Eddie Lake</SelectItem>
-                  <SelectItem value="Jamik Tashpulatov">
-                    Jamik Tashpulatov
-                  </SelectItem>
-                  <SelectItem value="Emily Whalen">Emily Whalen</SelectItem>
+                  <SelectItem value="Saskia">Saskia</SelectItem>
+                  <SelectItem value="Remy">Remy</SelectItem>
+                  <SelectItem value="Researcher">Researcher</SelectItem>
                 </SelectContent>
               </Select>
             </div>

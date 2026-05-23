@@ -28,54 +28,51 @@ export function CardsReportIssue() {
   return (
     <Card>
       <CardHeader>
-        <CardTitle>Report an issue</CardTitle>
-        <CardDescription>What area are you having problems with?</CardDescription>
+        <CardTitle>Ask the Researcher</CardTitle>
+        <CardDescription>Saskia hands deep questions to the Researcher.</CardDescription>
       </CardHeader>
       <CardContent className="flex flex-col gap-6">
         <div className="grid gap-4 @2xl:grid-cols-2">
           <div className="flex flex-col gap-3">
-            <Label htmlFor={`area-${id}`}>Area</Label>
-            <Select defaultValue="billing">
-              <SelectTrigger id={`area-${id}`} aria-label="Area" className="w-full">
+            <Label htmlFor={`area-${id}`}>Source</Label>
+            <Select defaultValue="web">
+              <SelectTrigger id={`area-${id}`} aria-label="Source" className="w-full">
                 <SelectValue placeholder="Select" />
               </SelectTrigger>
               <SelectContent>
-                <SelectItem value="team">Team</SelectItem>
-                <SelectItem value="billing">Billing</SelectItem>
-                <SelectItem value="account">Account</SelectItem>
-                <SelectItem value="deployments">Deployments</SelectItem>
-                <SelectItem value="support">Support</SelectItem>
+                <SelectItem value="web">Web</SelectItem>
+                <SelectItem value="memory">Memory</SelectItem>
+                <SelectItem value="both">Web + Memory</SelectItem>
               </SelectContent>
             </Select>
           </div>
           <div className="flex flex-col gap-3">
-            <Label htmlFor={`security-level-${id}`}>Security Level</Label>
-            <Select defaultValue="2">
+            <Label htmlFor={`depth-${id}`}>Depth</Label>
+            <Select defaultValue="standard">
               <SelectTrigger
-                id={`security-level-${id}`}
+                id={`depth-${id}`}
                 className="w-full [&_span]:!block [&_span]:truncate"
-                aria-label="Security Level"
+                aria-label="Depth"
               >
-                <SelectValue placeholder="Select level" />
+                <SelectValue placeholder="Select depth" />
               </SelectTrigger>
               <SelectContent>
-                <SelectItem value="1">Severity 1 (Highest)</SelectItem>
-                <SelectItem value="2">Severity 2</SelectItem>
-                <SelectItem value="3">Severity 3</SelectItem>
-                <SelectItem value="4">Severity 4 (Lowest)</SelectItem>
+                <SelectItem value="quick">Quick (1 hop)</SelectItem>
+                <SelectItem value="standard">Standard</SelectItem>
+                <SelectItem value="deep">Deep (multi-hop)</SelectItem>
               </SelectContent>
             </Select>
           </div>
         </div>
         <div className="flex flex-col gap-3">
-          <Label htmlFor={`subject-${id}`}>Subject</Label>
-          <Input id={`subject-${id}`} placeholder="I need help with..." />
+          <Label htmlFor={`subject-${id}`}>Question</Label>
+          <Input id={`subject-${id}`} placeholder="What changed in…" />
         </div>
         <div className="flex flex-col gap-3">
-          <Label htmlFor={`description-${id}`}>Description</Label>
+          <Label htmlFor={`description-${id}`}>Context</Label>
           <Textarea
             id={`description-${id}`}
-            placeholder="Please include all information relevant to your issue."
+            placeholder="Anything from your brain that should guide the search."
             className="min-h-28"
           />
         </div>
@@ -84,7 +81,7 @@ export function CardsReportIssue() {
         <Button variant="ghost" size="sm">
           Cancel
         </Button>
-        <Button size="sm">Submit</Button>
+        <Button size="sm">Ask</Button>
       </CardFooter>
     </Card>
   );

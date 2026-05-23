@@ -16,32 +16,32 @@ export function CardsCookieSettings() {
   return (
     <Card>
       <CardHeader>
-        <CardTitle>Cookie Settings</CardTitle>
-        <CardDescription>Manage your cookie settings here.</CardDescription>
+        <CardTitle>Ingest settings</CardTitle>
+        <CardDescription>How new content enters your brain.</CardDescription>
       </CardHeader>
       <CardContent className="grid gap-6">
         <div className="flex items-center justify-between gap-4">
-          <Label htmlFor="necessary" className="flex flex-col items-start">
-            <span>Strictly Necessary</span>
+          <Label htmlFor="summarize" className="flex flex-col items-start">
+            <span>Eager summarization</span>
             <span className="text-muted-foreground leading-snug font-normal">
-              These cookies are essential in order to use the website and use its features.
+              Summarize every node on ingest so recall stays citable and deterministic.
             </span>
           </Label>
-          <Switch id="necessary" defaultChecked aria-label="Necessary" />
+          <Switch id="summarize" defaultChecked aria-label="Eager summarization" />
         </div>
         <div className="flex items-center justify-between gap-4">
-          <Label htmlFor="functional" className="flex flex-col items-start">
-            <span>Functional Cookies</span>
+          <Label htmlFor="embeddings" className="flex flex-col items-start">
+            <span>Generate embeddings</span>
             <span className="text-muted-foreground leading-snug font-normal">
-              These cookies allow the website to provide personalized functionality.
+              Embed each node for semantic search and Remy's window recall.
             </span>
           </Label>
-          <Switch id="functional" aria-label="Functional" />
+          <Switch id="embeddings" defaultChecked aria-label="Generate embeddings" />
         </div>
       </CardContent>
       <CardFooter>
         <Button variant="outline" className="w-full">
-          Save preferences
+          Save settings
         </Button>
       </CardFooter>
     </Card>

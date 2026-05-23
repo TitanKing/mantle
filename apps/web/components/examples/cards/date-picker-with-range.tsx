@@ -20,8 +20,8 @@ export function DatePickerWithRange({ className }: React.HTMLAttributes<HTMLDivE
   return (
     <Card className={cn("grid gap-2", className)}>
       <CardHeader>
-        <CardTitle>Date picker with range</CardTitle>
-        <CardDescription>Select a date range.</CardDescription>
+        <CardTitle>Recall window</CardTitle>
+        <CardDescription>Pick a time range for Remy to replay.</CardDescription>
       </CardHeader>
 
       <CardContent>

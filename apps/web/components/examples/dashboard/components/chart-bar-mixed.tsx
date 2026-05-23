@@ -18,35 +18,35 @@ import {
   ChartTooltipContent,
 } from "@/components/ui/chart"
 const chartData = [
-  { browser: "chrome", visitors: 275, fill: "var(--color-chrome)" },
-  { browser: "safari", visitors: 200, fill: "var(--color-safari)" },
-  { browser: "firefox", visitors: 187, fill: "var(--color-firefox)" },
-  { browser: "edge", visitors: 173, fill: "var(--color-edge)" },
-  { browser: "other", visitors: 90, fill: "var(--color-other)" },
+  { tool: "search", calls: 275, fill: "var(--color-search)" },
+  { tool: "recall", calls: 200, fill: "var(--color-recall)" },
+  { tool: "note", calls: 187, fill: "var(--color-note)" },
+  { tool: "email", calls: 173, fill: "var(--color-email)" },
+  { tool: "other", calls: 90, fill: "var(--color-other)" },
 ]
 
 const chartConfig = {
-  visitors: {
-    label: "Visitors",
+  calls: {
+    label: "Calls",
   },
-  chrome: {
-    label: "Chrome",
+  search: {
+    label: "web_search",
     color: "var(--chart-1)",
   },
-  safari: {
-    label: "Safari",
+  recall: {
+    label: "recall_window",
     color: "var(--chart-2)",
   },
-  firefox: {
-    label: "Firefox",
+  note: {
+    label: "note_create",
     color: "var(--chart-3)",
   },
-  edge: {
-    label: "Edge",
+  email: {
+    label: "email_send",
     color: "var(--chart-4)",
   },
   other: {
-    label: "Other",
+    label: "other",
     color: "var(--chart-5)",
   },
 } satisfies ChartConfig
@@ -55,8 +55,8 @@ export function ChartBarMixed() {
   return (
     <Card>
       <CardHeader>
-        <CardTitle>Bar Chart - Mixed</CardTitle>
-        <CardDescription>January - June 2024</CardDescription>
+        <CardTitle>Tool calls</CardTitle>
+        <CardDescription>Across all agents, last 6 months</CardDescription>
       </CardHeader>
       <CardContent>
         <ChartContainer config={chartConfig}>
@@ -69,21 +69,22 @@ export function ChartBarMixed() {
             }}
           >
             <YAxis
-              dataKey="browser"
+              dataKey="tool"
               type="category"
               tickLine={false}
               tickMargin={10}
               axisLine={false}
+              width={90}
               tickFormatter={(value) =>
                 chartConfig[value as keyof typeof chartConfig]?.label
               }
             />
-            <XAxis dataKey="visitors" type="number" hide />
+            <XAxis dataKey="calls" type="number" hide />
             <ChartTooltip
               cursor={false}
               content={<ChartTooltipContent hideLabel />}
             />
-            <Bar dataKey="visitors" layout="vertical" radius={5} />
+            <Bar dataKey="calls" layout="vertical" radius={5} />
           </BarChart>
         </ChartContainer>
       </CardContent>
@@ -92,7 +93,7 @@ export function ChartBarMixed() {
           Trending up by 5.2% this month <TrendingUp className="h-4 w-4" />
         </div>
         <div className="leading-none text-muted-foreground">
-          Showing total visitors for the last 6 months
+          Showing total tool calls for the last 6 months
         </div>
       </CardFooter>
     </Card>

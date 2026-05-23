@@ -15,18 +15,16 @@ import { Label } from "@/components/ui/label";
 import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
 import { Textarea } from "@/components/ui/textarea";
 
-const plans = [
+const tiers = [
   {
-    id: "starter",
-    name: "Starter Plan",
-    description: "Perfect for small businesses.",
-    price: "$10",
+    id: "cloud",
+    name: "Cloud model",
+    description: "Anthropic / OpenRouter. Best reasoning.",
   },
   {
-    id: "pro",
-    name: "Pro Plan",
-    description: "More features and storage.",
-    price: "$20",
+    id: "local",
+    name: "Local model",
+    description: "Runs on-box. Private, no token cost.",
   },
 ] as const;
 
@@ -34,55 +32,55 @@ export function CardsForms() {
   return (
     <Card>
       <CardHeader>
-        <CardTitle className="text-lg">Upgrade your subscription</CardTitle>
+        <CardTitle className="text-lg">New agent</CardTitle>
         <CardDescription className="text-balance">
-          You are currently on the free plan. Upgrade to the pro plan to get access to all features.
+          Agents read from and write to your brain. Give one a name, a model, and instructions.
         </CardDescription>
       </CardHeader>
       <CardContent>
         <div className="flex flex-col gap-6">
           <div className="flex flex-col gap-3 @3xl:flex-row">
             <div className="flex flex-1 flex-col gap-2">
-              <Label htmlFor="name">Name</Label>
-              <Input id="name" placeholder="Evil Rabbit" />
+              <Label htmlFor="agent-name">Name</Label>
+              <Input id="agent-name" placeholder="Researcher" />
             </div>
             <div className="flex flex-1 flex-col gap-2">
-              <Label htmlFor="email">Email</Label>
-              <Input id="email" placeholder="example@acme.com" />
+              <Label htmlFor="agent-slug">Slug</Label>
+              <Input id="agent-slug" placeholder="researcher" />
             </div>
           </div>
           <div className="flex flex-col gap-2">
-            <Label htmlFor="card-number">Card Number</Label>
+            <Label htmlFor="agent-model">Model &amp; sampling</Label>
             <div className="grid grid-cols-2 gap-3 @3xl:grid-cols-[1fr_80px_60px]">
               <Input
-                id="card-number"
-                placeholder="1234 1234 1234 1234"
+                id="agent-model"
+                placeholder="claude-sonnet-4-6"
                 className="col-span-2 @3xl:col-span-1"
               />
-              <Input id="card-number-expiry" placeholder="MM/YY" />
-              <Input id="card-number-cvc" placeholder="CVC" />
+              <Input id="agent-temp" placeholder="Temp" defaultValue="0.7" />
+              <Input id="agent-topp" placeholder="Top-p" defaultValue="1" />
             </div>
           </div>
           <fieldset className="flex flex-col gap-3">
-            <legend className="text-sm font-medium">Plan</legend>
+            <legend className="text-sm font-medium">Runtime</legend>
             <p className="text-muted-foreground text-sm">
-              Select the plan that best fits your needs.
+              Pick where this agent runs its inference.
             </p>
-            <RadioGroup defaultValue="starter" className="grid gap-3 @3xl:grid-cols-2">
-              {plans.map((plan) => (
+            <RadioGroup defaultValue="cloud" className="grid gap-3 @3xl:grid-cols-2">
+              {tiers.map((tier) => (
                 <Label
                   className="has-[[data-state=checked]]:border-ring has-[[data-state=checked]]:bg-input/20 flex items-start gap-3 rounded-lg border p-3"
-                  key={plan.id}
+                  key={tier.id}
                 >
                   <RadioGroupItem
-                    value={plan.id}
-                    id={plan.name}
+                    value={tier.id}
+                    id={tier.name}
                     className="data-[state=checked]:border-primary"
                   />
                   <div className="grid gap-1 font-normal">
-                    <div className="font-medium">{plan.name}</div>
+                    <div className="font-medium">{tier.name}</div>
                     <div className="text-muted-foreground text-xs leading-snug text-balance">
-                      {plan.description}
+                      {tier.description}
                     </div>
                   </div>
                 </Label>
@@ -90,20 +88,20 @@ export function CardsForms() {
             </RadioGroup>
           </fieldset>
           <div className="flex flex-col gap-2">
-            <Label htmlFor="notes">Notes</Label>
-            <Textarea id="notes" placeholder="Enter notes" />
+            <Label htmlFor="agent-prompt">System prompt</Label>
+            <Textarea id="agent-prompt" placeholder="You are the Researcher. Search the web and return cited synthesis…" />
           </div>
           <div className="flex flex-col gap-3">
             <div className="flex items-center gap-2">
-              <Checkbox id="terms" />
-              <Label htmlFor="terms" className="font-normal">
-                I agree to the terms and conditions
+              <Checkbox id="agent-write" />
+              <Label htmlFor="agent-write" className="font-normal">
+                Can write to the brain
               </Label>
             </div>
             <div className="flex items-center gap-2">
-              <Checkbox id="newsletter" defaultChecked />
-              <Label htmlFor="newsletter" className="font-normal">
-                Allow us to send you emails
+              <Checkbox id="agent-heartbeat" defaultChecked />
+              <Label htmlFor="agent-heartbeat" className="font-normal">
+                Run on heartbeats
               </Label>
             </div>
           </div>
@@ -113,7 +111,7 @@ export function CardsForms() {
         <Button variant="outline" size="sm">
           Cancel
         </Button>
-        <Button size="sm">Upgrade Plan</Button>
+        <Button size="sm">Create agent</Button>
       </CardFooter>
     </Card>
   );

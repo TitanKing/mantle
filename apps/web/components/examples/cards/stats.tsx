@@ -6,47 +6,23 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { ChartConfig, ChartContainer } from "@/components/ui/chart";
 
 const data = [
-  {
-    revenue: 10400,
-    subscription: 40,
-  },
-  {
-    revenue: 14405,
-    subscription: 90,
-  },
-  {
-    revenue: 9400,
-    subscription: 200,
-  },
-  {
-    revenue: 8200,
-    subscription: 278,
-  },
-  {
-    revenue: 7000,
-    subscription: 89,
-  },
-  {
-    revenue: 9600,
-    subscription: 239,
-  },
-  {
-    revenue: 11244,
-    subscription: 78,
-  },
-  {
-    revenue: 26475,
-    subscription: 89,
-  },
+  { tokens: 10400, traces: 40 },
+  { tokens: 14405, traces: 90 },
+  { tokens: 9400, traces: 200 },
+  { tokens: 8200, traces: 278 },
+  { tokens: 7000, traces: 89 },
+  { tokens: 9600, traces: 239 },
+  { tokens: 11244, traces: 78 },
+  { tokens: 26475, traces: 89 },
 ];
 
 const chartConfig = {
-  revenue: {
-    label: "Revenue",
+  tokens: {
+    label: "Tokens",
     color: "var(--primary)",
   },
-  subscription: {
-    label: "Subscriptions",
+  traces: {
+    label: "Traces",
     color: "var(--primary)",
   },
 } satisfies ChartConfig;
@@ -56,8 +32,8 @@ export function CardsStats() {
     <div className="grid gap-4 @xl:grid-cols-2 @5xl:grid-cols-1 @7xl:grid-cols-2">
       <Card>
         <CardHeader>
-          <CardDescription>Total Revenue</CardDescription>
-          <CardTitle className="text-3xl">$15,231.89</CardTitle>
+          <CardDescription>Tokens this month</CardDescription>
+          <CardTitle className="text-3xl">1.28M</CardTitle>
           <CardDescription>+20.1% from last month</CardDescription>
         </CardHeader>
         <CardContent className="pb-0">
@@ -74,8 +50,8 @@ export function CardsStats() {
               <Line
                 type="monotone"
                 strokeWidth={2}
-                dataKey="revenue"
-                stroke="var(--color-revenue)"
+                dataKey="tokens"
+                stroke="var(--color-tokens)"
                 activeDot={{
                   r: 6,
                 }}
@@ -86,7 +62,7 @@ export function CardsStats() {
       </Card>
       <Card className="relative flex flex-col overflow-hidden pb-0 @5xl:hidden @7xl:flex">
         <CardHeader>
-          <CardDescription>Subscriptions</CardDescription>
+          <CardDescription>Traces run</CardDescription>
           <CardTitle className="text-3xl">+2,350</CardTitle>
           <CardDescription>+180.1% from last month</CardDescription>
         </CardHeader>
@@ -101,10 +77,10 @@ export function CardsStats() {
               className="size-fit"
             >
               <Area
-                dataKey="subscription"
-                fill="var(--color-subscription)"
+                dataKey="traces"
+                fill="var(--color-traces)"
                 fillOpacity={0.05}
-                stroke="var(--color-subscription)"
+                stroke="var(--color-traces)"
                 strokeWidth={2}
                 type="monotone"
               />

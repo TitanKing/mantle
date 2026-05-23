@@ -2,7 +2,7 @@
 
 import { ChevronDown } from "lucide-react";
 
-import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
+import { Avatar, AvatarFallback } from "@/components/ui/avatar";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import {
@@ -15,43 +15,43 @@ import {
 } from "@/components/ui/command";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 
-const teamMembers = [
+const agents = [
   {
-    name: "Sofia Davis",
-    email: "m@example.com",
-    avatar: "/avatars/01.png",
-    role: "Owner",
+    name: "Saskia",
+    role: "Assistant",
+    initials: "Sa",
+    model: "Claude Sonnet 4.6",
   },
   {
-    name: "Jackson Lee",
-    email: "p@example.com",
-    avatar: "/avatars/02.png",
-    role: "Developer",
+    name: "Remy",
+    role: "Memory recall",
+    initials: "Re",
+    model: "Claude Haiku 4.5",
   },
   {
-    name: "Isabella Nguyen",
-    email: "i@example.com",
-    avatar: "/avatars/03.png",
-    role: "Billing",
+    name: "Researcher",
+    role: "Web search",
+    initials: "Rs",
+    model: "Perplexity Sonar",
   },
 ];
 
-const roles = [
+const models = [
   {
-    name: "Viewer",
-    description: "Can view and comment.",
+    name: "Claude Opus 4.7",
+    description: "Deepest reasoning, highest cost.",
   },
   {
-    name: "Developer",
-    description: "Can view, comment and edit.",
+    name: "Claude Sonnet 4.6",
+    description: "Balanced default for the assistant.",
   },
   {
-    name: "Billing",
-    description: "Can view, comment and manage billing.",
+    name: "Claude Haiku 4.5",
+    description: "Fast and cheap for sub-agents.",
   },
   {
-    name: "Owner",
-    description: "Admin-level access to all resources.",
+    name: "Local (Llama)",
+    description: "Runs on-box for ingest extraction.",
   },
 ];
 
@@ -59,39 +59,38 @@ export function CardsTeamMembers() {
   return (
     <Card>
       <CardHeader>
-        <CardTitle>Team Members</CardTitle>
-        <CardDescription>Invite your team members to collaborate.</CardDescription>
+        <CardTitle>Agents</CardTitle>
+        <CardDescription>The agents working inside your brain.</CardDescription>
       </CardHeader>
       <CardContent className="grid gap-6">
-        {teamMembers.map((member) => (
-          <div key={member.name} className="flex items-center justify-between gap-4">
+        {agents.map((agent) => (
+          <div key={agent.name} className="flex items-center justify-between gap-4">
             <div className="flex items-center gap-4">
               <Avatar className="border">
-                <AvatarImage src={member.avatar} alt="Image" />
-                <AvatarFallback>{member.name.charAt(0)}</AvatarFallback>
+                <AvatarFallback className="text-xs">{agent.initials}</AvatarFallback>
               </Avatar>
               <div className="flex flex-col gap-0.5">
-                <p className="text-sm leading-none font-medium">{member.name}</p>
-                <p className="text-muted-foreground text-xs">{member.email}</p>
+                <p className="text-sm leading-none font-medium">{agent.name}</p>
+                <p className="text-muted-foreground text-xs">{agent.role}</p>
               </div>
             </div>
             <Popover>
               <PopoverTrigger asChild>
                 <Button variant="outline" size="sm" className="ml-auto shadow-none">
-                  {member.role} <ChevronDown />
+                  {agent.model} <ChevronDown />
                 </Button>
               </PopoverTrigger>
               <PopoverContent className="p-0" align="end">
                 <Command>
-                  <CommandInput placeholder="Select role..." />
+                  <CommandInput placeholder="Select model..." />
                   <CommandList>
-                    <CommandEmpty>No roles found.</CommandEmpty>
+                    <CommandEmpty>No models found.</CommandEmpty>
                     <CommandGroup>
-                      {roles.map((role) => (
-                        <CommandItem key={role.name}>
+                      {models.map((model) => (
+                        <CommandItem key={model.name}>
                           <div className="flex flex-col">
-                            <p className="text-sm font-medium">{role.name}</p>
-                            <p className="text-muted-foreground">{role.description}</p>
+                            <p className="text-sm font-medium">{model.name}</p>
+                            <p className="text-muted-foreground">{model.description}</p>
                           </div>
                         </CommandItem>
                       ))}

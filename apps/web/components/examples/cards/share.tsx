@@ -1,6 +1,6 @@
 "use client";
 
-import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
+import { Avatar, AvatarFallback } from "@/components/ui/avatar";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
@@ -15,62 +15,46 @@ import {
 import { Separator } from "@/components/ui/separator";
 
 const people = [
-  {
-    name: "Olivia Martin",
-    email: "m@example.com",
-    avatar: "/avatars/03.png",
-  },
-  {
-    name: "Isabella Nguyen",
-    email: "b@example.com",
-    avatar: "/avatars/04.png",
-  },
-  {
-    name: "Sofia Davis",
-    email: "p@example.com",
-    avatar: "/avatars/05.png",
-  },
-  {
-    name: "Ethan Thompson",
-    email: "e@example.com",
-    avatar: "/avatars/01.png",
-  },
+  { name: "Jason Schoeman", detail: "Owner", initials: "JS" },
+  { name: "Saskia", detail: "Assistant", initials: "Sa" },
+  { name: "Remy", detail: "Memory recall", initials: "Re" },
+  { name: "Researcher", detail: "Web search", initials: "Rs" },
 ];
+
 export function CardsShare() {
   return (
     <Card>
       <CardHeader>
-        <CardTitle>Share this document</CardTitle>
-        <CardDescription>Anyone with the link can view this document.</CardDescription>
+        <CardTitle>Share this page</CardTitle>
+        <CardDescription>Anyone with the link can read this page.</CardDescription>
       </CardHeader>
       <CardContent>
         <div className="flex items-center gap-2">
           <Label htmlFor="link" className="sr-only">
             Link
           </Label>
-          <Input id="link" value="http://example.com/link/to/document" className="h-8" readOnly />
+          <Input id="link" value="https://mantle.local/p/memory-architecture" className="h-8" readOnly />
           <Button size="sm" variant="outline" className="shadow-none">
             Copy Link
           </Button>
         </div>
         <Separator className="my-4" />
         <div className="flex flex-col gap-4">
-          <div className="text-sm font-medium">People with access</div>
+          <div className="text-sm font-medium">People &amp; agents with access</div>
           <div className="grid gap-6">
             {people.map((person) => (
-              <div key={person.email} className="flex items-center justify-between gap-4">
+              <div key={person.name} className="flex items-center justify-between gap-4">
                 <div className="flex items-center gap-4">
                   <Avatar>
-                    <AvatarImage src={person.avatar} alt="Image" />
-                    <AvatarFallback>{person.name.charAt(0)}</AvatarFallback>
+                    <AvatarFallback className="text-xs">{person.initials}</AvatarFallback>
                   </Avatar>
                   <div>
                     <p className="text-sm leading-none font-medium">{person.name}</p>
-                    <p className="text-muted-foreground text-sm">{person.email}</p>
+                    <p className="text-muted-foreground text-sm">{person.detail}</p>
                   </div>
                 </div>
                 <Select defaultValue="edit">
-                  <SelectTrigger className="ml-auto pr-2" aria-label="Edit">
+                  <SelectTrigger className="ml-auto pr-2" aria-label="Access level">
                     <SelectValue placeholder="Select" />
                   </SelectTrigger>
                   <SelectContent align="end">

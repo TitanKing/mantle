@@ -19,49 +19,49 @@ import {
   ChartTooltipContent,
 } from "@/components/ui/chart"
 const chartData = [
-  { browser: "chrome", visitors: 275, fill: "var(--color-chrome)" },
-  { browser: "safari", visitors: 200, fill: "var(--color-safari)" },
-  { browser: "firefox", visitors: 287, fill: "var(--color-firefox)" },
-  { browser: "edge", visitors: 173, fill: "var(--color-edge)" },
-  { browser: "other", visitors: 190, fill: "var(--color-other)" },
+  { model: "opus", tokens: 275, fill: "var(--color-opus)" },
+  { model: "sonnet", tokens: 287, fill: "var(--color-sonnet)" },
+  { model: "haiku", tokens: 200, fill: "var(--color-haiku)" },
+  { model: "local", tokens: 173, fill: "var(--color-local)" },
+  { model: "embed", tokens: 190, fill: "var(--color-embed)" },
 ]
 
 const chartConfig = {
-  visitors: {
-    label: "Visitors",
+  tokens: {
+    label: "Tokens",
   },
-  chrome: {
-    label: "Chrome",
+  opus: {
+    label: "Opus 4.7",
     color: "var(--chart-1)",
   },
-  safari: {
-    label: "Safari",
+  sonnet: {
+    label: "Sonnet 4.6",
     color: "var(--chart-2)",
   },
-  firefox: {
-    label: "Firefox",
+  haiku: {
+    label: "Haiku 4.5",
     color: "var(--chart-3)",
   },
-  edge: {
-    label: "Edge",
+  local: {
+    label: "Local",
     color: "var(--chart-4)",
   },
-  other: {
-    label: "Other",
+  embed: {
+    label: "Embeddings",
     color: "var(--chart-5)",
   },
 } satisfies ChartConfig
 
 export function ChartPieDonut() {
-  const totalVisitors = React.useMemo(() => {
-    return chartData.reduce((acc, curr) => acc + curr.visitors, 0)
+  const totalTokens = React.useMemo(() => {
+    return chartData.reduce((acc, curr) => acc + curr.tokens, 0)
   }, [])
 
   return (
     <Card className="flex flex-col h-full">
       <CardHeader className="items-center pb-0">
-        <CardTitle>Pie Chart - Donut with Text</CardTitle>
-        <CardDescription>January - June 2024</CardDescription>
+        <CardTitle>Tokens by model</CardTitle>
+        <CardDescription>Last 6 months</CardDescription>
       </CardHeader>
       <CardContent className="flex-1 pb-0">
         <ChartContainer
@@ -75,8 +75,8 @@ export function ChartPieDonut() {
             />
             <Pie
               data={chartData}
-              dataKey="visitors"
-              nameKey="browser"
+              dataKey="tokens"
+              nameKey="model"
               innerRadius={60}
               strokeWidth={5}
             >
@@ -95,14 +95,14 @@ export function ChartPieDonut() {
                           y={viewBox.cy}
                           className="fill-foreground text-3xl font-bold"
                         >
-                          {totalVisitors.toLocaleString()}
+                          {totalTokens.toLocaleString()}
                         </tspan>
                         <tspan
                           x={viewBox.cx}
                           y={(viewBox.cy || 0) + 24}
                           className="fill-muted-foreground"
                         >
-                          Visitors
+                          Tokens
                         </tspan>
                       </text>
                     )
@@ -118,7 +118,7 @@ export function ChartPieDonut() {
           Trending up by 5.2% this month <TrendingUp className="h-4 w-4" />
         </div>
         <div className="leading-none text-muted-foreground">
-          Showing total visitors for the last 6 months
+          Showing total tokens by model for the last 6 months
         </div>
       </CardFooter>
     </Card>

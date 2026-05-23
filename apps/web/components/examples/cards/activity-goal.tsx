@@ -59,7 +59,7 @@ const data = [
 
 const chartConfig = {
   goal: {
-    label: "Goal",
+    label: "Tokens",
     color: "var(--primary)",
   },
 } satisfies ChartConfig;
@@ -74,8 +74,8 @@ export function CardsActivityGoal() {
   return (
     <Card className="flex h-full flex-col">
       <CardHeader>
-        <CardTitle>Move Goal</CardTitle>
-        <CardDescription>Set your daily activity goal.</CardDescription>
+        <CardTitle>Token Budget</CardTitle>
+        <CardDescription>Set your daily token budget.</CardDescription>
       </CardHeader>
       <CardContent className="flex flex-1 flex-col">
         <div className="flex items-center justify-center gap-4">
@@ -90,8 +90,8 @@ export function CardsActivityGoal() {
             <span className="sr-only">Decrease</span>
           </Button>
           <div className="text-center">
-            <div className="text-4xl font-bold tracking-tighter tabular-nums">{goal}</div>
-            <div className="text-muted-foreground text-xs uppercase">Calories/day</div>
+            <div className="text-4xl font-bold tracking-tighter tabular-nums">{goal}K</div>
+            <div className="text-muted-foreground text-xs uppercase">Tokens/day</div>
           </div>
           <Button
             variant="outline"
@@ -112,7 +112,7 @@ export function CardsActivityGoal() {
       </CardContent>
       <CardFooter>
         <Button className="w-full" variant="secondary">
-          Set Goal
+          Set Budget
         </Button>
       </CardFooter>
     </Card>

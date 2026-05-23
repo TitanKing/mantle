@@ -63,9 +63,9 @@ export function CardsExerciseMinutes() {
   return (
     <Card>
       <CardHeader>
-        <CardTitle>Exercise Minutes</CardTitle>
+        <CardTitle>Token Usage</CardTitle>
         <CardDescription>
-          Your exercise minutes are ahead of where you normally are.
+          Your token usage is ahead of where you normally are.
         </CardDescription>
       </CardHeader>
       <CardContent>
