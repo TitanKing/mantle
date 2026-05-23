@@ -38,7 +38,7 @@ export function TraceDetail({ trace }: { trace: TraceDetailType }) {
   }
 
   return (
-    <div className="grid gap-4 lg:grid-cols-[1fr_360px]">
+    <div className={selected ? 'grid gap-4 lg:grid-cols-[1fr_360px]' : 'grid gap-4'}>
       <div className="h-[640px] rounded-md border border-border bg-muted/20">
         <ReactFlowProvider>
           <ReactFlow
@@ -62,9 +62,11 @@ export function TraceDetail({ trace }: { trace: TraceDetailType }) {
         </ReactFlowProvider>
       </div>
 
-      <aside className="rounded-md border border-border bg-card p-3 text-sm">
-        {selected ? <StepPanel step={selected} /> : <p>Click a step.</p>}
-      </aside>
+      {selected && (
+        <aside className="rounded-md border border-border bg-card p-3 text-sm">
+          <StepPanel step={selected} />
+        </aside>
+      )}
     </div>
   );
 }
