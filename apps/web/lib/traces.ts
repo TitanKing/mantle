@@ -1,4 +1,4 @@
-import { and, desc, eq, gte, inArray, sql } from 'drizzle-orm';
+import { and, asc, desc, eq, gte, inArray, sql } from 'drizzle-orm';
 import {
   agents,
   db,
@@ -24,8 +24,8 @@ import type {
 export type { TraceSummary, TraceFilter, TraceStepSummary, TraceDetail } from './traces-format';
 export { formatMicroUsd, formatDuration } from './traces-format';
 
-export async function listTraces(userId: string, filter: TraceFilter = {}): Promise<TraceSummary[]> {
-  const limit = Math.min(filter.limit ?? 50, 500);
+/** Shared WHERE for trace list/count queries. */
+function traceConds(userId: string, filter: TraceFilter) {
   const conds = [eq(traces.ownerId, userId)];
   if (filter.kinds && filter.kinds.length > 0) {
     conds.push(inArray(traces.kind, filter.kinds as never));
@@ -37,6 +37,18 @@ export async function listTraces(userId: string, filter: TraceFilter = {}): Prom
     const since = new Date(Date.now() - filter.sinceHours * 3600_000);
     conds.push(gte(traces.startedAt, since));
   }
+  return conds;
+}
+
+export async function listTraces(userId: string, filter: TraceFilter = {}): Promise<TraceSummary[]> {
+  const limit = Math.min(filter.limit ?? 50, 500);
+  const sortCol =
+    filter.sort === 'cost'
+      ? traces.costMicroUsd
+      : filter.sort === 'duration'
+        ? traces.durationMs
+        : traces.startedAt;
+  const orderFn = filter.dir === 'asc' ? asc : desc;
 
   const rows = await db
     .select({
@@ -59,9 +71,10 @@ export async function listTraces(userId: string, filter: TraceFilter = {}): Prom
     })
     .from(traces)
     .leftJoin(agents, eq(traces.agentId, agents.id))
-    .where(and(...conds))
-    .orderBy(desc(traces.startedAt))
-    .limit(limit);
+    .where(and(...traceConds(userId, filter)))
+    .orderBy(orderFn(sortCol))
+    .limit(limit)
+    .offset(filter.offset ?? 0);
 
   return rows.map((r) => ({
     id: r.id,
@@ -83,6 +96,14 @@ export async function listTraces(userId: string, filter: TraceFilter = {}): Prom
   }));
 }
 
+
+export async function countTraces(userId: string, filter: TraceFilter = {}): Promise<number> {
+  const [row] = await db
+    .select({ n: sql<number>`count(*)::int` })
+    .from(traces)
+    .where(and(...traceConds(userId, filter)));
+  return row?.n ?? 0;
+}
 
 export async function getTrace(userId: string, traceId: string): Promise<TraceDetail | null> {
   const [t] = await db

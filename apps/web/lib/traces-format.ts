@@ -27,11 +27,17 @@ export type TraceSummary = {
   error: string | null;
 };
 
+export type TraceSort = 'started' | 'cost' | 'duration';
+export type TraceSortDir = 'asc' | 'desc';
+
 export type TraceFilter = {
   kinds?: string[];
   statuses?: string[];
   sinceHours?: number;
   limit?: number;
+  offset?: number;
+  sort?: TraceSort;
+  dir?: TraceSortDir;
 };
 
 export type TraceStepSummary = {
