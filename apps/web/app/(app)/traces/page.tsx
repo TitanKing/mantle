@@ -86,11 +86,13 @@ export default async function TracesPage(props: { searchParams?: Promise<SearchP
     statuses: effectiveStatuses,
     sinceHours: hours,
   };
-  const [rows, total, selectedTrace] = await Promise.all([
+  const [rows, total] = await Promise.all([
     listTraces(user.id, { ...filter, sort, dir, limit: PAGE_SIZE, offset: (page - 1) * PAGE_SIZE }),
     countTraces(user.id, filter),
-    selected ? getTrace(user.id, selected) : Promise.resolve(null),
   ]);
+  // Default the right pane to the first row when nothing is explicitly selected.
+  const selectedId = selected ?? rows[0]?.id ?? null;
+  const selectedTrace = selectedId ? await getTrace(user.id, selectedId) : null;
   const totalPages = Math.max(1, Math.ceil(total / PAGE_SIZE));
   const hasFilters = kinds.length > 0 || statuses.length > 0 || hours !== 24;
 
@@ -191,7 +193,7 @@ export default async function TracesPage(props: { searchParams?: Promise<SearchP
                     href={href({ selected: r.id })}
                     className={cn(
                       'block rounded-lg border border-l-[3px] border-border border-l-border bg-card p-2.5 transition-colors hover:bg-accent/40',
-                      selected === r.id && 'border-l-primary bg-accent/50',
+                      selectedId === r.id && 'border-l-primary bg-accent/50',
                     )}
                   >
                     <div className="flex items-center justify-between gap-2">
