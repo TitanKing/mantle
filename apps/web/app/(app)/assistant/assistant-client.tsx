@@ -509,7 +509,7 @@ export function AssistantClient({
             user's side of the conversation, mirroring where their prompts
             land in the margin. Full-width on mobile. */}
         <div className="mx-auto max-w-5xl">
-          <div className="space-y-2 lg:ml-auto lg:max-w-md">
+          <div className="space-y-2 lg:ml-auto lg:max-w-2xl">
             {/* Attachment preview — shown above the input row so the
                 user sees what they're about to send. Persists across
                 keystrokes and clears on send/dismiss. */}
