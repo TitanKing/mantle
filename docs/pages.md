@@ -150,19 +150,30 @@ they contribute facts and `mentioned_in` edges, all via code that was already
 there. **Pages are a new room wired into the existing electrical, not new
 wiring.**
 
-### @-mentions → entities (non-invasive)
-`@` resolves the owner's **existing** entities via a read-only endpoint
-(`GET /api/entities/search` → `searchEntities`). The chip carries the entity
-name + id. ("Person" is an `entities` row — never `auth.users`.)
+### @-mentions / links → graph edges (non-invasive)
+`@` opens one picker over the owner's **existing** references, read-only via
+`GET /api/mentions/search` (grouped: *Pages & notes* first, then *People &
+things*). Each chip carries `{ id, label, ref, kind }`:
 
-The edge is created **by id**: the extractor's `reconcile_entities` step, after
-its NER pass, reads the page doc's explicit mention ids (`mentionEntityIds` in
-`@mantle/content`) and guarantees an `entity --mentioned_in--> page` edge for
-each — independent of whether NER surfaced that name, deduped against the NER
-pass, tagged `data.explicit:true`, skipping ids whose entity was deleted. It's
-a single edge writer (the extractor) and fully idempotent (Phase-4b
-clear-then-rebuild), so re-commits never duplicate. The mention name also lands
-in `doc_text`, so NER still contributes edges for *un-chipped* names typed as
+- **`ref:'node'`** — a page/note. (Notes are markdown so they can't *author*
+  mentions, but they're valid *targets*.)
+- **`ref:'entity'`** — a person/project/place. ("Person" is an `entities` row,
+  never `auth.users`.)
+
+Edges are built **by id**, in the extractor's `reconcile_entities` step, after
+its NER pass — `mentionRefs` (`@mantle/content`) splits the doc's chips into
+entity ids and node ids:
+
+- entity refs → `entity --mentioned_in--> page` (guaranteed regardless of NER
+  recall; deduped against the NER pass);
+- node refs → `node --references--> node` (backlinks); self-refs and deleted
+  targets skipped.
+
+Both are tagged `data.explicit:true` and fully idempotent: the step clears the
+node's inbound `mentioned_in` *and* its outbound `references` before rebuilding
+(Phase-4b rule), so re-commits never duplicate. Single edge writer (the
+extractor) — no commit-path edge code. The mention name also lands in
+`doc_text`, so NER still contributes edges for *un-chipped* names typed as
 plain text.
 
 ### Chunked retrieval (`content_chunks`, Phase 4)
@@ -194,7 +205,8 @@ re-indexed, derived brain data is **rebuilt, not duplicated**:
 | Entities | `reconcileEntity` reuses by name (no duplicate rows) |
 | Facts | vector-dedup + ADD/UPDATE/DELETE/**NOOP** classifier (an LLM call per candidate when a near-match exists) |
 | `content_chunks` | delete-for-node, then re-insert (idempotent) |
-| `mentioned_in` edges | **cleared for the node, then re-inserted** (idempotent) |
+| `mentioned_in` edges (inbound) | **cleared for the node, then re-inserted** (idempotent) |
+| `references` edges (outbound page→node links) | **cleared for the node, then re-inserted** (idempotent) |
 
 The last row was a fix landed in Phase 4 — previously the extractor *appended*
 `mentioned_in` edges on every run, so re-extracts accumulated duplicates. Both
@@ -212,7 +224,8 @@ cache + `extract_cost_cap_micro_usd`.
 
 - **Web API:** `/api/pages` (list/create), `/api/pages/[id]` (get/patch/delete),
   `/api/pages/[id]/draft` (PUT), `/api/pages/[id]/commit` (POST),
-  `/api/entities/search` (mention autocomplete, read-only).
+  `/api/mentions/search` (mention/link autocomplete — pages, notes, entities;
+  read-only).
 - **MCP (read-only for pages):** `page_list`, `page_get`, plus `search_chunks`
   (passage-level vector search across all content). Authoring stays in the
   editor — the LLM doesn't generate ProseMirror JSON.
@@ -221,6 +234,10 @@ cache + `extract_cost_cap_micro_usd`.
 
 ## 8. Known sharp edges / deferred
 
+- **Backlinks are written but not surfaced.** `references` edges exist in the
+  graph (queryable by Saskia/MCP), but there's no "Linked from / Referenced by"
+  panel on a page yet, and node-link chips don't yet click-through to navigate.
+  Both are UI follow-ups on top of the edges that now exist.
 - **Responder/assistant don't use `searchChunks` yet.** Chunk retrieval is
   available via MCP; wiring it into the live context assembly touches the
   responder and was deliberately left for an explicit go-ahead.
