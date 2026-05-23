@@ -5,6 +5,7 @@ import { ChatAgentOverride } from './chat-agent-override';
 import { DebugTabs } from './debug-tabs';
 import {
   contentIndexCoverage,
+  duplicateEdgeStats,
   listAgentActivity,
   listDigests,
   listFacts,
@@ -48,6 +49,7 @@ export default async function DebugPage() {
     recentFails,
     daily14d,
     modelSpend7d,
+    dupes,
   ] = await Promise.all([
     listDigests(user.id, 25),
     listTopics(user.id, 25),
@@ -63,6 +65,7 @@ export default async function DebugPage() {
     recentFailures(user.id, 10),
     spendByDay(user.id, 14),
     spendByModel(user.id, 7),
+    duplicateEdgeStats(user.id),
   ]);
   const maxDaily = daily14d.reduce((m, d) => Math.max(m, d.costMicroUsd), 0);
 
@@ -128,7 +131,48 @@ export default async function DebugPage() {
           }
           accent={errors7d.length > 0 ? 'red' : 'emerald'}
         />
+        <StatCard
+          title="Duplicate edges"
+          primary={dupes.redundant === 0 ? 'clean' : `${dupes.redundant}`}
+          secondary={
+            dupes.redundant === 0
+              ? 'no duplicates'
+              : `${dupes.groups} link${dupes.groups === 1 ? '' : 's'} · run pnpm dedupe:edges`
+          }
+          accent={dupes.redundant > 0 ? 'amber' : 'emerald'}
+        />
       </section>
+
+      {/* ─── Duplicate edges (historical) ───────────────────────────────── */}
+      {dupes.redundant > 0 && (
+        <section className="space-y-3">
+          <h2 className="text-sm font-semibold uppercase tracking-wider text-muted-foreground">
+            Duplicate edges
+          </h2>
+          <p className="text-sm text-muted-foreground">
+            {dupes.groups} duplicated link{dupes.groups === 1 ? '' : 's'} ·{' '}
+            {dupes.redundant} redundant row{dupes.redundant === 1 ? '' : 's'}. These predate the
+            idempotent-extractor fix; clean them with{' '}
+            <code className="rounded bg-muted px-1 py-0.5 font-mono text-xs">
+              pnpm dedupe:edges --apply
+            </code>
+            .
+          </p>
+          <ul className="divide-y divide-border rounded-md border border-border">
+            {dupes.samples.map((s, i) => (
+              <li key={i} className="flex items-baseline gap-3 px-3 py-2 text-sm">
+                <span className="rounded-md bg-amber-500/10 px-2 py-0.5 text-xs font-medium text-amber-700 dark:text-amber-300">
+                  ×{s.count}
+                </span>
+                <span className="shrink-0 text-xs uppercase tracking-wider text-muted-foreground">
+                  {s.relation}
+                </span>
+                <span className="min-w-0 truncate">{s.label}</span>
+              </li>
+            ))}
+          </ul>
+        </section>
+      )}
 
       {/* ─── Top errors ─────────────────────────────────────────────────── */}
       {errors7d.length > 0 && (

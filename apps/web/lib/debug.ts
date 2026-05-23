@@ -1,8 +1,9 @@
-import { and, desc, eq, isNull, sql } from 'drizzle-orm';
+import { and, desc, eq, inArray, isNull, sql } from 'drizzle-orm';
 import {
   db,
   agents,
   entities,
+  entityEdges,
   facts,
   nodes,
   telegramChats,
@@ -298,6 +299,104 @@ export async function contentIndexCoverage(userId: string): Promise<ContentIndex
   }
   byType.sort((a, b) => b.total - a.total);
   return { total, indexed, byType };
+}
+
+/**
+ * Awareness of duplicate graph edges. Going forward the extractor rebuilds
+ * edges per node (idempotent), but content re-edited *before* that fix may
+ * carry historical duplicate `mentioned_in` / `references` rows. This surfaces
+ * the count + a few labelled samples so the operator knows to run
+ * `pnpm dedupe:edges`. Read-only — cleaning stays the deliberate CLI tool.
+ */
+export type DuplicateEdgeStats = {
+  groups: number; // logical edges with >1 row
+  redundant: number; // rows that could be removed (sum of count-1)
+  samples: { relation: string; label: string; count: number }[];
+};
+
+const DEDUPE_RELATIONS = ['mentioned_in', 'references'];
+
+export async function duplicateEdgeStats(userId: string): Promise<DuplicateEdgeStats> {
+  const dups = db
+    .select({ n: sql<number>`count(*)`.as('n') })
+    .from(entityEdges)
+    .where(and(eq(entityEdges.ownerId, userId), inArray(entityEdges.relation, DEDUPE_RELATIONS)))
+    .groupBy(
+      entityEdges.relation,
+      entityEdges.sourceId,
+      entityEdges.sourceKind,
+      entityEdges.targetId,
+      entityEdges.targetKind,
+    )
+    .having(sql`count(*) > 1`)
+    .as('dups');
+
+  const [agg] = await db
+    .select({
+      groups: sql<number>`count(*)::int`,
+      redundant: sql<number>`coalesce(sum(${dups.n} - 1), 0)::int`,
+    })
+    .from(dups);
+
+  const groups = agg?.groups ?? 0;
+  const redundant = agg?.redundant ?? 0;
+  if (groups === 0) return { groups: 0, redundant: 0, samples: [] };
+
+  const sampleRows = await db
+    .select({
+      relation: entityEdges.relation,
+      sourceId: entityEdges.sourceId,
+      sourceKind: entityEdges.sourceKind,
+      targetId: entityEdges.targetId,
+      targetKind: entityEdges.targetKind,
+      count: sql<number>`count(*)::int`,
+    })
+    .from(entityEdges)
+    .where(and(eq(entityEdges.ownerId, userId), inArray(entityEdges.relation, DEDUPE_RELATIONS)))
+    .groupBy(
+      entityEdges.relation,
+      entityEdges.sourceId,
+      entityEdges.sourceKind,
+      entityEdges.targetId,
+      entityEdges.targetKind,
+    )
+    .having(sql`count(*) > 1`)
+    .orderBy(desc(sql`count(*)`))
+    .limit(8);
+
+  // Resolve ids to human labels (entity name / node title).
+  const entityIds = new Set<string>();
+  const nodeIds = new Set<string>();
+  for (const r of sampleRows) {
+    (r.sourceKind === 'entity' ? entityIds : nodeIds).add(r.sourceId);
+    (r.targetKind === 'entity' ? entityIds : nodeIds).add(r.targetId);
+  }
+  const [ents, nds] = await Promise.all([
+    entityIds.size
+      ? db
+          .select({ id: entities.id, name: entities.name })
+          .from(entities)
+          .where(inArray(entities.id, [...entityIds]))
+      : Promise.resolve([] as { id: string; name: string }[]),
+    nodeIds.size
+      ? db
+          .select({ id: nodes.id, title: nodes.title })
+          .from(nodes)
+          .where(inArray(nodes.id, [...nodeIds]))
+      : Promise.resolve([] as { id: string; title: string }[]),
+  ]);
+  const entName = new Map(ents.map((e) => [e.id, e.name]));
+  const nodeTitle = new Map(nds.map((n) => [n.id, n.title]));
+  const label = (id: string, kind: string) =>
+    kind === 'entity' ? (entName.get(id) ?? '(deleted entity)') : (nodeTitle.get(id) ?? '(deleted)');
+
+  const samples = sampleRows.map((r) => ({
+    relation: r.relation,
+    label: `${label(r.sourceId, r.sourceKind)} → ${label(r.targetId, r.targetKind)}`,
+    count: r.count,
+  }));
+
+  return { groups, redundant, samples };
 }
 
 export type PersonaNotesRow = {
