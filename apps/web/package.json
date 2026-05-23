@@ -18,6 +18,7 @@
     "seed:coder": "tsx --env-file-if-exists=./.env.local scripts/seed-coder-agent.ts",
     "test:fire-heartbeat": "tsx --env-file-if-exists=./.env.local scripts/test-fire-heartbeat.ts",
     "extract:backfill": "tsx --env-file-if-exists=./.env.local scripts/extract-backfill.ts",
+    "dedupe:edges": "tsx --env-file-if-exists=./.env.local scripts/dedupe-edges.ts",
     "regenerate:digests": "tsx --env-file-if-exists=./.env.local scripts/regenerate-digests.ts",
     "re-embed": "tsx --env-file-if-exists=./.env.local scripts/re-embed.ts",
     "rotate:master-key": "tsx --env-file-if-exists=./.env.local scripts/rotate-master-key.ts"

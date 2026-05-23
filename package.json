@@ -24,6 +24,7 @@
     "db:migrate": "pnpm -C packages/db migrate",
     "db:studio": "pnpm -C packages/db studio",
     "extract:backfill": "pnpm -C apps/web extract:backfill",
+    "dedupe:edges": "pnpm -C apps/web dedupe:edges",
     "re-embed": "pnpm -C apps/web re-embed",
     "up": "bash scripts/up.sh",
     "down": "docker compose -f docker-compose.dev.yml down",
