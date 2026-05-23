@@ -11,3 +11,10 @@ export {
   unsealImapPassword,
   type ImapProbeResult,
 } from './providers/imap';
+export {
+  sendEmail,
+  probeSmtpConnection,
+  accountCanSend,
+  type SendEmailInput,
+  type SendEmailResult,
+} from './send';

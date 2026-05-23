@@ -1344,8 +1344,15 @@ function scheduleExtract(nodeId: string): void {
 }
 
 /** Core builtins every conversational agent should have without manual
- *  setup: persona self-edit + todo CRUD. Granted idempotently at boot. */
-const CORE_AUTO_GRANT_SLUGS: readonly string[] = [...PERSONA_TOOL_SLUGS, ...TODO_TOOL_SLUGS];
+ *  setup: persona self-edit + todo CRUD + note capture + email send.
+ *  Granted idempotently at boot. `email_send` ships ungated
+ *  (requiresConfirm:false) — flip per-row at /settings/tools to gate it. */
+const CORE_AUTO_GRANT_SLUGS: readonly string[] = [
+  ...PERSONA_TOOL_SLUGS,
+  ...TODO_TOOL_SLUGS,
+  'note_create',
+  'email_send',
+];
 
 /**
  * Add the core builtins (persona + todo tools) to every enabled

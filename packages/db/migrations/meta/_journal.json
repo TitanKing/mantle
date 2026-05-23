@@ -288,6 +288,13 @@
       "when": 1779401200000,
       "tag": "0040_content_chunks",
       "breakpoints": true
+    },
+    {
+      "idx": 41,
+      "version": "7",
+      "when": 1779401300000,
+      "tag": "0041_email_smtp",
+      "breakpoints": true
     }
   ]
 }

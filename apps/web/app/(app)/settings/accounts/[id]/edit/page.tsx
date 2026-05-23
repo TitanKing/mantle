@@ -30,6 +30,9 @@ export default async function EditAccountPage({ params }: { params: Promise<{ id
           imapHost: account.imapHost,
           imapPort: account.imapPort,
           imapSecure: account.imapSecure,
+          smtpHost: account.smtpHost,
+          smtpPort: account.smtpPort,
+          smtpSecure: account.smtpSecure,
           firstScanDays: account.firstScanDays,
         }}
       />

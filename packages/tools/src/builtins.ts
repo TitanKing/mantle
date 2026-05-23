@@ -37,6 +37,7 @@ import { TERMINAL_TOOLS } from './builtins-terminal';
 import { RECALL_TOOLS } from './builtins-recall';
 import { RESEARCH_TOOLS } from './builtins-research';
 import { NOTE_TOOLS } from './builtins-notes';
+import { EMAIL_TOOLS } from './builtins-email';
 
 function str(v: unknown): string {
   return typeof v === 'string' ? v : '';
@@ -887,4 +888,7 @@ export const BUILTIN_TOOLS: BuiltinToolDef[] = [
   // Notes — persist a markdown note (auto-indexed into the brain). Lets
   // Saskia keep research findings she's decided are worth saving.
   ...NOTE_TOOLS,
+  // Email — send mail from the user's own mailbox via provider SMTP. Pairs
+  // with web_search/researcher ("research X and email it to me").
+  ...EMAIL_TOOLS,
 ];

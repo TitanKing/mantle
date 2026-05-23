@@ -534,6 +534,9 @@ importers:
       mailparser:
         specifier: ^3.7.2
         version: 3.9.8
+      nodemailer:
+        specifier: ^6.9.16
+        version: 6.10.1
       sanitize-html:
         specifier: ^2.13.1
         version: 2.17.4
@@ -544,6 +547,9 @@ importers:
       '@types/node':
         specifier: ^22.10.5
         version: 22.19.19
+      '@types/nodemailer':
+        specifier: ^6.4.17
+        version: 6.4.23
       '@types/sanitize-html':
         specifier: ^2.13.0
         version: 2.16.1
@@ -725,6 +731,9 @@ importers:
       '@mantle/db':
         specifier: workspace:*
         version: link:../db
+      '@mantle/email':
+        specifier: workspace:*
+        version: link:../email
       '@mantle/embeddings':
         specifier: workspace:*
         version: link:../embeddings
@@ -3311,6 +3320,9 @@ packages:
   '@types/node@22.19.19':
     resolution: {integrity: sha512-dyh/xO2Fh5bYrfWaaqGrRQQGkNdmYw6AmaAUvYeUMNTWQtvb796ikLdmTchRmOlOiIJ1TDXfWgVx1QkUlQ6Hew==}
 
+  '@types/nodemailer@6.4.23':
+    resolution: {integrity: sha512-aFV3/NsYFLSx9mbb5gtirBSXJnAlrusoKNuPbxsASWc7vrKLmIrTQRpdcxNcSFL3VW2A2XpeLEavwb2qMi6nlQ==}
+
   '@types/pdf-parse@1.1.5':
     resolution: {integrity: sha512-kBfrSXsloMnUJOKi25s3+hRmkycHfLK6A09eRGqF/N8BkQoPUmaCr+q8Cli5FnfohEz/rsv82zAiPz/LXtOGhA==}
 
@@ -5279,6 +5291,10 @@ packages:
     peerDependenciesMeta:
       encoding:
         optional: true
+
+  nodemailer@6.10.1:
+    resolution: {integrity: sha512-Z+iLaBGVaSjbIzQ4pX6XV41HrooLsQ10ZWPUehGmuantvzWoDVBnmsdUcOIDM1t+yPor5pDhVlDESgOMEGxhHA==}
+    engines: {node: '>=6.0.0'}
 
   nodemailer@8.0.5:
     resolution: {integrity: sha512-0PF8Yb1yZuQfQbq+5/pZJrtF6WQcjTd5/S4JOHs9PGFxuTqoB/icwuB44pOdURHJbRKX1PPoJZtY7R4VUoCC8w==}
@@ -8792,6 +8808,10 @@ snapshots:
     dependencies:
       undici-types: 6.21.0
 
+  '@types/nodemailer@6.4.23':
+    dependencies:
+      '@types/node': 22.19.19
+
   '@types/pdf-parse@1.1.5':
     dependencies:
       '@types/node': 22.19.19
@@ -11157,6 +11177,8 @@ snapshots:
   node-fetch@2.7.0:
     dependencies:
       whatwg-url: 5.0.0
+
+  nodemailer@6.10.1: {}
 
   nodemailer@8.0.5: {}
 

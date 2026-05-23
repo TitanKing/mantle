@@ -6,7 +6,7 @@ import { and, eq } from 'drizzle-orm';
 import { z } from 'zod';
 import { seal } from '@mantle/crypto';
 import { db, emailAccounts } from '@mantle/db';
-import { probeImapConnection, unsealImapPassword } from '@mantle/email';
+import { probeImapConnection, probeSmtpConnection, unsealImapPassword } from '@mantle/email';
 import { requireOwner } from '@/lib/auth';
 import { accountBranchPath } from '@/lib/account-branch';
 
@@ -25,6 +25,13 @@ const FormSchema = z.object({
   password: z.string().optional(),
   // How far back the first scan reaches, in days. Default ≈ the old 12 months.
   firstScanDays: z.coerce.number().int().min(1).max(3650).default(365),
+  // SMTP submission (sending). Optional — leave host/port blank to keep the
+  // account read-only. Same app password as IMAP. secure: TLS(465)/STARTTLS(587).
+  smtpHost: z.string().min(1).optional(),
+  smtpPort: z.coerce.number().int().min(1).max(65535).optional(),
+  smtpSecure: z
+    .union([z.literal('on'), z.literal('true'), z.literal('false'), z.boolean()])
+    .transform((v) => v === true || v === 'on' || v === 'true'),
 });
 
 export type ImapFormResult =
@@ -43,6 +50,9 @@ function parseForm(form: FormData) {
     secure: form.get('secure') ?? false,
     password: form.get('password') || undefined,
     firstScanDays: form.get('firstScanDays'),
+    smtpHost: form.get('smtpHost') || undefined,
+    smtpPort: form.get('smtpPort') || undefined,
+    smtpSecure: form.get('smtpSecure') ?? false,
   });
 }
 
@@ -68,7 +78,8 @@ export async function handleImapForm(
   if (!parsed.success) {
     return { intent, ok: false, error: parsed.error.issues[0]?.message ?? 'Invalid input' };
   }
-  const { accountId, address, displayName, host, port, secure, password, firstScanDays } = parsed.data;
+  const { accountId, address, displayName, host, port, secure, password, firstScanDays, smtpHost, smtpPort, smtpSecure } =
+    parsed.data;
 
   // Edit mode: load the target account (owner-scoped). Its stored address is
   // the identity — we never change it (it's the unique key + the seal AAD).
@@ -123,6 +134,22 @@ export async function handleImapForm(
     return { intent, ok: false, error: explainError(err) };
   }
 
+  // If SMTP submission is configured, verify it too (same app password) — a
+  // typo guardrail so sending doesn't silently fail later at send time.
+  if (smtpHost && smtpPort) {
+    try {
+      await probeSmtpConnection({
+        host: smtpHost,
+        port: smtpPort,
+        secure: smtpSecure,
+        user: effectiveAddress,
+        pass: effectivePassword,
+      });
+    } catch (err) {
+      return { intent, ok: false, error: `SMTP: ${explainError(err)}` };
+    }
+  }
+
   if (intent === 'test') {
     return {
       intent: 'test',
@@ -144,6 +171,9 @@ export async function handleImapForm(
         imapHost: host,
         imapPort: port,
         imapSecure: secure,
+        smtpHost: smtpHost ?? null,
+        smtpPort: smtpPort ?? null,
+        smtpSecure,
         displayName: displayName ?? null,
         firstScanDays,
         enabled: true,
@@ -169,6 +199,9 @@ export async function handleImapForm(
         imapHost: host,
         imapPort: port,
         imapSecure: secure,
+        smtpHost: smtpHost ?? null,
+        smtpPort: smtpPort ?? null,
+        smtpSecure,
         imapConfigEnc: sealed.ciphertext,
         ingestPolicy: 'approve_list',
         branchPath: accountBranchPath(effectiveAddress),
@@ -180,6 +213,9 @@ export async function handleImapForm(
           imapHost: host,
           imapPort: port,
           imapSecure: secure,
+          smtpHost: smtpHost ?? null,
+          smtpPort: smtpPort ?? null,
+          smtpSecure,
           imapConfigEnc: sealed.ciphertext,
           firstScanDays,
           enabled: true,

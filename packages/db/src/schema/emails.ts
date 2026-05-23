@@ -47,6 +47,14 @@ export const emailAccounts = pgTable(
     imapHost: text('imap_host'),
     imapPort: integer('imap_port'),
     imapSecure: boolean('imap_secure').default(true).notNull(),
+    /** SMTP submission knobs for SENDING mail (migration 0041). Plaintext like
+     *  the IMAP knobs; the password is the SAME app password already sealed in
+     *  `imapConfigEnc` (providers accept one app-password for both IMAP + SMTP),
+     *  so no new secret column. NULL host/port = sending disabled for this
+     *  account. `smtpSecure` true → implicit TLS (465); false → STARTTLS (587). */
+    smtpHost: text('smtp_host'),
+    smtpPort: integer('smtp_port'),
+    smtpSecure: boolean('smtp_secure').default(true).notNull(),
     /** @deprecated as of migration 0002. The adapter now auto-discovers
      *  folders each sync and uses `imapExcludedFolders` to opt out. Kept
      *  in the schema for historical reads only. */

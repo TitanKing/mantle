@@ -17,6 +17,9 @@ export type ImapFormAccount = {
   imapHost: string | null;
   imapPort: number | null;
   imapSecure: boolean;
+  smtpHost: string | null;
+  smtpPort: number | null;
+  smtpSecure: boolean;
   firstScanDays: number;
 };
 
@@ -40,6 +43,9 @@ export function ImapForm({ account }: { account?: ImapFormAccount }) {
   const [port, setPort] = useState(account?.imapPort ?? 993);
   const [secure, setSecure] = useState(account?.imapSecure ?? true);
   const [password, setPassword] = useState('');
+  const [smtpHost, setSmtpHost] = useState(account?.smtpHost ?? '');
+  const [smtpPort, setSmtpPort] = useState<number | ''>(account?.smtpPort ?? '');
+  const [smtpSecure, setSmtpSecure] = useState(account?.smtpSecure ?? true);
   const [firstScanDays, setFirstScanDays] = useState(account?.firstScanDays ?? 365);
 
   return (
@@ -131,6 +137,55 @@ export function ImapForm({ account }: { account?: ImapFormAccount }) {
             : 'Use a provider-issued app password (Fastmail, iCloud, Gmail-as-IMAP). Mantle encrypts this at rest with your master key before storing it.'}
         </p>
       </div>
+      <div className="space-y-3 rounded-md border border-border bg-muted/20 p-3">
+        <div className="space-y-1">
+          <p className="text-sm font-medium">Sending (SMTP) — optional</p>
+          <p className="text-xs text-muted-foreground">
+            Lets the assistant send email from this address. Uses the same app password.
+            Leave blank to keep the account receive-only.
+          </p>
+        </div>
+        <div className="grid grid-cols-3 gap-3">
+          <div className="col-span-2 space-y-2">
+            <Label htmlFor="smtpHost">SMTP host</Label>
+            <Input
+              id="smtpHost"
+              name="smtpHost"
+              placeholder="smtp.fastmail.com"
+              value={smtpHost}
+              onChange={(e) => setSmtpHost(e.target.value)}
+            />
+          </div>
+          <div className="space-y-2">
+            <Label htmlFor="smtpPort">Port</Label>
+            <Input
+              id="smtpPort"
+              name="smtpPort"
+              type="number"
+              min={1}
+              max={65535}
+              placeholder="465"
+              value={smtpPort}
+              onChange={(e) => setSmtpPort(e.target.value === '' ? '' : Number(e.target.value) || 0)}
+            />
+          </div>
+        </div>
+        <div className="flex items-center gap-2 rounded-md border border-input bg-background px-3 py-2 text-sm">
+          <input
+            id="smtpSecure"
+            name="smtpSecure"
+            type="checkbox"
+            checked={smtpSecure}
+            onChange={(e) => setSmtpSecure(e.target.checked)}
+            className="h-4 w-4 rounded border-input"
+          />
+          <Label htmlFor="smtpSecure" className="cursor-pointer">
+            Use TLS
+          </Label>
+          <span className="ml-auto text-xs text-muted-foreground">TLS on 465 · off for STARTTLS on 587</span>
+        </div>
+      </div>
+
       <div className="space-y-2">
         <Label htmlFor="firstScanDays">Scan history (days)</Label>
         <Input
