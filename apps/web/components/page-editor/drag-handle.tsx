@@ -68,9 +68,9 @@ export function EditorDragHandle({ editor }: { editor: Editor }) {
           role="button"
           aria-label="Drag to move · click for actions"
           onClick={openMenu}
-          className="mr-2 flex h-7 w-6 cursor-grab items-center justify-center rounded-md text-muted-foreground/50 transition-colors hover:bg-accent hover:text-foreground active:cursor-grabbing"
+          className="mr-2 flex h-9 w-7 cursor-grab items-center justify-center rounded-md text-muted-foreground/50 transition-colors hover:bg-accent hover:text-foreground active:cursor-grabbing"
         >
-          <GripVertical className="size-5" aria-hidden />
+          <GripVertical className="size-6" aria-hidden />
         </div>
       </DragHandle>
 
