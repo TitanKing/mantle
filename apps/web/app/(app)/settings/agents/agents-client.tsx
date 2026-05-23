@@ -605,7 +605,7 @@ export function AgentsClient({
         )}
       </div>
 
-      <div className="grid flex-1 grid-cols-1 overflow-hidden md:grid-cols-[340px_1fr]">
+      <div className="md:grid md:min-h-0 md:flex-1 md:grid-cols-[340px_1fr] md:overflow-hidden">
         {/* ── Left: agent list ─────────────────────────────────────── */}
         <div className="flex flex-col border-b border-border md:h-full md:min-h-0 md:border-b-0 md:border-r">
           <div className="flex items-center justify-between gap-2 border-b border-border p-3">
@@ -838,14 +838,6 @@ export function AgentsClient({
                 provider only re-processes the new user message.
               </p>
             </div>
-
-            {editing?.mode === 'edit' && (
-              <PersonaNotesEditor
-                key={editing.agent.id}
-                agentId={editing.agent.id}
-                initialNotes={editing.agent.personaNotes}
-              />
-            )}
 
             <fieldset className="space-y-3 rounded-md border border-border p-3">
               <legend className="px-1 text-xs font-semibold uppercase tracking-wider text-muted-foreground">
@@ -1134,6 +1126,14 @@ export function AgentsClient({
               />
               Enabled
             </label>
+
+            {editing.mode === 'edit' && (
+              <PersonaNotesEditor
+                key={editing.agent.id}
+                agentId={editing.agent.id}
+                initialNotes={editing.agent.personaNotes}
+              />
+            )}
 
             <div className="flex justify-end gap-2 border-t border-border pt-3">
               <Button type="button" variant="outline" onClick={closeDialog}>
