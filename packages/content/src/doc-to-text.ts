@@ -39,9 +39,10 @@ const BLOCK_TYPES = new Set([
 ]);
 
 /** Attribute keys, in priority order, that carry a human-readable label on
- *  childless atom nodes (mentions, images, file chips, math, emoji). `latex`
- *  surfaces formula source so the brain can index/recall equations. */
-const LABEL_KEYS = ['label', 'title', 'alt', 'text', 'name', 'filename', 'latex'];
+ *  childless atom nodes (mentions, images, file chips, math, emoji, youtube).
+ *  `latex` surfaces formula source so the brain can index/recall equations;
+ *  `src` surfaces an embed URL (e.g. a YouTube link) when nothing better. */
+const LABEL_KEYS = ['label', 'title', 'alt', 'text', 'name', 'filename', 'latex', 'src'];
 
 function render(node: PMNode | null | undefined): string {
   if (!node || typeof node !== 'object') return '';

@@ -10,6 +10,7 @@ import TextAlign from '@tiptap/extension-text-align';
 import { TableKit } from '@tiptap/extension-table';
 import CodeBlockLowlight from '@tiptap/extension-code-block-lowlight';
 import { Mathematics } from '@tiptap/extension-mathematics';
+import Youtube from '@tiptap/extension-youtube';
 import { common, createLowlight } from 'lowlight';
 import type { Extensions } from '@tiptap/react';
 import { Callout } from './callout';
@@ -68,6 +69,10 @@ export const pageExtensions: Extensions = [
   PageImage,
   PageAudio,
   FileEmbed,
+  // YouTube embeds. Privacy-friendly (youtube-nocookie) + a tidy player. The
+  // iframe is made responsive 16:9 via CSS; the public renderer re-derives a
+  // sanitized embed URL itself rather than trusting stored markup.
+  Youtube.configure({ nocookie: true, modestBranding: true, HTMLAttributes: { class: 'youtube-iframe' } }),
   // Inline ($…$) + block ($$…$$) math via KaTeX. Input rules convert as you
   // type; nodes are `inlineMath` / `blockMath` with a `latex` attr. KaTeX CSS is
   // imported in app/layout.tsx.

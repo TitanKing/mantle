@@ -106,6 +106,28 @@ function renderInline(nodes: PMNode[] | undefined): string {
   return out;
 }
 
+/** Extract an 11-char YouTube video id from any of its URL forms. */
+function youtubeId(src: string): string | null {
+  const m = /(?:youtube(?:-nocookie)?\.com\/(?:watch\?(?:.*&)?v=|embed\/|v\/|shorts\/)|youtu\.be\/)([A-Za-z0-9_-]{11})/.exec(
+    src,
+  );
+  return m?.[1] ?? null;
+}
+
+/** Build a sanitized privacy-mode YouTube embed from a stored URL. Re-derived
+ *  here (not trusting stored markup) and restricted to a known video id. */
+function youtubeEmbed(src: string, start: number): string {
+  const id = youtubeId(src);
+  if (!id) return '';
+  const q = start > 0 ? `?start=${start}` : '';
+  const url = `https://www.youtube-nocookie.com/embed/${id}${q}`;
+  return (
+    `<div class="youtube-embed"><iframe src="${escAttr(url)}" title="YouTube video" ` +
+    `frameborder="0" loading="lazy" allowfullscreen ` +
+    `allow="accelerometer; clipboard-write; encrypted-media; gyroscope; picture-in-picture"></iframe></div>`
+  );
+}
+
 /** Resolve a stored emoji shortcode to its glyph; fall back to `:name:`. */
 function renderEmoji(name: string): string {
   if (!name) return '';
@@ -198,6 +220,8 @@ function renderBlock(node: PMNode, opts: RenderOptions): string {
       if (!src) return '';
       return `<audio controls src="${escAttr(src)}"></audio>`;
     }
+    case 'youtube':
+      return youtubeEmbed(str(node.attrs?.src), Number(node.attrs?.start) || 0);
     case 'fileEmbed': {
       const fileId = str(node.attrs?.nodeId);
       const href = fileId ? opts.assetUrl(fileId) : str(node.attrs?.href);
