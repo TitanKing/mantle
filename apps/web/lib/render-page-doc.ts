@@ -192,6 +192,12 @@ function renderBlock(node: PMNode, opts: RenderOptions): string {
       const alt = escAttr(str(node.attrs?.alt));
       return src ? `<img src="${escAttr(src)}" alt="${alt}" loading="lazy">` : '';
     }
+    case 'audio': {
+      const fileId = str(node.attrs?.nodeId);
+      const src = fileId ? opts.assetUrl(fileId) : str(node.attrs?.src);
+      if (!src) return '';
+      return `<audio controls src="${escAttr(src)}"></audio>`;
+    }
     case 'fileEmbed': {
       const fileId = str(node.attrs?.nodeId);
       const href = fileId ? opts.assetUrl(fileId) : str(node.attrs?.href);

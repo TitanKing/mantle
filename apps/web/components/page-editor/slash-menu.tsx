@@ -23,6 +23,7 @@ import {
   ListOrdered,
   ListTodo,
   Minus,
+  Music,
   Paperclip,
   Sigma,
   Table as TableIcon,
@@ -177,6 +178,14 @@ const ITEMS: SlashItem[] = [
     icon: ImageIcon,
     keywords: ['image', 'picture', 'photo', 'upload', 'img'],
     command: ({ editor, range }) => pickAndUpload(editor, range, 'image/*'),
+  },
+  {
+    group: 'Media',
+    title: 'Audio',
+    description: 'Upload and embed an audio player.',
+    icon: Music,
+    keywords: ['audio', 'sound', 'music', 'mp3', 'voice', 'recording', 'podcast'],
+    command: ({ editor, range }) => pickAndUpload(editor, range, 'audio/*'),
   },
   {
     group: 'Media',

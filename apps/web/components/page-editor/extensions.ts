@@ -17,6 +17,7 @@ import { Column, ColumnList } from './column';
 import { PageMention } from './mention';
 import { PageEmoji } from './emoji';
 import { PageImage } from './image';
+import { PageAudio } from './audio';
 import { FileEmbed } from './file-embed';
 
 // Shared highlight.js registry for code blocks (covers ~35 common languages).
@@ -65,6 +66,7 @@ export const pageExtensions: Extensions = [
   ColumnList,
   Column,
   PageImage,
+  PageAudio,
   FileEmbed,
   // Inline ($…$) + block ($$…$$) math via KaTeX. Input rules convert as you
   // type; nodes are `inlineMath` / `blockMath` with a `latex` attr. KaTeX CSS is
