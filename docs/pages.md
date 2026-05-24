@@ -104,6 +104,14 @@ strategy throughout: **reuse libraries, write only what they don't provide.**
 | Drag handle | `@tiptap/extension-drag-handle-react` | grip + click-menu (Duplicate/Delete) |
 | Slash menu, @-mentions | `@tiptap/suggestion` | the popups + commands |
 | Callout, columns | — | custom schema nodes + CSS |
+| Code highlighting | `@tiptap/extension-code-block-lowlight` + `lowlight` | `.hljs-*` mapped to theme tokens (CSS) |
+| Math | `@tiptap/extension-mathematics` + `katex` | `$…$` / `$$…$$`; `latex` surfaced in `docToText` |
+| Image / file embeds | — | custom `image` + `fileEmbed` nodes; upload via the files pipeline; slash + drag/paste |
+
+**Agent authoring:** an agent can now create/update pages too — `markdownToDoc`
+([`packages/content/src/markdown-to-doc.ts`](../packages/content/src/markdown-to-doc.ts))
+converts a rich-markdown dialect into this schema's JSON, and the `page_*` tools
+wrap the CRUD. See [`rich-writing.md`](./rich-writing.md).
 
 Components live in [`apps/web/components/page-editor/`](../apps/web/components/page-editor/):
 
@@ -227,8 +235,15 @@ cache + `extract_cost_cap_micro_usd`.
   `/api/mentions/search` (mention/link autocomplete — pages, notes, entities;
   read-only).
 - **MCP (read-only for pages):** `page_list`, `page_get`, plus `search_chunks`
-  (passage-level vector search across all content). Authoring stays in the
-  editor — the LLM doesn't generate ProseMirror JSON.
+  (passage-level vector search across all content).
+- **In-app agent (read + write):** the web assistant's builtins include
+  `page_create` / `page_update` / `page_delete` / `page_list` / `page_get`
+  ([`packages/tools/src/builtins-pages.ts`](../packages/tools/src/builtins-pages.ts)).
+  Authoring goes through `markdownToDoc` (the LLM writes the rich-markdown
+  dialect, not raw ProseMirror JSON) — see [`rich-writing.md`](./rich-writing.md).
+  *(The MCP surface above is still read-only; only the in-app agent authors.)*
+- **Public sharing:** a page can be shared read-only at `/s/[token]` — see
+  [`sharing.md`](./sharing.md).
 
 ---
 
@@ -241,9 +256,10 @@ cache + `extract_cost_cap_micro_usd`.
 - **Responder/assistant don't use `searchChunks` yet.** Chunk retrieval is
   available via MCP; wiring it into the live context assembly touches the
   responder and was deliberately left for an explicit go-ahead.
-- **Public sharing (Phase 5)** — not built. Needs a `visibility`/share-token,
-  a public route outside the auth gate, a sanitized JSON→HTML renderer, and
-  public-scoping of embedded private file/image assets.
+- **Public sharing** — ✅ built (generalised to all content types). Revocable
+  share tokens, a public `/s/[token]` route, a server-side sanitized
+  JSON→HTML renderer, and scoped serving of embedded private assets. See
+  [`sharing.md`](./sharing.md).
 - **Tables:** whole-table delete via the block handle; per-row/column delete
   not yet wired. `+` adds relative to the current cell.
 - **Columns:** fixed 2/3/4 via the slash menu — no drag-to-create or resize

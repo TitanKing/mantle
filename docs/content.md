@@ -9,6 +9,9 @@
 > For richer, structured documents (callouts, columns, tables, embeds) see
 > the heavier [`pages.md`](./pages.md) surface — a TipTap editor with a
 > draft/commit model. Notes remain the lightweight markdown quick-capture.
+>
+> Any of the three can be shared read-only via a public link (`/s/[token]`) —
+> see [`sharing.md`](./sharing.md).
 
 ---
 

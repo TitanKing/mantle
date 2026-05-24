@@ -8,6 +8,11 @@ MCP server; markdown editor with preview; extractor picks up text
 files automatically. PDFs upload + display but ingestion is wired
 behind a parser hook that ships in a follow-up.
 
+A file can be shared read-only via a public link (`/s/[token]`), which serves
+its bytes through a token-scoped asset route with a media-appropriate viewer —
+see [`sharing.md`](./sharing.md). Pages reuse the same upload/serve pipeline for
+embedded image/file nodes.
+
 ---
 
 ## 1. The shape

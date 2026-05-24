@@ -21,7 +21,13 @@ Non-negotiables (full detail in the guide):
   `Button size="sm"` is `h-9`; match it with `ToggleGroup size="default"`.
 - **Reuse shared patterns** — `<BackLink>` (detail back link), `<SetPageTitle>` (centered
   top-bar title; no duplicate on-page `<h1>`), `<TagInput>`/`<TagPill>` (tags as `string[]`,
-  themed colors), `<MarkdownEditor>` (edit) / `ReactMarkdown`+`prose` (render).
+  themed colors), `<MarkdownEditor>` (edit) / `ReactMarkdown`+`prose` (render),
+  `<ShareControl nodeId>` (read-only public-link toggle on any shareable detail header;
+  pass `beforeEnable` to publish first — pages pass `commit`). See [`docs/sharing.md`](../../docs/sharing.md).
+- **Public surface (`/s/[token]`)** lives outside the `(app)` group — no app shell, and it
+  must scroll itself (`h-dvh overflow-y-auto`) because globals.css pins `html/body` to
+  `overflow:hidden` for the shell. Pages render via the server `renderPageDoc` (sanitized
+  HTML), not the client editor.
 - **Fonts**: Inter everywhere (auto); `font-logo` (Bukhari) only for the wordmark + centered
   title. Don't add fonts.
 - **Tailwind v4**: no dynamically built class names (use literal-string arrays).
