@@ -60,6 +60,10 @@ export function EditorDragHandle({ editor }: { editor: Editor }) {
     <>
       <DragHandle
         editor={editor}
+        // `left` (vs the default `left-start`) centres the handle on the block's
+        // box instead of top-anchoring it — so the grip lines up with its row,
+        // including thin blocks like a divider (the misalignment we saw).
+        computePositionConfig={{ placement: 'left' }}
         onNodeChange={({ node, pos }) => {
           posRef.current = node ? pos : null;
         }}
@@ -68,7 +72,10 @@ export function EditorDragHandle({ editor }: { editor: Editor }) {
           role="button"
           aria-label="Drag to move · click for actions"
           onClick={openMenu}
-          className="mr-2 flex h-9 w-7 cursor-grab items-center justify-center rounded-md text-muted-foreground/50 transition-colors hover:bg-accent hover:text-foreground active:cursor-grabbing"
+          // mr-1.5 keeps a small gap from the text; the grip still lands inside
+          // the editor's left padding (see globals.css) so reaching for it never
+          // leaves the editor and triggers the library's hide-on-mouseleave.
+          className="mr-1.5 flex h-9 w-7 cursor-grab items-center justify-center rounded-md text-muted-foreground/50 transition-colors hover:bg-accent hover:text-foreground active:cursor-grabbing"
         >
           <GripVertical className="size-6" aria-hidden />
         </div>

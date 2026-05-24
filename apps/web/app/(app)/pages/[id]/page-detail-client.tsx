@@ -292,15 +292,18 @@ export function PageDetailClient({ initial }: { initial: PageDetail }) {
           width === 'wide' ? 'max-w-none' : 'max-w-3xl',
         )}
       >
+        {/* pl-10 mirrors the editor's drag-handle gutter (globals.css
+            .ProseMirror[contenteditable]) so the title + tags line up with the
+            body text. */}
         <Input
           value={title}
           onChange={(e) => setTitle(e.target.value)}
           onKeyDown={onTitleKeyDown}
           placeholder="New page"
           aria-label="Page title"
-          className="h-auto border-0 bg-transparent px-0 py-0 text-3xl font-bold shadow-none placeholder:text-muted-foreground/40 focus-visible:ring-0 md:text-3xl"
+          className="h-auto border-0 bg-transparent pl-10 pr-0 py-0 text-3xl font-bold shadow-none placeholder:text-muted-foreground/40 focus-visible:ring-0 md:text-3xl"
         />
-        <div className="mt-3">
+        <div className="mt-3 pl-10">
           <TagInput value={tags} onChange={setTags} placeholder="Add tags…" />
         </div>
         <div className="mt-6">
