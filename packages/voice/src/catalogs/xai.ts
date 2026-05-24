@@ -81,7 +81,7 @@ export const XAI_BASE_URL = 'https://api.x.ai/v1';
 //
 // 5 voices, 20+ languages auto-detected, inline + wrapping speech tags.
 
-import type { AudioTag } from '../adapters/types';
+import type { AudioTag, WrappingTag } from '../adapters/types';
 
 /** Grok TTS model — xAI publishes "grok-voice-latest" as the alias. */
 export const XAI_TTS_MODEL_ID = 'grok-voice-latest';
@@ -101,12 +101,8 @@ export const XAI_TTS_VOICES = [
  * as ElevenLabs's `[laughs]`. Pulled from
  *   https://docs.x.ai/developers/rest-api-reference/inference/voice
  *
- * NOTE: xAI also supports a separate vocabulary of WRAPPING tags
- * (`<soft>…</soft>`, `<whisper>…</whisper>`, `<emphasis>…</emphasis>`,
- * `<slow>…</slow>`, `<sing-song>…</sing-song>` etc.) that wrap whole
- * phrases. Our AudioTag framework only handles the inline bracket
- * form today — wrapping tags are a future expansion when (if) other
- * providers adopt them.
+ * Wrapping (span-styling) tags live separately — see
+ * {@link XAI_WRAPPING_TAGS} below.
  */
 export const XAI_AUDIO_TAGS: readonly AudioTag[] = [
   // Reactions / human sounds.
@@ -138,6 +134,41 @@ export const XAI_AUDIO_TAGS: readonly AudioTag[] = [
 export function audioTagsForXaiTtsModel(modelId: string): readonly AudioTag[] {
   if (modelId === XAI_TTS_MODEL_ID || modelId === 'grok-voice') {
     return XAI_AUDIO_TAGS;
+  }
+  return [];
+}
+
+/**
+ * Wrapping speech tags Grok TTS honours. Angle-bracket pairs that style
+ * the whole phrase they surround, e.g. `<whisper>it's a secret</whisper>`.
+ * Distinct from the inline `[bracket]` cues above — these apply a
+ * delivery style across a span rather than firing at a point.
+ *
+ * Source: https://docs.x.ai/developers/model-capabilities/audio/text-to-speech
+ * (the "speech tags" section — wrapping tags). Keep this list in sync
+ * with the docs; the names map directly to `<name>…</name>`.
+ */
+export const XAI_WRAPPING_TAGS: readonly WrappingTag[] = [
+  // Volume.
+  { name: 'loud', description: 'speak the wrapped phrase loudly', category: 'volume' },
+  { name: 'soft', description: 'speak the wrapped phrase quietly and gently', category: 'volume' },
+  { name: 'whisper', description: 'whisper the wrapped phrase — for secrets / asides', category: 'volume' },
+  // Pitch.
+  { name: 'high', description: 'raise the pitch across the wrapped phrase', category: 'pitch' },
+  // Pacing.
+  { name: 'slow', description: 'slow the delivery of the wrapped phrase down', category: 'pacing' },
+  // Style.
+  { name: 'singing', description: 'sing the wrapped phrase rather than speak it; use rarely', category: 'style' },
+];
+
+/**
+ * Returns the wrapping-tag set for a given Grok TTS model. Mirrors
+ * {@link audioTagsForXaiTtsModel} — one voice model today; future
+ * variants branch here.
+ */
+export function wrappingTagsForXaiTtsModel(modelId: string): readonly WrappingTag[] {
+  if (modelId === XAI_TTS_MODEL_ID || modelId === 'grok-voice') {
+    return XAI_WRAPPING_TAGS;
   }
   return [];
 }

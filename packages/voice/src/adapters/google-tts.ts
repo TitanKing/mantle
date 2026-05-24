@@ -204,4 +204,10 @@ export const googleTtsAdapter: TtsDispatcher = {
   supportedAudioTags(modelId) {
     return audioTagsForGoogleTtsModel(modelId);
   },
+  supportedWrappingTags() {
+    // Audited: Gemini TTS steers via inline [bracket] tags +
+    // natural-language prompts ("say cheerfully: …"), not angle-bracket
+    // wrapping tags.
+    return [];
+  },
 };

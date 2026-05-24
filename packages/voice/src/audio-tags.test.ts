@@ -21,6 +21,7 @@
 import { describe, expect, it } from 'vitest';
 import { composeAudioTagInstructions, stripAudioTags } from './audio-tags';
 import { ELEVENLABS_V3_AUDIO_TAGS } from './catalogs/elevenlabs';
+import { XAI_WRAPPING_TAGS } from './catalogs/xai';
 
 describe('composeAudioTagInstructions', () => {
   it('returns empty string for an empty tag list', () => {
@@ -61,6 +62,37 @@ describe('composeAudioTagInstructions', () => {
     // text-out. Otherwise she'd hedge and skip them.
     const out = composeAudioTagInstructions(ELEVENLABS_V3_AUDIO_TAGS);
     expect(out).toMatch(/strip|text/i);
+  });
+
+  it('returns empty string when both inline and wrapping are empty', () => {
+    expect(composeAudioTagInstructions([], [])).toBe('');
+  });
+
+  it('renders a wrapping-tag section with <name>…</name> forms', () => {
+    const out = composeAudioTagInstructions([], XAI_WRAPPING_TAGS);
+    // The open/close form is derived from the bare name.
+    expect(out).toContain('<whisper>…</whisper>');
+    expect(out).toContain('<soft>…</soft>');
+    // Every wrapping tag's description lands in the prompt.
+    for (const t of XAI_WRAPPING_TAGS) {
+      expect(out).toContain(t.description);
+    }
+  });
+
+  it('groups wrapping tags by their categories (volume/pitch/pacing/style)', () => {
+    const out = composeAudioTagInstructions([], XAI_WRAPPING_TAGS);
+    expect(out).toContain('volume:');
+    expect(out).toContain('pitch:');
+    expect(out).toContain('pacing:');
+    expect(out).toContain('style:');
+  });
+
+  it('renders both vocabularies together when both are passed', () => {
+    const out = composeAudioTagInstructions(ELEVENLABS_V3_AUDIO_TAGS, XAI_WRAPPING_TAGS);
+    expect(out).toContain('[');            // an inline tag
+    expect(out).toContain('<whisper>…</whisper>'); // a wrapping tag
+    // One combined paragraph — single header, not two.
+    expect(out.match(/## Voice expression/g)?.length).toBe(1);
   });
 });
 
@@ -145,5 +177,51 @@ describe('stripAudioTags', () => {
     const { text } = stripAudioTags(`prefix ${long} suffix`);
     // The long bracketed string should be preserved (NOT stripped).
     expect(text).toContain(long);
+  });
+
+  // ─── Wrapping tags (<whisper>…</whisper>) ─────────────────────────
+
+  it('strips wrapping tag markers but keeps the inner text', () => {
+    const { text } = stripAudioTags("I'll tell you. <whisper>it's a secret</whisper>");
+    expect(text).toBe("I'll tell you. it's a secret");
+  });
+
+  it('counts each wrapping marker removed', () => {
+    // open + close = 2 markers for one pair.
+    const { stripped } = stripAudioTags('<soft>quietly</soft>');
+    expect(stripped).toBe(2);
+  });
+
+  it('strips every documented xAI wrapping name', () => {
+    for (const t of XAI_WRAPPING_TAGS) {
+      const { text } = stripAudioTags(`<${t.name}>hello</${t.name}>`);
+      expect(text).toBe('hello');
+    }
+  });
+
+  it('is case-insensitive on wrapping tag names', () => {
+    const { text } = stripAudioTags('<Whisper>psst</WHISPER>');
+    expect(text).toBe('psst');
+  });
+
+  it('handles inline and wrapping tags mixed in one reply', () => {
+    const { text } = stripAudioTags(
+      "[sigh] fine. <whisper>but keep it quiet</whisper> [laughs]",
+    );
+    expect(text).toBe('fine. but keep it quiet');
+  });
+
+  it('does NOT touch autolinks or generic HTML — only known speech names', () => {
+    // `<https://…>` autolinks, emails, and arbitrary HTML must survive;
+    // the stripper matches an explicit name allowlist, not any `<word>`.
+    const samples = [
+      'See <https://example.com> for more.',
+      'Email <jason@schoeman.me> if stuck.',
+      'A <div> and a <span> walk in.',
+      'Markdown *em* and _underscore_ stay.',
+    ];
+    for (const s of samples) {
+      expect(stripAudioTags(s).text).toBe(s);
+    }
   });
 });

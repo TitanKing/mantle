@@ -40,10 +40,12 @@ import {
   audioTagsForElevenLabsModel,
   audioTagsForGoogleTtsModel,
   audioTagsForXaiTtsModel,
+  wrappingTagsForXaiTtsModel,
   isProviderWired,
   providersForCapability,
   voicesForModel,
   type AudioTag,
+  type WrappingTag,
   type ChatModelInfo,
   type ImageGenModelInfo,
   type OpenAiVoice,
@@ -701,6 +703,11 @@ function TtsFields({
       ? audioTagsForGoogleTtsModel(model)
       : [];
 
+  // Wrapping speech tags (<whisper>…</whisper>, <soft>, …). Only xAI
+  // Grok voice exposes these today; other providers return [].
+  const wrappingTags: readonly WrappingTag[] =
+    provider === 'xai' ? wrappingTagsForXaiTtsModel(model) : [];
+
   return (
     <div className="space-y-4">
       <div className="space-y-1.5">
@@ -798,6 +805,29 @@ function TtsFields({
                 {audioTags.map((t) => (
                   <li key={t.tag} title={t.description}>
                     {t.tag}{' '}
+                    <span className="font-sans text-muted-foreground">— {t.description}</span>
+                  </li>
+                ))}
+              </ul>
+            </div>
+          </details>
+        )}
+        {wrappingTags.length > 0 && (
+          <details className="rounded-md border border-border bg-muted/30 px-3 py-2 text-xs">
+            <summary className="cursor-pointer font-medium text-foreground">
+              Wrapping speech tags ({wrappingTags.length}) — your model honours these
+            </summary>
+            <div className="mt-2 space-y-1">
+              <p className="text-muted-foreground">
+                Angle-bracket pairs that style a whole phrase, e.g.{' '}
+                <code className="font-mono">&lt;whisper&gt;…&lt;/whisper&gt;</code>. The agent's
+                prompt is auto-augmented with these for voice replies; text replies have them
+                stripped (the inner words are kept).
+              </p>
+              <ul className="grid grid-cols-2 gap-x-3 gap-y-0.5 pt-1 font-mono text-[11px]">
+                {wrappingTags.map((t) => (
+                  <li key={t.name} title={t.description}>
+                    &lt;{t.name}&gt;…&lt;/{t.name}&gt;{' '}
                     <span className="font-sans text-muted-foreground">— {t.description}</span>
                   </li>
                 ))}

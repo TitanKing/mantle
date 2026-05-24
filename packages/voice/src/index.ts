@@ -65,7 +65,7 @@ export {
   composeAudioTagInstructions,
   stripAudioTags,
 } from './audio-tags';
-export type { AudioTag } from './adapters/types';
+export type { AudioTag, WrappingTag } from './adapters/types';
 
 // ElevenLabs audio-tag catalog — exported so the UI can render the
 // hint list under the voice dropdown when the worker is on v3.

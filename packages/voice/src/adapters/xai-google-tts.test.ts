@@ -14,11 +14,13 @@ import {
   XAI_AUDIO_TAGS,
   XAI_TTS_MODEL_ID,
   XAI_TTS_VOICES,
+  XAI_WRAPPING_TAGS,
   audioTagsForGoogleTtsModel,
   audioTagsForXaiTtsModel,
   getTtsAdapter,
   googleTtsAdapter,
   isProviderWired,
+  wrappingTagsForXaiTtsModel,
   xaiTtsAdapter,
 } from './index';
 
@@ -76,6 +78,40 @@ describe('xAI TTS adapter', () => {
       XAI_AUDIO_TAGS.length,
     );
     expect(xaiTtsAdapter.supportedAudioTags?.('not-a-real-model')).toEqual([]);
+  });
+
+  it('exposes the documented wrapping tags (<whisper>, <soft>, <slow> ...)', () => {
+    const names = new Set(XAI_WRAPPING_TAGS.map((t) => t.name));
+    // The headline tag the user asked for must be present.
+    expect(names.has('whisper')).toBe(true);
+    // Volume + pitch + pacing + style coverage.
+    expect(names.has('soft')).toBe(true);
+    expect(names.has('loud')).toBe(true);
+    expect(names.has('high')).toBe(true);
+    expect(names.has('slow')).toBe(true);
+    expect(names.has('singing')).toBe(true);
+    // Names are bare (no brackets) — open/close forms are derived.
+    for (const t of XAI_WRAPPING_TAGS) {
+      expect(t.name).not.toContain('<');
+      expect(t.name).not.toContain('>');
+    }
+  });
+
+  it('wrappingTagsForXaiTtsModel gates on the published model id', () => {
+    expect(wrappingTagsForXaiTtsModel(XAI_TTS_MODEL_ID).length).toBe(
+      XAI_WRAPPING_TAGS.length,
+    );
+    expect(wrappingTagsForXaiTtsModel('grok-voice').length).toBe(
+      XAI_WRAPPING_TAGS.length,
+    );
+    expect(wrappingTagsForXaiTtsModel('grok-imaginary-model-9000')).toEqual([]);
+  });
+
+  it('adapter exposes supportedWrappingTags hook returning the catalog', () => {
+    expect(xaiTtsAdapter.supportedWrappingTags?.(XAI_TTS_MODEL_ID).length).toBe(
+      XAI_WRAPPING_TAGS.length,
+    );
+    expect(xaiTtsAdapter.supportedWrappingTags?.('not-a-real-model')).toEqual([]);
   });
 });
 

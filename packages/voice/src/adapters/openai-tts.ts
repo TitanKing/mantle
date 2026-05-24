@@ -45,4 +45,9 @@ export const openAiTtsAdapter: TtsDispatcher = {
     // strips tags before send (see synthesize.ts integration).
     return [];
   },
+  supportedWrappingTags() {
+    // Audited: OpenAI TTS has no angle-bracket wrapping vocabulary.
+    // Style steering is the `instructions` param on gpt-4o-mini-tts.
+    return [];
+  },
 };

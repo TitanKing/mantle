@@ -839,12 +839,12 @@ async function handleMessage(messageId: string): Promise<void> {
           );
         }
 
-        // Tell Saskia which inline audio tags her configured TTS will
-        // honour (e.g. ElevenLabs v3 supports [laughs] / [whispers] /
-        // [sighs]; OpenAI doesn't). Looked up once per turn so the
-        // prompt stays current if the TTS worker is swapped between
-        // turns. Empty paragraph if no TTS worker, no tags-capable
-        // model, or no adapter — concat is a no-op.
+        // Tell Saskia which speech tags her configured TTS will honour:
+        // inline cues (ElevenLabs v3 [laughs]/[sighs]; OpenAI none) AND
+        // wrapping styles (xAI Grok <whisper>…</whisper>/<soft>/<slow>).
+        // Looked up once per turn so the prompt stays current if the TTS
+        // worker is swapped between turns. Empty paragraph if no TTS
+        // worker, no tags-capable model, or no adapter — concat is a no-op.
         let audioTagInstructions = '';
         try {
           const ttsWorkerForTags = await getDefaultWorker(USER_ID!, 'tts');
@@ -852,7 +852,9 @@ async function handleMessage(messageId: string): Promise<void> {
             const ttsAdapterForTags = getTtsAdapter(ttsWorkerForTags.provider);
             const tags =
               ttsAdapterForTags?.supportedAudioTags?.(ttsWorkerForTags.model) ?? [];
-            audioTagInstructions = composeAudioTagInstructions(tags);
+            const wrappingTags =
+              ttsAdapterForTags?.supportedWrappingTags?.(ttsWorkerForTags.model) ?? [];
+            audioTagInstructions = composeAudioTagInstructions(tags, wrappingTags);
           }
         } catch (err) {
           // Tag-injection is best-effort decoration. A DB blip here

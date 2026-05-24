@@ -302,6 +302,40 @@ The `[VOICE]` opt-in marker is documented in Saskia's system prompt
 template — see [memory.md §6.2](./memory.md#62-the-agent-roles) for
 where that lives.
 
+### 5a. Speech tags — inline + wrapping
+
+Voice models expose two tag vocabularies, and the framework treats both
+uniformly (see `packages/voice/src/adapters/types.ts` — `AudioTag` and
+`WrappingTag`):
+
+- **Inline tags** — point-in-time cues in square brackets: `[laughs]`,
+  `[sigh]`, `[pause]`. Advertised per-model via
+  `TtsDispatcher.supportedAudioTags(model)`.
+- **Wrapping tags** — angle-bracket pairs that style a whole phrase:
+  `<whisper>it's a secret</whisper>`, `<soft>…</soft>`, `<slow>…</slow>`.
+  Advertised via `TtsDispatcher.supportedWrappingTags(model)`. **xAI
+  Grok voice** is the provider that ships these today (volume / pitch /
+  pacing / style). ElevenLabs and Google were audited and express
+  everything through inline tags + natural-language steering, so they
+  return `[]`.
+
+Both flow the same way each turn:
+
+1. The runtime asks the active TTS adapter for both sets and folds them
+   into Saskia's system prompt via `composeAudioTagInstructions(inline,
+   wrapping)` — one combined paragraph, grouped by category, so she only
+   emits tags this model will render.
+2. On voice-out, the tags ride through to the synthesizer untouched.
+3. On text-out (or TTS fallback), `stripAudioTags` removes inline tags
+   entirely and removes wrapping **markers while keeping the inner
+   text** (`<whisper>x</whisper>` → `x`). Wrapping stripping matches an
+   explicit speech-name allowlist, so autolinks (`<https://…>`) and
+   real HTML are left alone.
+
+Operators see both lists under the voice dropdown at
+`/settings/ai-workers/<id>` (collapsible "Inline audio tags" /
+"Wrapping speech tags" sections).
+
 ---
 
 ## 5b. Attachment ingestion (images + documents)

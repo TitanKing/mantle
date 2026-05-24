@@ -10,10 +10,11 @@
  *
  * Auth: Bearer XAI_API_KEY. The same key used for chat works for TTS.
  *
- * Inline audio tags ([laugh], [giggle], [sigh] etc.) — see
- * catalogs/xai.ts. Wrapping tags (<whisper>...</whisper>) work too
- * but aren't represented in our AudioTag framework today; operators
- * can use them manually in worker prompts.
+ * Speech tags: inline cues ([laugh], [giggle], [sigh] …) via
+ * `supportedAudioTags`, and wrapping styles (<whisper>…</whisper>,
+ * <soft>, <slow> …) via `supportedWrappingTags`. Both sets live in
+ * catalogs/xai.ts and are injected into Saskia's prompt by the runtime
+ * so she only emits tags this model renders.
  *
  * Output format mapping for Telegram-native voice notes: there's no
  * 'opus' codec on Grok TTS — Telegram's sendVoice prefers OGG/Opus.
@@ -35,6 +36,7 @@ import {
   XAI_BASE_URL,
   XAI_TTS_MODEL_ID,
   XAI_TTS_VOICES,
+  XAI_WRAPPING_TAGS,
   audioTagsForXaiTtsModel,
 } from '../catalogs/xai';
 import { stripAudioTags } from '../audio-tags';
@@ -166,6 +168,11 @@ export const xaiTtsAdapter: TtsDispatcher = {
   supportedAudioTags(modelId) {
     return modelId === XAI_TTS_MODEL_ID || modelId === 'grok-voice'
       ? XAI_AUDIO_TAGS
+      : [];
+  },
+  supportedWrappingTags(modelId) {
+    return modelId === XAI_TTS_MODEL_ID || modelId === 'grok-voice'
+      ? XAI_WRAPPING_TAGS
       : [];
   },
 };

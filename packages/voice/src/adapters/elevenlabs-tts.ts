@@ -269,4 +269,10 @@ export const elevenLabsTtsAdapter: TtsDispatcher = {
   supportedAudioTags(modelId) {
     return audioTagsForElevenLabsModel(modelId);
   },
+  supportedWrappingTags() {
+    // Audited: ElevenLabs v3 expresses everything through inline
+    // [bracket] audio tags — there's no angle-bracket wrapping
+    // vocabulary to advertise.
+    return [];
+  },
 };

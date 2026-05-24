@@ -48,7 +48,11 @@ export interface AdapterMeta {
  *  ElevenLabs v3 calls these "audio tags"; xAI's voice models use a
  *  similar `[giggle]`/`[laugh]` convention. The shape is uniform: an
  *  exact bracket-wrapped token + a short description for the LLM's
- *  benefit so it knows when to use which. */
+ *  benefit so it knows when to use which.
+ *
+ *  Inline tags are *point-in-time* — they fire at the spot they sit.
+ *  For tags that style a whole *span* of text (e.g. xAI's
+ *  `<whisper>…</whisper>`), see {@link WrappingTag}. */
 export type AudioTag = {
   /** Exact form including brackets, e.g. `[laughs]`, `[whispers]`. */
   tag: string;
@@ -57,6 +61,28 @@ export type AudioTag = {
   description: string;
   /** Coarse grouping so the UI hint can render them in sections. */
   category?: 'emotion' | 'reaction' | 'delivery' | 'cognitive' | 'tone' | 'accent';
+};
+
+/** A wrapping speech tag — an angle-bracket pair that styles the whole
+ *  phrase it surrounds, e.g. xAI Grok's `<whisper>secret</whisper>`,
+ *  `<soft>…</soft>`, `<slow>…</slow>`. Distinct from {@link AudioTag}:
+ *  inline tags are point-in-time cues, wrapping tags apply a delivery
+ *  style across a span.
+ *
+ *  The framework treats these the same way it treats inline tags:
+ *  adapters advertise the set their model honours (`supportedWrappingTags`),
+ *  the prompt composer tells Saskia she may use them, and the text-out
+ *  path strips them (keeping the inner text) so the markers never leak
+ *  into a plain-text reply. */
+export type WrappingTag = {
+  /** Short lower-case name without brackets, e.g. `whisper`, `soft`.
+   *  The open/close forms are derived as `<name>` / `</name>`. */
+  name: string;
+  /** One-line hint for the LLM — what the style does and when to reach
+   *  for it. Joined into the system-prompt paragraph. */
+  description: string;
+  /** Coarse grouping for the UI hint (volume / pitch / pacing / style). */
+  category?: 'volume' | 'pitch' | 'pacing' | 'style';
 };
 
 export interface TtsDispatcher extends AdapterMeta {
@@ -94,6 +120,14 @@ export interface TtsDispatcher extends AdapterMeta {
    *  whose providers ignore unknown tags can safely return [] —
    *  Saskia won't try to use them. */
   supportedAudioTags?(modelId: string): readonly AudioTag[];
+
+  /** Optional. Wrapping speech tags the model honours —
+   *  `<whisper>…</whisper>`, `<soft>…</soft>`, `<slow>…</slow>`, etc.
+   *  (xAI Grok voice today). Same contract as {@link supportedAudioTags}
+   *  but for span-styling rather than point-in-time cues. Adapters
+   *  whose providers have no angle-bracket wrapping vocabulary return
+   *  [] (or omit this), and the runtime simply won't advertise any. */
+  supportedWrappingTags?(modelId: string): readonly WrappingTag[];
 }
 
 /** A chat model entry. The fields are intentionally generic — provider

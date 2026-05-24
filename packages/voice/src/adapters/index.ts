@@ -166,7 +166,9 @@ export {
   XAI_VISION_MODELS,
   XAI_IMAGE_MODELS,
   XAI_IMAGE_DEFAULT_MODEL,
+  XAI_WRAPPING_TAGS,
   audioTagsForXaiTtsModel,
+  wrappingTagsForXaiTtsModel,
 } from '../catalogs/xai';
 export {
   HUGGINGFACE_CHAT_MODELS,
