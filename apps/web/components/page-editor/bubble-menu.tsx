@@ -5,6 +5,9 @@ import type { Editor } from '@tiptap/react';
 import { useEditorState } from '@tiptap/react';
 import { BubbleMenu } from '@tiptap/react/menus';
 import {
+  AlignCenter,
+  AlignLeft,
+  AlignRight,
   Bold,
   Code2,
   Heading1,
@@ -85,6 +88,9 @@ export function EditorBubbleMenu({ editor }: { editor: Editor }) {
       bullet: editor.isActive('bulletList'),
       ordered: editor.isActive('orderedList'),
       quote: editor.isActive('blockquote'),
+      alignLeft: editor.isActive({ textAlign: 'left' }),
+      alignCenter: editor.isActive({ textAlign: 'center' }),
+      alignRight: editor.isActive({ textAlign: 'right' }),
     }),
   });
 
@@ -187,6 +193,27 @@ export function EditorBubbleMenu({ editor }: { editor: Editor }) {
           icon={Quote}
           active={s.quote}
           onClick={() => editor.chain().focus().toggleBlockquote().run()}
+        />
+
+        <Separator orientation="vertical" className="mx-1 h-6" />
+
+        <ToolButton
+          label="Align left"
+          icon={AlignLeft}
+          active={s.alignLeft}
+          onClick={() => editor.chain().focus().setTextAlign('left').run()}
+        />
+        <ToolButton
+          label="Align center"
+          icon={AlignCenter}
+          active={s.alignCenter}
+          onClick={() => editor.chain().focus().setTextAlign('center').run()}
+        />
+        <ToolButton
+          label="Align right"
+          icon={AlignRight}
+          active={s.alignRight}
+          onClick={() => editor.chain().focus().setTextAlign('right').run()}
         />
       </BubbleMenu>
 

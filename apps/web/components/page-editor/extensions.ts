@@ -6,6 +6,7 @@ import TaskList from '@tiptap/extension-task-list';
 import TaskItem from '@tiptap/extension-task-item';
 import Subscript from '@tiptap/extension-subscript';
 import Superscript from '@tiptap/extension-superscript';
+import TextAlign from '@tiptap/extension-text-align';
 import { TableKit } from '@tiptap/extension-table';
 import CodeBlockLowlight from '@tiptap/extension-code-block-lowlight';
 import { Mathematics } from '@tiptap/extension-mathematics';
@@ -52,6 +53,9 @@ export const pageExtensions: Extensions = [
   Typography,
   Subscript,
   Superscript,
+  // Horizontal alignment for paragraphs + headings. Renders as an inline
+  // `style="text-align:…"` so both the editor and the public renderer honour it.
+  TextAlign.configure({ types: ['heading', 'paragraph'] }),
   TaskList,
   TaskItem.configure({ nested: true }),
   PageMention,

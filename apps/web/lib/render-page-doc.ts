@@ -44,6 +44,13 @@ function str(v: unknown): string {
   return typeof v === 'string' ? v : '';
 }
 
+/** Inline `style="text-align:…"` for an aligned block, or '' for default/left.
+ *  Restricted to a known set so there's no arbitrary style injection. */
+function alignStyle(node: PMNode): string {
+  const a = str(node.attrs?.textAlign);
+  return a === 'center' || a === 'right' || a === 'justify' ? ` style="text-align:${a}"` : '';
+}
+
 /** Only allow safe link protocols; everything else becomes inert. */
 function safeHref(href: string): string {
   const h = href.trim();
@@ -122,11 +129,14 @@ function renderBlock(node: PMNode, opts: RenderOptions): string {
   switch (node.type) {
     case 'paragraph': {
       const inner = renderInline(node.content);
-      return inner ? `<p>${inner}</p>` : '<p></p>';
+      const align = alignStyle(node);
+      if (!inner) return '<p></p>';
+      return `<p${align}>${inner}</p>`;
     }
     case 'heading': {
       const level = Math.min(Math.max(Number(node.attrs?.level) || 1, 1), 3);
-      return `<h${level}>${renderInline(node.content)}</h${level}>`;
+      const align = alignStyle(node);
+      return `<h${level}${align}>${renderInline(node.content)}</h${level}>`;
     }
     case 'blockquote':
       return `<blockquote>${renderBlocks(node.content, opts)}</blockquote>`;
