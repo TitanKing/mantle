@@ -16,6 +16,8 @@ import {
   ListOrdered,
   Quote,
   Strikethrough,
+  Subscript as SubscriptIcon,
+  Superscript as SuperscriptIcon,
   type LucideIcon,
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
@@ -73,6 +75,8 @@ export function EditorBubbleMenu({ editor }: { editor: Editor }) {
       bold: editor.isActive('bold'),
       italic: editor.isActive('italic'),
       strike: editor.isActive('strike'),
+      subscript: editor.isActive('subscript'),
+      superscript: editor.isActive('superscript'),
       code: editor.isActive('codeBlock'),
       highlight: editor.isActive('highlight'),
       link: editor.isActive('link'),
@@ -125,6 +129,18 @@ export function EditorBubbleMenu({ editor }: { editor: Editor }) {
           icon={Strikethrough}
           active={s.strike}
           onClick={() => editor.chain().focus().toggleStrike().run()}
+        />
+        <ToolButton
+          label="Subscript"
+          icon={SubscriptIcon}
+          active={s.subscript}
+          onClick={() => editor.chain().focus().toggleSubscript().run()}
+        />
+        <ToolButton
+          label="Superscript"
+          icon={SuperscriptIcon}
+          active={s.superscript}
+          onClick={() => editor.chain().focus().toggleSuperscript().run()}
         />
         <ToolButton
           label="Highlight"
