@@ -260,7 +260,7 @@ export function PageDetailClient({ initial }: { initial: PageDetail }) {
           <Button size="sm" onClick={() => void commit()} disabled={!docDirty || committing}>
             <GitCommitHorizontal /> Commit
           </Button>
-          <ShareControl nodeId={initial.id} />
+          <ShareControl nodeId={initial.id} beforeEnable={commit} />
           <DropdownMenu>
             <DropdownMenuTrigger asChild>
               <Button variant="ghost" size="icon" className="size-8" aria-label="Page options">

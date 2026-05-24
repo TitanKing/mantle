@@ -19,9 +19,14 @@ type ShareInfo = { id: string; token: string; path: string } | null;
 export function ShareControl({
   nodeId,
   iconOnly = false,
+  beforeEnable,
 }: {
   nodeId: string;
   iconOnly?: boolean;
+  /** Run before a link is first created — e.g. a page commits its draft so the
+   *  shared copy reflects what the owner currently sees (pages publish on
+   *  commit; notes/todos/events/files save live and don't pass this). */
+  beforeEnable?: () => Promise<void> | void;
 }) {
   const toast = useToast();
   const [open, setOpen] = useState(false);
@@ -52,6 +57,9 @@ export function ShareControl({
     setBusy(true);
     try {
       if (next) {
+        // Publish the current state first (pages commit their draft) so the
+        // link reflects exactly what the owner sees at share time.
+        await beforeEnable?.();
         const r = await fetch('/api/shares', {
           method: 'POST',
           headers: { 'content-type': 'application/json' },
