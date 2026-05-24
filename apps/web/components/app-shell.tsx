@@ -56,7 +56,7 @@ export function AppShell({
         <Header email={email} userAvatar={userAvatar} onMenuClick={() => setMobileOpen(true)} />
 
         {/* Desktop sidebar */}
-        <aside className="fixed inset-y-0 left-0 z-30 hidden w-80 flex-col border-r bg-sidebar pt-16 md:flex">
+        <aside className="fixed inset-y-0 left-0 z-30 hidden w-64 flex-col border-r bg-sidebar pt-16 md:flex">
           <div className="flex-1 overflow-y-auto scrollbar-thin">{body()}</div>
         </aside>
 
@@ -72,7 +72,7 @@ export function AppShell({
         <LiveColumn />
 
         {/* Content area */}
-        <main className="fixed inset-0 top-16 overflow-y-auto scrollbar-thin md:left-80 lg:right-80">
+        <main className="fixed inset-0 top-16 overflow-y-auto scrollbar-thin md:left-64 lg:right-80">
           {children}
         </main>
       </div>
