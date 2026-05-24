@@ -15,6 +15,8 @@ import katex from 'katex';
 import { common, createLowlight } from 'lowlight';
 import { toHtml } from 'hast-util-to-html';
 import { gitHubEmojis, shortcodeToEmoji } from '@tiptap/extension-emoji';
+// Relative (not `@/`) so the vitest unit test, which has no path-alias, resolves it.
+import { cellBgColor } from '../components/page-editor/table-cell-bg';
 
 const lowlight = createLowlight(common);
 
@@ -211,9 +213,18 @@ function renderBlock(node: PMNode, opts: RenderOptions): string {
     case 'tableRow':
       return `<tr>${renderBlocks(node.content, opts)}</tr>`;
     case 'tableHeader':
-      return `<th>${renderBlocks(node.content, opts)}</th>`;
-    case 'tableCell':
-      return `<td>${renderBlocks(node.content, opts)}</td>`;
+    case 'tableCell': {
+      const tag = node.type === 'tableHeader' ? 'th' : 'td';
+      const attrs: string[] = [];
+      const colspan = Number(node.attrs?.colspan);
+      const rowspan = Number(node.attrs?.rowspan);
+      if (colspan > 1) attrs.push(`colspan="${colspan}"`);
+      if (rowspan > 1) attrs.push(`rowspan="${rowspan}"`);
+      const bg = cellBgColor(node.attrs?.backgroundColor);
+      if (bg) attrs.push(`style="background-color:${bg}"`);
+      const a = attrs.length ? ` ${attrs.join(' ')}` : '';
+      return `<${tag}${a}>${renderBlocks(node.content, opts)}</${tag}>`;
+    }
     case 'image': {
       const fileId = str(node.attrs?.nodeId);
       const src = fileId ? opts.assetUrl(fileId) : str(node.attrs?.src);

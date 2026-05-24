@@ -7,7 +7,7 @@ import TaskItem from '@tiptap/extension-task-item';
 import Subscript from '@tiptap/extension-subscript';
 import Superscript from '@tiptap/extension-superscript';
 import TextAlign from '@tiptap/extension-text-align';
-import { TableKit } from '@tiptap/extension-table';
+import { Table, TableRow, TableHeader, TableCell } from '@tiptap/extension-table';
 import CodeBlockLowlight from '@tiptap/extension-code-block-lowlight';
 import { Mathematics } from '@tiptap/extension-mathematics';
 import Youtube from '@tiptap/extension-youtube';
@@ -21,6 +21,36 @@ import { PageEmoji } from './emoji';
 import { PageImage } from './image';
 import { PageAudio } from './audio';
 import { FileEmbed } from './file-embed';
+import { cellBgColor } from './table-cell-bg';
+
+// Add a theme-token `backgroundColor` attribute to table cells. Stores the
+// token key + an inline `background-color` (so the editor, PageView, and the
+// public renderer all shade identically); `data-bg` round-trips the key.
+function cellBackgroundAttr() {
+  return {
+    backgroundColor: {
+      default: null as string | null,
+      parseHTML: (el: HTMLElement) => el.getAttribute('data-bg'),
+      renderHTML: (attrs: Record<string, unknown>) => {
+        const color = cellBgColor(attrs.backgroundColor);
+        if (!color) return {};
+        return { 'data-bg': String(attrs.backgroundColor), style: `background-color: ${color}` };
+      },
+    },
+  };
+}
+
+const PageTableCell = TableCell.extend({
+  addAttributes() {
+    return { ...this.parent?.(), ...cellBackgroundAttr() };
+  },
+});
+
+const PageTableHeader = TableHeader.extend({
+  addAttributes() {
+    return { ...this.parent?.(), ...cellBackgroundAttr() };
+  },
+});
 
 // Shared highlight.js registry for code blocks (covers ~35 common languages).
 // Token spans get themed via `.ProseMirror .hljs-*` rules in globals.css, so
@@ -83,7 +113,10 @@ export const pageExtensions: Extensions = [
   // type; nodes are `inlineMath` / `blockMath` with a `latex` attr. KaTeX CSS is
   // imported in app/layout.tsx.
   Mathematics,
-  TableKit.configure({ table: { resizable: true } }),
+  Table.configure({ resizable: true }),
+  TableRow,
+  PageTableHeader,
+  PageTableCell,
   Placeholder.configure({
     // Only the first empty line shows it (showOnlyWhenEditable defaults true,
     // so the read-only PageView never renders a placeholder).
