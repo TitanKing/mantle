@@ -14,6 +14,7 @@
 import katex from 'katex';
 import { common, createLowlight } from 'lowlight';
 import { toHtml } from 'hast-util-to-html';
+import { gitHubEmojis, shortcodeToEmoji } from '@tiptap/extension-emoji';
 
 const lowlight = createLowlight(common);
 
@@ -99,9 +100,17 @@ function renderInline(nodes: PMNode[] | undefined): string {
     else if (n.type === 'inlineMath') out += renderMath(str(n.attrs?.latex), false);
     else if (n.type === 'mention')
       out += `<span class="mention">${esc(str(n.attrs?.label) || str(n.attrs?.id))}</span>`;
+    else if (n.type === 'emoji') out += renderEmoji(str(n.attrs?.name));
     else if (n.content) out += renderInline(n.content); // defensive
   }
   return out;
+}
+
+/** Resolve a stored emoji shortcode to its glyph; fall back to `:name:`. */
+function renderEmoji(name: string): string {
+  if (!name) return '';
+  const glyph = shortcodeToEmoji(name, gitHubEmojis)?.emoji;
+  return `<span data-type="emoji">${esc(glyph || `:${name}:`)}</span>`;
 }
 
 function renderMath(latex: string, block: boolean): string {

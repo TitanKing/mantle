@@ -3399,6 +3399,25 @@
   background-color: color-mix(in oklab, var(--destructive) 8%, transparent);
 }
 
+/* Inline emoji nodes (`:` picker). The glyph sits in the text run; the rare
+   fallback image (custom/unsupported emoji) is sized to the line. */
+.ProseMirror [data-type='emoji'] {
+  display: inline-block;
+  line-height: 1;
+}
+.ProseMirror [data-type='emoji'] img {
+  display: inline-block;
+  height: 1.2em;
+  width: 1.2em;
+  vertical-align: text-bottom;
+  margin: 0;
+}
+.ProseMirror [data-type='emoji'].ProseMirror-selectednode {
+  outline: 2px solid var(--primary);
+  outline-offset: 1px;
+  border-radius: 0.2rem;
+}
+
 /* Embedded file chip on the raw/public render. */
 .ProseMirror a.file-embed {
   display: inline-flex;

@@ -15,6 +15,7 @@ import type { Extensions } from '@tiptap/react';
 import { Callout } from './callout';
 import { Column, ColumnList } from './column';
 import { PageMention } from './mention';
+import { PageEmoji } from './emoji';
 import { PageImage } from './image';
 import { FileEmbed } from './file-embed';
 
@@ -59,6 +60,7 @@ export const pageExtensions: Extensions = [
   TaskList,
   TaskItem.configure({ nested: true }),
   PageMention,
+  PageEmoji,
   Callout,
   ColumnList,
   Column,
