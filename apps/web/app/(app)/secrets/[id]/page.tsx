@@ -13,7 +13,7 @@ export default async function SecretDetailPage({
   const row = await getSecretMetadata(user.id, id);
   if (!row) notFound();
   return (
-    <div className="mx-auto max-w-3xl px-6 py-8">
+    <div className="mx-auto max-w-3xl py-2">
       <SecretDetailClient initial={row} />
     </div>
   );
