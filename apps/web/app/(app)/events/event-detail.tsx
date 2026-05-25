@@ -22,6 +22,7 @@ import {
   AlertDialogTitle,
 } from '@/components/ui/alert-dialog';
 import { useToast } from '@/components/ui/toast';
+import { ShareControl } from '@/components/share/share-control';
 import { formatDateTime } from '@/lib/format-datetime';
 import { useNow } from '@/components/use-now';
 import {
@@ -234,7 +235,8 @@ export function EventDetail({
         <div className="min-w-0 flex-1 space-y-2">
           <div className="flex items-start justify-between gap-3">
             <h2 className="min-w-0 text-xl font-semibold">{meta.title}</h2>
-            <div className="flex shrink-0 gap-2">
+            <div className="flex shrink-0 items-center gap-2">
+              <ShareControl nodeId={meta.id} iconOnly />
               <Button variant="outline" size="sm" onClick={() => setEditing(true)}>
                 <Pencil /> Edit
               </Button>

@@ -1,56 +1,25 @@
 'use client';
 
-import { useMemo, useState, useTransition } from 'react';
+import { useEffect, useMemo, useState, useTransition } from 'react';
 import { useRouter } from 'next/navigation';
-import { Check, ChevronDown, ChevronRight, Plus, Search, Trash2 } from 'lucide-react';
+import { Check, ListTodo, Plus, Search } from 'lucide-react';
 import { Button } from '@/components/ui/button';
-import { ShareControl } from '@/components/share/share-control';
-import {
-  Dialog,
-  DialogContent,
-  DialogDescription,
-  DialogHeader,
-  DialogTitle,
-} from '@/components/ui/dialog';
 import { Input } from '@/components/ui/input';
-import { Label } from '@/components/ui/label';
 import { useToast } from '@/components/ui/toast';
+import { cn } from '@/lib/utils';
+import { TodoForm, emptyTodoForm, PRIORITIES, type Priority, type TodoPayload } from './todo-form';
+import { TodoDetail, type Status, type TodoRow } from './todo-detail';
 
 const STATUSES = ['open', 'done'] as const;
-const PRIORITIES = ['low', 'normal', 'high'] as const;
-type Status = (typeof STATUSES)[number];
-type Priority = (typeof PRIORITIES)[number];
+type Selection = { mode: 'create' } | { mode: 'view'; id: string } | null;
 
-type TodoRow = {
-  id: string;
-  title: string;
-  body: string;
-  status: Status;
-  priority: Priority;
-  dueAt: string | null;
-  tags: string[];
-  summary: string | null;
-  createdAt: string;
-  updatedAt: string;
-};
-
-const PRIORITY_COLOR: Record<Priority, string> = {
-  low: 'text-muted-foreground',
-  normal: 'text-foreground',
-  high: 'text-rose-600 dark:text-rose-400',
-};
-
-function formatDue(iso: string | null): string {
-  if (!iso) return '';
-  const d = new Date(iso);
-  const now = Date.now();
-  const diff = d.getTime() - now;
+function dueLabel(iso: string): string {
+  const diff = new Date(iso).getTime() - Date.now();
   const days = Math.round(diff / 86_400_000);
-  // Pinned 'en-GB' locale so SSR + client render the same string.
-  if (Math.abs(days) < 1) return d.toLocaleString('en-GB', { hour12: false });
-  if (days < 0) return `${Math.abs(days)}d overdue`;
+  if (Math.abs(days) < 1) return new Date(iso).toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit', hour12: false });
+  if (days < 0) return `${Math.abs(days)}d ago`;
   if (days < 7) return `in ${days}d`;
-  return d.toLocaleDateString('en-GB');
+  return new Date(iso).toLocaleDateString('en-GB', { day: 'numeric', month: 'short' });
 }
 
 export function TodosClient({ initialTodos }: { initialTodos: TodoRow[] }) {
@@ -60,46 +29,45 @@ export function TodosClient({ initialTodos }: { initialTodos: TodoRow[] }) {
   const [query, setQuery] = useState('');
   const [statusFilter, setStatusFilter] = useState<Status | 'all'>('open');
   const [priorityFilter, setPriorityFilter] = useState<Priority | 'all'>('all');
-  const [expanded, setExpanded] = useState<Set<string>>(new Set());
-  const [open, setOpen] = useState(false);
-  const [form, setForm] = useState({
-    title: '',
-    body: '',
-    priority: 'normal' as Priority,
-    dueAt: '',
-    tags: '',
-  });
-  const [error, setError] = useState<string | null>(null);
-  const [isPending, startTransition] = useTransition();
+  const [pending, startTransition] = useTransition();
+  const [sel, setSel] = useState<Selection>(() =>
+    initialTodos[0] ? { mode: 'view', id: initialTodos[0].id } : { mode: 'create' },
+  );
+
+  useEffect(() => setTodos(initialTodos), [initialTodos]);
 
   const filtered = useMemo(() => {
     const q = query.trim().toLowerCase();
     return todos.filter((t) => {
       if (statusFilter !== 'all' && t.status !== statusFilter) return false;
       if (priorityFilter !== 'all' && t.priority !== priorityFilter) return false;
-      if (q && !`${t.title} ${t.body} ${t.tags.join(' ')}`.toLowerCase().includes(q))
+      if (q && !`${t.title} ${t.body} ${t.summary ?? ''} ${t.tags.join(' ')}`.toLowerCase().includes(q))
         return false;
       return true;
     });
   }, [todos, query, statusFilter, priorityFilter]);
 
-  const toggleExpand = (id: string) => {
-    setExpanded((prev) => {
-      const next = new Set(prev);
-      if (next.has(id)) next.delete(id);
-      else next.add(id);
-      return next;
+  const selected = sel?.mode === 'view' ? (todos.find((t) => t.id === sel.id) ?? null) : null;
+
+  const createTodo = async (payload: TodoPayload) => {
+    const res = await fetch('/api/todos', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
     });
+    if (!res.ok) {
+      const j = await res.json().catch(() => ({}));
+      toast.error(j.error ?? `Could not save todo (${res.status})`);
+      return;
+    }
+    const { todo } = (await res.json()) as { todo: TodoRow };
+    setTodos((prev) => [todo, ...prev]);
+    setSel({ mode: 'view', id: todo.id });
+    toast.success(`Added “${todo.title}”`);
+    startTransition(() => router.refresh());
   };
 
-  const patch = async (id: string, body: Partial<TodoRow>) => {
-    const payload: Record<string, unknown> = {};
-    if (body.title !== undefined) payload.title = body.title;
-    if (body.body !== undefined) payload.body = body.body;
-    if (body.status !== undefined) payload.status = body.status;
-    if (body.priority !== undefined) payload.priority = body.priority;
-    if (body.dueAt !== undefined) payload.dueAt = body.dueAt;
-    if (body.tags !== undefined) payload.tags = body.tags;
+  const saveTodo = async (id: string, payload: TodoPayload): Promise<boolean> => {
     const res = await fetch(`/api/todos/${id}`, {
       method: 'PATCH',
       headers: { 'Content-Type': 'application/json' },
@@ -108,319 +76,207 @@ export function TodosClient({ initialTodos }: { initialTodos: TodoRow[] }) {
     if (!res.ok) {
       const j = await res.json().catch(() => ({}));
       toast.error(j.error ?? `Could not update todo (${res.status})`);
-      return;
+      return false;
     }
-    const { todo } = await res.json();
+    const { todo } = (await res.json()) as { todo: TodoRow };
     setTodos((prev) => prev.map((t) => (t.id === id ? todo : t)));
     startTransition(() => router.refresh());
+    return true;
   };
 
-  const handleSubmit = async (e: React.FormEvent) => {
-    e.preventDefault();
-    setError(null);
-    if (!form.title.trim()) {
-      setError('Title is required');
-      return;
-    }
-    const dueAt = form.dueAt ? new Date(form.dueAt).toISOString() : null;
-    const res = await fetch('/api/todos', {
-      method: 'POST',
+  const toggleStatus = async (t: TodoRow) => {
+    const next: Status = t.status === 'open' ? 'done' : 'open';
+    setTodos((prev) => prev.map((x) => (x.id === t.id ? { ...x, status: next } : x))); // optimistic
+    const res = await fetch(`/api/todos/${t.id}`, {
+      method: 'PATCH',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        title: form.title.trim(),
-        body: form.body,
-        priority: form.priority,
-        dueAt,
-        tags: form.tags
-          .split(',')
-          .map((t) => t.trim().toLowerCase())
-          .filter(Boolean),
-      }),
+      body: JSON.stringify({ status: next }),
     });
     if (!res.ok) {
+      setTodos((prev) => prev.map((x) => (x.id === t.id ? { ...x, status: t.status } : x))); // revert
       const j = await res.json().catch(() => ({}));
-      setError(j.error ?? `request failed (${res.status})`);
+      toast.error(j.error ?? `Could not update todo (${res.status})`);
       return;
     }
-    const { todo } = await res.json();
-    setTodos((prev) => [todo, ...prev]);
-    setForm({ title: '', body: '', priority: 'normal', dueAt: '', tags: '' });
-    setOpen(false);
+    const { todo } = (await res.json()) as { todo: TodoRow };
+    setTodos((prev) => prev.map((x) => (x.id === t.id ? todo : x)));
     startTransition(() => router.refresh());
   };
 
-  const handleDelete = async (id: string) => {
-    if (!confirm('Delete this todo?')) return;
+  const removeTodo = async (id: string) => {
     const res = await fetch(`/api/todos/${id}`, { method: 'DELETE' });
     if (!res.ok) {
       const j = await res.json().catch(() => ({}));
       toast.error(j.error ?? `Could not delete todo (${res.status})`);
       return;
     }
-    setTodos((prev) => prev.filter((t) => t.id !== id));
+    toast.success('Todo deleted');
+    setTodos((prev) => {
+      const nextList = prev.filter((t) => t.id !== id);
+      setSel(nextList[0] ? { mode: 'view', id: nextList[0].id } : { mode: 'create' });
+      return nextList;
+    });
     startTransition(() => router.refresh());
   };
 
   return (
-    <div className="space-y-4">
-      <div className="flex flex-wrap items-center gap-2">
-        <div className="relative flex-1 min-w-[200px]">
-          <Search className="pointer-events-none absolute left-2 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" />
-          <Input
-            value={query}
-            onChange={(e) => setQuery(e.target.value)}
-            placeholder="Search todos…"
-            className="pl-8"
-          />
+    <div className="md:grid md:h-full md:grid-cols-[340px_1fr] md:overflow-hidden">
+      {/* ── Left: todo list ──────────────────────────────────────── */}
+      <div className="flex flex-col border-b border-border md:h-full md:min-h-0 md:border-b-0 md:border-r">
+        <div className="flex items-center justify-between gap-2 border-b border-border p-3">
+          <h2 className="text-sm font-semibold uppercase tracking-wider text-muted-foreground">Todos</h2>
+          <Button type="button" size="sm" onClick={() => setSel({ mode: 'create' })}>
+            <Plus /> New
+          </Button>
         </div>
-        <select
-          value={statusFilter}
-          onChange={(e) => setStatusFilter(e.target.value as Status | 'all')}
-          className="h-9 rounded-md border border-input bg-background px-3 text-sm"
-        >
-          <option value="all">All status</option>
-          {STATUSES.map((s) => (
-            <option key={s} value={s}>
-              {s}
-            </option>
-          ))}
-        </select>
-        <select
-          value={priorityFilter}
-          onChange={(e) => setPriorityFilter(e.target.value as Priority | 'all')}
-          className="h-9 rounded-md border border-input bg-background px-3 text-sm"
-        >
-          <option value="all">All priorities</option>
-          {PRIORITIES.map((p) => (
-            <option key={p} value={p}>
-              {p}
-            </option>
-          ))}
-        </select>
-        <Button onClick={() => setOpen(true)}>
-          <Plus /> New todo
-        </Button>
-      </div>
-
-      {filtered.length === 0 ? (
-        <div className="rounded-md border border-dashed border-border bg-muted/30 px-6 py-12 text-center text-sm text-muted-foreground">
-          {todos.length === 0
-            ? 'No todos yet. Click “New todo” or ask your assistant to add one.'
-            : 'No todos match your filters.'}
+        <div className="space-y-2 border-b border-border p-3">
+          <div className="relative">
+            <Search className="pointer-events-none absolute left-2 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" />
+            <Input
+              value={query}
+              onChange={(e) => setQuery(e.target.value)}
+              placeholder="Search todos…"
+              className="h-9 pl-8"
+            />
+          </div>
+          <div className="flex gap-2">
+            <select
+              value={statusFilter}
+              onChange={(e) => setStatusFilter(e.target.value as Status | 'all')}
+              className="h-9 flex-1 rounded-md border border-input bg-background px-2 text-sm"
+              aria-label="Filter by status"
+            >
+              <option value="all">All status</option>
+              {STATUSES.map((s) => (
+                <option key={s} value={s}>
+                  {s}
+                </option>
+              ))}
+            </select>
+            <select
+              value={priorityFilter}
+              onChange={(e) => setPriorityFilter(e.target.value as Priority | 'all')}
+              className="h-9 flex-1 rounded-md border border-input bg-background px-2 text-sm"
+              aria-label="Filter by priority"
+            >
+              <option value="all">All priorities</option>
+              {PRIORITIES.map((p) => (
+                <option key={p} value={p}>
+                  {p}
+                </option>
+              ))}
+            </select>
+          </div>
         </div>
-      ) : (
-        <ul className="divide-y divide-border rounded-md border border-border">
-          {filtered.map((t) => {
-            const isOpen = expanded.has(t.id);
-            const overdue = t.dueAt && new Date(t.dueAt) < new Date() && t.status === 'open';
-            return (
-              <li key={t.id} className="group">
-                <div className="flex items-start gap-3 px-3 py-2.5">
+        <div className="space-y-2 p-3 md:flex-1 md:overflow-y-auto md:scrollbar-thin">
+          {filtered.length === 0 ? (
+            <p className="rounded-md border border-dashed border-border bg-muted/30 px-4 py-8 text-center text-sm text-muted-foreground">
+              {todos.length === 0 ? (
+                <>
+                  No todos yet. Click <strong>New</strong> to add one.
+                </>
+              ) : (
+                'No todos match your filters.'
+              )}
+            </p>
+          ) : (
+            filtered.map((t) => {
+              const isSel = sel?.mode === 'view' && sel.id === t.id;
+              const done = t.status === 'done';
+              const overdue = !!t.dueAt && new Date(t.dueAt) < new Date() && !done;
+              return (
+                <div
+                  key={t.id}
+                  className={cn(
+                    'flex items-start gap-2.5 rounded-lg border border-l-[3px] border-border border-l-border bg-card p-2.5 transition-colors',
+                    isSel ? 'border-l-primary bg-accent/50' : 'hover:bg-accent/40',
+                    t.priority === 'high' && !isSel && 'border-l-destructive',
+                  )}
+                >
                   <button
-                    onClick={() => patch(t.id, { status: t.status === 'open' ? 'done' : 'open' })}
-                    className={`mt-0.5 flex size-5 shrink-0 items-center justify-center rounded-md border ${
-                      t.status === 'done'
-                        ? 'border-emerald-600 bg-emerald-600 text-white'
-                        : 'border-input hover:bg-muted'
-                    }`}
-                    aria-label={t.status === 'done' ? 'Mark open' : 'Mark done'}
+                    type="button"
+                    onClick={() => toggleStatus(t)}
+                    className={cn(
+                      'mt-0.5 flex size-5 shrink-0 items-center justify-center rounded-md border transition-colors',
+                      done ? 'border-primary bg-primary text-primary-foreground' : 'border-input hover:bg-muted',
+                    )}
+                    aria-label={done ? 'Mark open' : 'Mark done'}
+                    aria-pressed={done}
                   >
-                    {t.status === 'done' && <Check className="size-3" />}
+                    {done && <Check className="size-3" />}
                   </button>
                   <button
-                    onClick={() => toggleExpand(t.id)}
-                    className="flex-1 min-w-0 text-left"
+                    type="button"
+                    onClick={() => setSel({ mode: 'view', id: t.id })}
+                    className="min-w-0 flex-1 text-left"
                   >
                     <div className="flex items-baseline gap-2">
-                      <span
-                        className={`truncate font-medium ${
-                          t.status === 'done' ? 'text-muted-foreground line-through' : ''
-                        } ${PRIORITY_COLOR[t.priority]}`}
-                      >
+                      <span className={cn('truncate text-sm font-medium', done && 'text-muted-foreground line-through')}>
                         {t.title}
                       </span>
-                      {t.priority === 'high' && (
-                        <span className="shrink-0 rounded-sm bg-rose-500/20 px-1.5 py-0.5 text-[10px] uppercase tracking-wider text-rose-600 dark:text-rose-400">
-                          high
-                        </span>
-                      )}
                       {t.dueAt && (
                         <span
-                          className={`shrink-0 text-xs ${
-                            overdue ? 'text-rose-600 dark:text-rose-400' : 'text-muted-foreground'
-                          }`}
+                          className={cn(
+                            'ml-auto shrink-0 text-xs tabular-nums',
+                            overdue ? 'font-medium text-destructive' : 'text-muted-foreground',
+                          )}
                         >
-                          {formatDue(t.dueAt)}
+                          {dueLabel(t.dueAt)}
                         </span>
                       )}
                     </div>
                     {(t.body || t.summary) && (
-                      <p className="line-clamp-1 text-xs text-muted-foreground">
-                        {t.body || t.summary}
-                      </p>
+                      <p className="mt-0.5 line-clamp-1 text-xs text-muted-foreground">{t.body || t.summary}</p>
                     )}
                     {t.tags.length > 0 && (
-                      <div className="mt-0.5 flex flex-wrap gap-1">
+                      <div className="mt-1 flex flex-wrap gap-1">
                         {t.tags.map((tag) => (
-                          <span
-                            key={tag}
-                            className="rounded-full bg-muted px-1.5 py-0.5 text-[10px] text-muted-foreground"
-                          >
+                          <span key={tag} className="rounded-full bg-muted px-1.5 py-0.5 text-[10px] text-muted-foreground">
                             {tag}
                           </span>
                         ))}
                       </div>
                     )}
                   </button>
-                  <div className="flex items-center gap-1">
-                    <button
-                      onClick={() => toggleExpand(t.id)}
-                      className="text-muted-foreground hover:text-foreground"
-                      aria-label={isOpen ? 'Collapse todo' : 'Expand todo'}
-                      aria-expanded={isOpen}
-                    >
-                      {isOpen ? (
-                        <ChevronDown className="size-4" />
-                      ) : (
-                        <ChevronRight className="size-4" />
-                      )}
-                    </button>
-                    <div className="opacity-0 transition-opacity group-focus-within:opacity-100 group-hover:opacity-100">
-                      <ShareControl nodeId={t.id} iconOnly />
-                    </div>
-                    <Button
-                      variant="ghost"
-                      size="sm"
-                      onClick={() => handleDelete(t.id)}
-                      className="opacity-0 transition-opacity group-hover:opacity-100"
-                      aria-label={`Delete ${t.title}`}
-                    >
-                      <Trash2 />
-                    </Button>
-                  </div>
                 </div>
-                {isOpen && (
-                  <div className="space-y-2 border-t border-border bg-muted/20 px-3 py-3 text-sm">
-                    {t.body && (
-                      <pre className="whitespace-pre-wrap font-sans text-sm">
-                        {t.body}
-                      </pre>
-                    )}
-                    <div className="flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
-                      <span>Priority:</span>
-                      <select
-                        value={t.priority}
-                        onChange={(e) => patch(t.id, { priority: e.target.value as Priority })}
-                        className="h-7 rounded-md border border-input bg-background px-2 text-xs"
-                      >
-                        {PRIORITIES.map((p) => (
-                          <option key={p} value={p}>
-                            {p}
-                          </option>
-                        ))}
-                      </select>
-                      <span>· Due:</span>
-                      <input
-                        type="datetime-local"
-                        value={t.dueAt ? t.dueAt.slice(0, 16) : ''}
-                        onChange={(e) =>
-                          patch(t.id, {
-                            dueAt: e.target.value
-                              ? new Date(e.target.value).toISOString()
-                              : null,
-                          })
-                        }
-                        className="h-7 rounded-md border border-input bg-background px-2 text-xs"
-                      />
-                    </div>
-                    {t.summary && (
-                      <p className="text-xs italic text-muted-foreground">
-                        Indexed: {t.summary}
-                      </p>
-                    )}
-                  </div>
-                )}
-              </li>
-            );
-          })}
-        </ul>
-      )}
+              );
+            })
+          )}
+        </div>
+      </div>
 
-      <Dialog open={open} onOpenChange={setOpen}>
-        <DialogContent className="sm:max-w-xl">
-          <DialogHeader>
-            <DialogTitle>New todo</DialogTitle>
-            <DialogDescription>
-              Title is required. Body, due date, priority, and tags are optional.
-            </DialogDescription>
-          </DialogHeader>
-          <form onSubmit={handleSubmit} className="space-y-3">
-            <div className="space-y-1">
-              <Label htmlFor="title">Title</Label>
-              <Input
-                id="title"
-                value={form.title}
-                onChange={(e) => setForm({ ...form, title: e.target.value })}
-                autoFocus
-                required
-              />
+      {/* ── Right: create | detail | empty ───────────────────────── */}
+      <div className="md:h-full md:min-h-0 md:overflow-y-auto md:scrollbar-thin">
+        {sel?.mode === 'create' ? (
+          <div className="space-y-4 p-6">
+            <div className="flex items-center gap-2">
+              <ListTodo className="size-5 text-primary" aria-hidden />
+              <h2 className="text-lg font-semibold">New todo</h2>
             </div>
-            <div className="grid grid-cols-2 gap-3">
-              <div className="space-y-1">
-                <Label htmlFor="priority">Priority</Label>
-                <select
-                  id="priority"
-                  value={form.priority}
-                  onChange={(e) => setForm({ ...form, priority: e.target.value as Priority })}
-                  className="h-9 w-full rounded-md border border-input bg-background px-3 text-sm"
-                >
-                  {PRIORITIES.map((p) => (
-                    <option key={p} value={p}>
-                      {p}
-                    </option>
-                  ))}
-                </select>
-              </div>
-              <div className="space-y-1">
-                <Label htmlFor="dueAt">Due</Label>
-                <Input
-                  id="dueAt"
-                  type="datetime-local"
-                  value={form.dueAt}
-                  onChange={(e) => setForm({ ...form, dueAt: e.target.value })}
-                />
-              </div>
-            </div>
-            <div className="space-y-1">
-              <Label htmlFor="body">Body</Label>
-              <textarea
-                id="body"
-                value={form.body}
-                onChange={(e) => setForm({ ...form, body: e.target.value })}
-                rows={5}
-                className="w-full rounded-md border border-input bg-background px-3 py-2 text-sm"
-              />
-            </div>
-            <div className="space-y-1">
-              <Label htmlFor="tags">Tags (comma-separated)</Label>
-              <Input
-                id="tags"
-                value={form.tags}
-                onChange={(e) => setForm({ ...form, tags: e.target.value })}
-              />
-            </div>
-            {error && <p className="text-sm text-destructive">{error}</p>}
-            <div className="flex justify-end gap-2">
-              <Button type="button" variant="outline" onClick={() => setOpen(false)}>
-                Cancel
-              </Button>
-              <Button type="submit" disabled={isPending}>
-                {isPending ? 'Saving…' : 'Save todo'}
-              </Button>
-            </div>
-          </form>
-        </DialogContent>
-      </Dialog>
+            <TodoForm
+              initial={emptyTodoForm()}
+              submitLabel="Save todo"
+              submitting={pending}
+              onSubmit={createTodo}
+              onCancel={() =>
+                setSel(todos[0] ? { mode: 'view', id: todos[0].id } : { mode: 'create' })
+              }
+            />
+          </div>
+        ) : selected ? (
+          <TodoDetail
+            key={selected.id}
+            todo={selected}
+            onToggleStatus={() => toggleStatus(selected)}
+            onSave={(payload) => saveTodo(selected.id, payload)}
+            onDelete={() => removeTodo(selected.id)}
+          />
+        ) : (
+          <div className="flex h-full items-center justify-center p-10 text-center text-sm text-muted-foreground">
+            Select a todo, or add a new one.
+          </div>
+        )}
+      </div>
     </div>
   );
 }

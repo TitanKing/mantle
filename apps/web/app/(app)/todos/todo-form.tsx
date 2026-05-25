@@ -1,0 +1,158 @@
+'use client';
+
+import { useState } from 'react';
+import { Button } from '@/components/ui/button';
+import { Input } from '@/components/ui/input';
+import { Label } from '@/components/ui/label';
+import { TagInput } from '@/components/tag-input';
+import { DateTimePicker } from '@/components/ui/date-time-picker';
+
+export const PRIORITIES = ['low', 'normal', 'high'] as const;
+export type Priority = (typeof PRIORITIES)[number];
+
+export type TodoFormValues = {
+  title: string;
+  body: string;
+  priority: Priority;
+  due: Date | null;
+  tags: string[];
+};
+
+export type TodoPayload = {
+  title: string;
+  body: string;
+  priority: Priority;
+  dueAt: string | null;
+  tags: string[];
+};
+
+export const emptyTodoForm = (): TodoFormValues => ({
+  title: '',
+  body: '',
+  priority: 'normal',
+  due: null,
+  tags: [],
+});
+
+export function todoToForm(t: {
+  title: string;
+  body: string;
+  priority: Priority;
+  dueAt: string | null;
+  tags: string[];
+}): TodoFormValues {
+  return {
+    title: t.title,
+    body: t.body,
+    priority: t.priority,
+    due: t.dueAt ? new Date(t.dueAt) : null,
+    tags: t.tags,
+  };
+}
+
+/**
+ * Shared todo editor body — used by the master-detail "create" pane and the
+ * TodoDetail "edit" mode. Owns its field state; the parent POSTs/PATCHes the
+ * normalized payload in `onSubmit` and switches view on success.
+ */
+export function TodoForm({
+  initial,
+  submitLabel,
+  submitting,
+  onSubmit,
+  onCancel,
+}: {
+  initial: TodoFormValues;
+  submitLabel: string;
+  submitting?: boolean;
+  onSubmit: (payload: TodoPayload) => void | Promise<void>;
+  onCancel: () => void;
+}) {
+  const [form, setForm] = useState<TodoFormValues>(initial);
+  const [error, setError] = useState<string | null>(null);
+
+  const submit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setError(null);
+    if (!form.title.trim()) return setError('Title is required');
+    await onSubmit({
+      title: form.title.trim(),
+      body: form.body,
+      priority: form.priority,
+      dueAt: form.due ? form.due.toISOString() : null,
+      tags: form.tags.map((t) => t.trim().toLowerCase()).filter(Boolean),
+    });
+  };
+
+  return (
+    <form onSubmit={submit} className="space-y-4">
+      <div className="space-y-1.5">
+        <Label htmlFor="todo-title">Title</Label>
+        <Input
+          id="todo-title"
+          value={form.title}
+          onChange={(e) => setForm({ ...form, title: e.target.value })}
+          placeholder="What needs doing?"
+          autoFocus
+          required
+        />
+      </div>
+
+      <div className="grid gap-3 sm:grid-cols-2">
+        <div className="space-y-1.5">
+          <Label htmlFor="todo-priority">Priority</Label>
+          <select
+            id="todo-priority"
+            value={form.priority}
+            onChange={(e) => setForm({ ...form, priority: e.target.value as Priority })}
+            className="flex h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm"
+          >
+            {PRIORITIES.map((p) => (
+              <option key={p} value={p}>
+                {p}
+              </option>
+            ))}
+          </select>
+        </div>
+        <div className="space-y-1.5">
+          <Label htmlFor="todo-due">Due (optional)</Label>
+          <DateTimePicker
+            id="todo-due"
+            value={form.due}
+            onChange={(due) => setForm({ ...form, due })}
+            placeholder="No due date"
+            clearable
+          />
+        </div>
+      </div>
+
+      <div className="space-y-1.5">
+        <Label>Tags</Label>
+        <TagInput value={form.tags} onChange={(tags) => setForm({ ...form, tags })} placeholder="Add tags…" />
+      </div>
+
+      <div className="space-y-1.5">
+        <Label htmlFor="todo-body">Notes</Label>
+        <textarea
+          id="todo-body"
+          value={form.body}
+          onChange={(e) => setForm({ ...form, body: e.target.value })}
+          rows={5}
+          placeholder="Anything to remember about this task."
+          className="w-full rounded-md border border-input bg-background px-3 py-2 text-sm"
+        />
+      </div>
+
+      {error && <p className="text-sm text-destructive">{error}</p>}
+
+      <div className="flex justify-end gap-2 border-t border-border pt-3">
+        <Button type="button" variant="outline" onClick={onCancel}>
+          Cancel
+        </Button>
+        <Button type="submit" disabled={submitting}>
+          {submitting ? 'Saving…' : submitLabel}
+        </Button>
+      </div>
+    </form>
+  );
+}
