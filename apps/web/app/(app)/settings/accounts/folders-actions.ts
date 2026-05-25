@@ -1,6 +1,7 @@
 'use server';
 
 import { revalidatePath } from 'next/cache';
+import { redirect } from 'next/navigation';
 import { and, eq } from 'drizzle-orm';
 import PgBoss from 'pg-boss';
 import { db, emailAccounts } from '@mantle/db';
@@ -113,6 +114,13 @@ export async function setIncludedFolders(formData: FormData): Promise<void> {
   }
 
   revalidatePath('/settings/accounts');
-  revalidatePath(`/settings/accounts/${accountId}/folders`);
   revalidatePath('/inbox');
+  // Land on the plain accounts list — NOT the folders view. The folders pane
+  // (here and on /settings/accounts?mode=folders) does a live IMAP probe on
+  // every render; re-rendering it post-save re-probes, and that probe is
+  // slow/flaky (and contends with the rescan we just enqueued), so the form
+  // appears to "blank" even though the save above already committed. Redirect
+  // to a probe-free view sidesteps the re-probe entirely. (redirect() throws
+  // NEXT_REDIRECT, so it must sit outside the try/catch above.)
+  redirect('/settings/accounts');
 }
