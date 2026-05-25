@@ -94,7 +94,7 @@ type MemoryConfig = {
   /** Agent slugs this agent may delegate to via invoke_agent. */
   delegate_to?: string[];
   /** Tool-result spill thresholds (KB). Empty = env/global defaults. */
-  result_handling?: { inline_max_kb?: number; embed_min_kb?: number };
+  result_handling?: { inline_max_kb?: number; embed_min_kb?: number; spill_max_kb?: number };
 };
 
 type AgentSummary = {
@@ -289,6 +289,7 @@ type FormState = {
   /** Tool-result spill thresholds (KB, as strings). Empty = global default. */
   resultInlineMaxKb: string;
   resultEmbedMinKb: string;
+  resultSpillMaxKb: string;
   temperature: string;
   maxTokens: string;
   /** Avatar {style, seed}; null = initials fallback. */
@@ -323,6 +324,7 @@ function emptyForm(role: Role = 'responder'): FormState {
     delegateTo: [],
     resultInlineMaxKb: '',
     resultEmbedMinKb: '',
+    resultSpillMaxKb: '',
     temperature: '0.7',
     maxTokens: '',
     avatar: null,
@@ -360,6 +362,7 @@ function formFromAgent(a: AgentSummary): FormState {
     delegateTo: a.memoryConfig.delegate_to ?? [],
     resultInlineMaxKb: a.memoryConfig.result_handling?.inline_max_kb?.toString() ?? '',
     resultEmbedMinKb: a.memoryConfig.result_handling?.embed_min_kb?.toString() ?? '',
+    resultSpillMaxKb: a.memoryConfig.result_handling?.spill_max_kb?.toString() ?? '',
     temperature: a.params.temperature?.toString() ?? '0.7',
     maxTokens: a.params.max_tokens?.toString() ?? '',
     avatar: a.avatar ?? null,
@@ -559,11 +562,13 @@ export function AgentsClient({
     // Tool-result spill thresholds (KB). Only set keys the operator filled;
     // blank = fall back to the env/global default. Always send the object
     // (possibly empty) so clearing a field actually clears it under the merge.
-    const rh: { inline_max_kb?: number; embed_min_kb?: number } = {};
+    const rh: { inline_max_kb?: number; embed_min_kb?: number; spill_max_kb?: number } = {};
     const inlineKb = parseInt(form.resultInlineMaxKb, 10);
     if (!Number.isNaN(inlineKb) && inlineKb > 0) rh.inline_max_kb = inlineKb;
     const embedKb = parseInt(form.resultEmbedMinKb, 10);
     if (!Number.isNaN(embedKb) && embedKb > 0) rh.embed_min_kb = embedKb;
+    const spillKb = parseInt(form.resultSpillMaxKb, 10);
+    if (!Number.isNaN(spillKb) && spillKb > 0) rh.spill_max_kb = spillKb;
     memoryConfig.result_handling = rh;
 
     const params: { temperature?: number; max_tokens?: number } = {};
@@ -1206,7 +1211,25 @@ export function AgentsClient({
                     At/over this, the agent is steered to semantic <code>query</code>.
                   </p>
                 </div>
+                <div className="space-y-1.5">
+                  <Label htmlFor="result-spill">Hard ceiling (KB)</Label>
+                  <Input
+                    id="result-spill"
+                    type="number"
+                    min={1}
+                    value={form.resultSpillMaxKb}
+                    onChange={(e) => setForm((f) => ({ ...f, resultSpillMaxKb: e.target.value }))}
+                    placeholder="1024 (default)"
+                  />
+                  <p className="text-xs text-muted-foreground">
+                    Bigger results are head-truncated before storing (caps DB + embedding cost).
+                  </p>
+                </div>
               </div>
+              <p className="text-xs text-muted-foreground">
+                Max embedding chunks and retention (TTL) are system-wide — set via{' '}
+                <code>TOOL_RESULT_MAX_CHUNKS</code> / <code>TOOL_RESULT_TTL_DAYS</code> env vars.
+              </p>
             </fieldset>
 
             <fieldset className="space-y-3 rounded-md border border-border p-3">

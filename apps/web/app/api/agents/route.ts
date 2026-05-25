@@ -44,6 +44,7 @@ const MemoryConfig = z
       .object({
         inline_max_kb: z.number().int().min(1).max(1024).optional(),
         embed_min_kb: z.number().int().min(1).max(8192).optional(),
+        spill_max_kb: z.number().int().min(1).max(65536).optional(),
       })
       .strict()
       .optional(),

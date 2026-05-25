@@ -24,6 +24,7 @@ import {
   type TelegramAccount,
 } from '@mantle/db';
 import { sendMessage } from '@mantle/telegram';
+import { maybeSweep } from '@mantle/tools';
 import {
   listDueReminders,
   markReminderSent,
@@ -82,6 +83,10 @@ function formatReminder(e: EventRow): string {
 }
 
 async function tick(): Promise<void> {
+  // Piggyback the periodic tick to sweep expired tool-result spills. Shares an
+  // hourly throttle with the opportunistic spill-path sweep, so this runs even
+  // when nothing's spilling; fire-and-forget, never throws.
+  maybeSweep();
   const owners = await ownersWithEvents();
   for (const ownerId of owners) {
     const due = await listDueReminders(ownerId, 50);

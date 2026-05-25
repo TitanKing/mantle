@@ -989,14 +989,16 @@ Only the small envelope re-circulates in history, so the re-send amplification
 is gone and nothing is lost. Same principle as the brain (`content_store` ↔
 `content_index`) and recall (archive ↔ digest) — see the table in §9b' / §9l.
 
-**Tiers** (thresholds per-agent in `memory_config.result_handling`, KB; env
-defaults `TOOL_RESULT_INLINE_MAX` / `_EMBED_MIN` / `_PAGE_BYTES`):
+**Tiers** (per-agent thresholds in `memory_config.result_handling`, KB — set in
+the agents form; env defaults `TOOL_RESULT_INLINE_MAX` / `_EMBED_MIN` /
+`_SPILL_MAX`):
 
 | Result size | Behaviour |
 |---|---|
 | ≤ `inline_max` (default 32 KB) | inline, untouched — the common path, zero overhead |
 | > `inline_max` | spill to `tool_results`; model gets `{_spilled, handle:"tr_…", preview, pages, note}` |
 | ≥ `embed_min` (default 100 KB) | same, but the envelope steers the model to semantic `query` |
+| > `spill_max` (default 1 MB) | **head-truncated with a marker before storing** — a runaway tool can't write a giant row or fan out into unbounded chunks |
 
 **`read_result(handle, …)`** — three modes on any spilled handle:
 - `page` — linear slice (global `pageBytes`, so the envelope's page count and
@@ -1006,7 +1008,9 @@ defaults `TOOL_RESULT_INLINE_MAX` / `_EMBED_MIN` / `_PAGE_BYTES`):
   chunks + embeds the content into `tool_result_chunks` (reusing
   `@mantle/embeddings`); `page`/`grep` never pay that cost. Cosine is scoped to
   one `result_id` (a handful of chunks), so no ivfflat index is needed — unlike
-  the brain's global `content_chunks`.
+  the brain's global `content_chunks`. Chunk size **adapts** so the count never
+  exceeds `TOOL_RESULT_MAX_CHUNKS` (env, default 200) while still covering the
+  whole stored content — bounding embedding cost + latency regardless of size.
 
 **Why 32 KB inline, not 8 KB.** The old cap was set for a 200 K-context,
 no-cache world. Main agents now run on 1 M context with prompt caching, so
@@ -1022,9 +1026,18 @@ a `spill_result` trace step (`{handle, bytes}`); each `read_result` records
 tracing a node through the brain.
 
 **Lifecycle.** `tool_results` / `tool_result_chunks` are **ephemeral working
-state** — never `nodes` rows, never seen by the extractor or brain search. TTL
-cleanup via `cleanupToolResults()` (default 7 days; chunks cascade). Configured
-in the agents form under **"Tool results"**.
+state** — never `nodes` rows, never seen by the extractor or brain search.
+`cleanupToolResults()` (retention `TOOL_RESULT_TTL_DAYS`, default 7; chunks
+cascade) is swept by `maybeSweep()` — an hourly-throttled, never-throwing sweep
+called both from the periodic `events-reminders` tick (so it runs even when
+idle) and opportunistically from the spill path (so the store self-prunes while
+it's being written). So the TTL is real, not aspirational.
+
+**Bounded by construction.** Three ceilings keep the store from running away:
+`spill_max` head-truncates oversized output before storage, `TOOL_RESULT_MAX_CHUNKS`
+caps embed-tier fan-out (adaptive chunking), and the TTL sweep bounds retention.
+The per-agent knobs (`inline_max` / `embed_min` / `spill_max`) live in the agents
+form; `MAX_CHUNKS` and `TTL_DAYS` are global store policy (env).
 
 ## 10. The MCP server
 

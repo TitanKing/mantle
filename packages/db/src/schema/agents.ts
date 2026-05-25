@@ -91,6 +91,9 @@ export type AgentMemoryConfig = {
   result_handling?: {
     inline_max_kb?: number;
     embed_min_kb?: number;
+    /** Hard ceiling on stored result size; beyond it the output is
+     *  head-truncated before spilling. Falls back to env TOOL_RESULT_SPILL_MAX. */
+    spill_max_kb?: number;
   };
 };
 

@@ -35,15 +35,23 @@ export type ResultHandling = {
   embedMinBytes: number;
   /** Page size for the linear `page` mode. */
   pageBytes: number;
+  /** Hard ceiling on STORED result size. A result larger than this is
+   *  head-truncated (with a marker) before spilling, so one runaway tool
+   *  output can't write a giant row or fan out into thousands of chunks. */
+  spillMaxBytes: number;
 };
 
 /** Per-agent override shape (KB units, from `memory_config.result_handling`).
- *  Page size is intentionally NOT here — it's a global reading detail (env
- *  `TOOL_RESULT_PAGE_BYTES`) so the spill envelope's page count and
- *  `read_result`'s paging always agree. */
+ *  Page size, max-chunks, and TTL are intentionally NOT here — they're global
+ *  store policy (env), not per-agent behaviour; see the module constants
+ *  below. Page size is global so the spill envelope's page count and
+ *  `read_result`'s paging always agree; max-chunks is global because the
+ *  `read_result` query path carries no per-agent config; TTL is store-wide
+ *  retention. */
 export type ResultHandlingConfig = {
   inline_max_kb?: number;
   embed_min_kb?: number;
+  spill_max_kb?: number;
 };
 
 function envInt(name: string, def: number): number {
@@ -59,7 +67,19 @@ export const DEFAULT_RESULT_HANDLING: ResultHandling = {
   inlineMaxBytes: envInt('TOOL_RESULT_INLINE_MAX', 32 * 1024),
   embedMinBytes: envInt('TOOL_RESULT_EMBED_MIN', 100 * 1024),
   pageBytes: envInt('TOOL_RESULT_PAGE_BYTES', 16 * 1024),
+  spillMaxBytes: envInt('TOOL_RESULT_SPILL_MAX', 1024 * 1024), // 1 MB
 };
+
+/** Max chunks embedded for the semantic tier (global). Chunk size adapts so
+ *  this many chunks cover the whole stored content — so embedding cost +
+ *  latency stay bounded no matter how big the (capped) result is. */
+export const TOOL_RESULT_MAX_CHUNKS = envInt('TOOL_RESULT_MAX_CHUNKS', 200);
+
+/** Retention before a spilled result is swept (global store policy). */
+export const TOOL_RESULT_TTL_MS = envInt('TOOL_RESULT_TTL_DAYS', 7) * 24 * 60 * 60 * 1000;
+
+/** Base chunk size (chars) for the semantic tier before adaptive widening. */
+const BASE_CHUNK_CHARS = 1500;
 
 /** Merge a per-agent (KB) override over the global defaults → resolved bytes. */
 export function resolveResultHandling(override?: ResultHandlingConfig | null): ResultHandling {
@@ -70,6 +90,7 @@ export function resolveResultHandling(override?: ResultHandlingConfig | null): R
     embedMinBytes: kb(override?.embed_min_kb) ?? DEFAULT_RESULT_HANDLING.embedMinBytes,
     // Global only — keeps the envelope's page count and read_result in sync.
     pageBytes: DEFAULT_RESULT_HANDLING.pageBytes,
+    spillMaxBytes: kb(override?.spill_max_kb) ?? DEFAULT_RESULT_HANDLING.spillMaxBytes,
   };
 }
 
@@ -116,6 +137,14 @@ function byteLen(s: string): number {
   return Buffer.byteLength(s, 'utf8');
 }
 
+/** Head-truncate a string to at most `maxBytes` UTF-8 bytes. A split trailing
+ *  codepoint is replaced by U+FFFD (Node's toString behaviour) — harmless. */
+function clampToBytes(s: string, maxBytes: number): string {
+  const buf = Buffer.from(s, 'utf8');
+  if (buf.length <= maxBytes) return s;
+  return buf.subarray(0, maxBytes).toString('utf8');
+}
+
 // ─── Spill + envelope ────────────────────────────────────────────────────────
 
 /** Persist a full result and return its handle. */
@@ -142,11 +171,16 @@ export async function spillToolResult(args: {
 export function buildResultEnvelope(args: {
   handle: string;
   toolSlug: string;
+  /** The STORED content (already head-truncated if it exceeded spillMaxBytes). */
   content: string;
+  /** Byte length of the stored content. */
   bytes: number;
+  /** Original byte length before any ceiling truncation (== bytes if none). */
+  originalBytes: number;
   handling: ResultHandling;
 }): Record<string, unknown> {
-  const { handle, bytes, content, handling } = args;
+  const { handle, bytes, originalBytes, content, handling } = args;
+  const truncated = originalBytes > bytes;
   const pages = Math.max(1, Math.ceil(content.length / Math.max(1, handling.pageBytes)));
   const previewChars = Math.min(content.length, Math.floor(handling.inlineMaxBytes / 2));
   const preview = content.slice(0, previewChars);
@@ -154,16 +188,20 @@ export function buildResultEnvelope(args: {
     bytes >= handling.embedMinBytes
       ? `This is large. Prefer read_result({handle:"${handle}", query:"<what you need>"}) for a semantic lookup; or grep/page.`
       : `Use read_result({handle:"${handle}", page:1}) to read on (${pages} pages), read_result({handle:"${handle}", grep:"<term>"}) to find a part, or read_result({handle:"${handle}", query:"<what you need>"}) for a semantic lookup.`;
+  const truncNote = truncated
+    ? ` NOTE: the original was ${originalBytes} bytes and was head-truncated to ${bytes} for storage — the tail is unavailable. If you need it, narrow the upstream tool call.`
+    : '';
   return {
     _spilled: true,
     handle,
     tool: args.toolSlug,
     bytes,
+    ...(truncated ? { original_bytes: originalBytes, truncated: true } : {}),
     pages,
     preview,
     note:
-      `The full result (${bytes} bytes) was stored so it wouldn't be truncated. ${recommend} ` +
-      `Do not answer from the preview alone if it's cut off mid-content.`,
+      `The full result (${bytes} bytes) was stored so it wouldn't be truncated in-context. ${recommend} ` +
+      `Do not answer from the preview alone if it's cut off mid-content.${truncNote}`,
   };
 }
 
@@ -179,24 +217,38 @@ export async function processToolResultForModel(args: {
   toolSlug: string;
   handling: ResultHandling;
 }): Promise<{ payload: string; spilled: boolean; handle: string | null; bytes: number }> {
-  const bytes = byteLen(args.serialized);
-  if (bytes <= args.handling.inlineMaxBytes) {
-    return { payload: args.serialized, spilled: false, handle: null, bytes };
+  const originalBytes = byteLen(args.serialized);
+  if (originalBytes <= args.handling.inlineMaxBytes) {
+    return { payload: args.serialized, spilled: false, handle: null, bytes: originalBytes };
   }
-  const { handle } = await spillToolResult({
+  // Enforce the hard storage ceiling: head-truncate (with a marker) before
+  // storing so a runaway tool output can't write a giant row or fan out into
+  // an unbounded number of embedding chunks.
+  let toStore = args.serialized;
+  if (originalBytes > args.handling.spillMaxBytes) {
+    toStore =
+      clampToBytes(args.serialized, args.handling.spillMaxBytes) +
+      `\n\n[… tool result head-truncated for storage: ${originalBytes} bytes original, ` +
+      `${args.handling.spillMaxBytes} stored. The tail is unavailable.]`;
+  }
+  const { handle, bytes } = await spillToolResult({
     ownerId: args.ownerId,
     traceId: args.traceId,
     toolSlug: args.toolSlug,
-    content: args.serialized,
+    content: toStore,
   });
   const envelope = buildResultEnvelope({
     handle,
     toolSlug: args.toolSlug,
-    content: args.serialized,
+    content: toStore,
     bytes,
+    originalBytes,
     handling: args.handling,
   });
-  return { payload: JSON.stringify(envelope), spilled: true, handle, bytes };
+  // Opportunistic, throttled cleanup so the store self-prunes even if the
+  // periodic sweep isn't running — never blocks or throws.
+  maybeSweep();
+  return { payload: JSON.stringify(envelope), spilled: true, handle, bytes: originalBytes };
 }
 
 // ─── read_result modes ───────────────────────────────────────────────────────
@@ -274,9 +326,17 @@ export async function grepResult(
   return { ok: true, count, matches };
 }
 
-/** Ensure the result's chunks exist + are embedded (lazy, idempotent). */
+/** Ensure the result's chunks exist + are embedded (lazy). */
 async function ensureResultChunked(ownerId: string, handle: string, content: string): Promise<void> {
-  const chunks = chunkText(content);
+  // Adapt chunk size so we never embed more than TOOL_RESULT_MAX_CHUNKS chunks
+  // while still covering the whole stored content (coarser chunks for bigger
+  // results) — bounds embedding cost + latency on the first query. The slice
+  // is a hard backstop against overlap-induced overflow.
+  const maxChars = Math.max(
+    BASE_CHUNK_CHARS,
+    Math.ceil(content.length / TOOL_RESULT_MAX_CHUNKS),
+  );
+  const chunks = chunkText(content, { maxChars }).slice(0, TOOL_RESULT_MAX_CHUNKS);
   if (chunks.length === 0) {
     await db.update(toolResults).set({ chunked: true }).where(eq(toolResults.id, handle));
     return;
@@ -326,13 +386,32 @@ export async function queryResult(
 
 // ─── TTL cleanup ─────────────────────────────────────────────────────────────
 
-/** Delete spilled results older than `maxAgeMs` (chunks cascade). Call from a
- *  periodic sweep; cheap and owner-agnostic. Returns rows removed. */
-export async function cleanupToolResults(maxAgeMs = 7 * 24 * 3600_000): Promise<number> {
+/** Delete spilled results older than `maxAgeMs` (chunks cascade). Defaults to
+ *  the global retention (env `TOOL_RESULT_TTL_DAYS`). Call from the periodic
+ *  worker sweep; cheap (indexed delete) and owner-agnostic. Returns rows
+ *  removed. */
+export async function cleanupToolResults(maxAgeMs = TOOL_RESULT_TTL_MS): Promise<number> {
   const cutoff = new Date(Date.now() - maxAgeMs);
   const rows = await db
     .delete(toolResults)
     .where(sql`${toolResults.createdAt} < ${cutoff.toISOString()}`)
     .returning({ id: toolResults.id });
   return rows.length;
+}
+
+/** Throttled, fire-and-forget sweep. Called both opportunistically from the
+ *  spill path (so the store self-prunes while it's being written) and from
+ *  the periodic events-reminders tick (so it runs even when idle). Shares one
+ *  hourly throttle across callers; never blocks the caller or throws. */
+let lastSweepAt = 0;
+export function maybeSweep(): void {
+  const now = Date.now();
+  if (now - lastSweepAt < 60 * 60 * 1000) return;
+  lastSweepAt = now;
+  void cleanupToolResults().catch((err) =>
+    console.error(
+      '[tool-results] opportunistic sweep failed:',
+      err instanceof Error ? err.message : err,
+    ),
+  );
 }
