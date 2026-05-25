@@ -2,6 +2,7 @@
 export {
   EVENTS_ROOT_LABEL,
   listEvents,
+  countEvents,
   getEvent,
   createEvent,
   updateEvent,

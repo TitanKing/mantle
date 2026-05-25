@@ -1,10 +1,12 @@
 'use client';
 
-import { useEffect, useMemo, useState, useTransition } from 'react';
+import { useEffect, useState, useTransition } from 'react';
 import { useRouter } from 'next/navigation';
 import { Check, ListTodo, Plus, Search } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
+import { ListPager } from '@/components/layout/list-pager';
+import { useListNav } from '@/lib/use-list-nav';
 import { useToast } from '@/components/ui/toast';
 import { cn } from '@/lib/utils';
 import { TodoForm, emptyTodoForm, PRIORITIES, type Priority, type TodoPayload } from './todo-form';
@@ -22,31 +24,46 @@ function dueLabel(iso: string): string {
   return new Date(iso).toLocaleDateString('en-GB', { day: 'numeric', month: 'short' });
 }
 
-export function TodosClient({ initialTodos }: { initialTodos: TodoRow[] }) {
+export function TodosClient({
+  initialTodos,
+  total,
+  page,
+  pageSize,
+  query,
+  status,
+  priority,
+}: {
+  initialTodos: TodoRow[];
+  total: number;
+  page: number;
+  pageSize: number;
+  query: string;
+  status: Status | 'all';
+  priority: Priority | 'all';
+}) {
   const router = useRouter();
+  const { pending: navPending, go } = useListNav();
   const toast = useToast();
   const [todos, setTodos] = useState(initialTodos);
-  const [query, setQuery] = useState('');
-  const [statusFilter, setStatusFilter] = useState<Status | 'all'>('open');
-  const [priorityFilter, setPriorityFilter] = useState<Priority | 'all'>('all');
+  const [searchInput, setSearchInput] = useState(query);
   const [pending, startTransition] = useTransition();
   const [sel, setSel] = useState<Selection>(() =>
     initialTodos[0] ? { mode: 'view', id: initialTodos[0].id } : { mode: 'create' },
   );
 
+  // Re-seed on SSR nav (search / filter / page).
   useEffect(() => setTodos(initialTodos), [initialTodos]);
 
-  const filtered = useMemo(() => {
-    const q = query.trim().toLowerCase();
-    return todos.filter((t) => {
-      if (statusFilter !== 'all' && t.status !== statusFilter) return false;
-      if (priorityFilter !== 'all' && t.priority !== priorityFilter) return false;
-      if (q && !`${t.title} ${t.body} ${t.summary ?? ''} ${t.tags.join(' ')}`.toLowerCase().includes(q))
-        return false;
-      return true;
-    });
-  }, [todos, query, statusFilter, priorityFilter]);
+  // Debounced search → URL (?q=); resets to page 1.
+  useEffect(() => {
+    const h = setTimeout(() => {
+      if (searchInput.trim() !== query) go({ q: searchInput.trim() || null, page: null });
+    }, 350);
+    return () => clearTimeout(h);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [searchInput]);
 
+  const filtering = !!query || status !== 'open' || priority !== 'all';
   const selected = sel?.mode === 'view' ? (todos.find((t) => t.id === sel.id) ?? null) : null;
 
   const createTodo = async (payload: TodoPayload) => {
@@ -133,16 +150,16 @@ export function TodosClient({ initialTodos }: { initialTodos: TodoRow[] }) {
           <div className="relative">
             <Search className="pointer-events-none absolute left-2 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" />
             <Input
-              value={query}
-              onChange={(e) => setQuery(e.target.value)}
+              value={searchInput}
+              onChange={(e) => setSearchInput(e.target.value)}
               placeholder="Search todos…"
               className="h-9 pl-8"
             />
           </div>
           <div className="flex gap-2">
             <select
-              value={statusFilter}
-              onChange={(e) => setStatusFilter(e.target.value as Status | 'all')}
+              value={status}
+              onChange={(e) => go({ status: e.target.value, page: null })}
               className="h-9 flex-1 rounded-md border border-input bg-background px-2 text-sm"
               aria-label="Filter by status"
             >
@@ -154,8 +171,8 @@ export function TodosClient({ initialTodos }: { initialTodos: TodoRow[] }) {
               ))}
             </select>
             <select
-              value={priorityFilter}
-              onChange={(e) => setPriorityFilter(e.target.value as Priority | 'all')}
+              value={priority}
+              onChange={(e) => go({ priority: e.target.value === 'all' ? null : e.target.value, page: null })}
               className="h-9 flex-1 rounded-md border border-input bg-background px-2 text-sm"
               aria-label="Filter by priority"
             >
@@ -169,18 +186,18 @@ export function TodosClient({ initialTodos }: { initialTodos: TodoRow[] }) {
           </div>
         </div>
         <div className="space-y-2 p-3 md:flex-1 md:overflow-y-auto md:scrollbar-thin">
-          {filtered.length === 0 ? (
+          {todos.length === 0 ? (
             <p className="rounded-md border border-dashed border-border bg-muted/30 px-4 py-8 text-center text-sm text-muted-foreground">
-              {todos.length === 0 ? (
+              {filtering ? (
+                'No todos match your search or filters.'
+              ) : (
                 <>
                   No todos yet. Click <strong>New</strong> to add one.
                 </>
-              ) : (
-                'No todos match your filters.'
               )}
             </p>
           ) : (
-            filtered.map((t) => {
+            todos.map((t) => {
               const isSel = sel?.mode === 'view' && sel.id === t.id;
               const done = t.status === 'done';
               const overdue = !!t.dueAt && new Date(t.dueAt) < new Date() && !done;
@@ -243,6 +260,13 @@ export function TodosClient({ initialTodos }: { initialTodos: TodoRow[] }) {
             })
           )}
         </div>
+        <ListPager
+          page={page}
+          total={total}
+          pageSize={pageSize}
+          pending={navPending}
+          onGo={(p) => go({ page: p > 1 ? p : null })}
+        />
       </div>
 
       {/* ── Right: create | detail | empty ───────────────────────── */}

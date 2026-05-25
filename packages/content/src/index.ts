@@ -25,6 +25,7 @@ export {
   TODO_STATUSES,
   TODO_PRIORITIES,
   listTodos,
+  countTodos,
   getTodo,
   createTodo,
   updateTodo,
@@ -39,6 +40,7 @@ export {
 export {
   EVENTS_ROOT_LABEL,
   listEvents,
+  countEvents,
   getEvent,
   createEvent,
   updateEvent,

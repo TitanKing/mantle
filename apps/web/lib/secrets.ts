@@ -117,10 +117,8 @@ export type ListFilters = {
   tag?: string;
 };
 
-export async function listSecrets(
-  ownerId: string,
-  filters: ListFilters = {},
-): Promise<SecretRow[]> {
+/** Shared WHERE conditions for secret list/count queries. */
+function secretConds(ownerId: string, filters: ListFilters) {
   const conditions = [eq(nodes.ownerId, ownerId), eq(nodes.type, 'secret')];
   if (filters.query && filters.query.trim().length > 0) {
     const q = `%${filters.query.trim()}%`;
@@ -137,13 +135,30 @@ export async function listSecrets(
   if (filters.tag) {
     conditions.push(sql`${filters.tag} = ANY(${nodes.tags})`);
   }
+  return conditions;
+}
+
+export async function listSecrets(
+  ownerId: string,
+  filters: ListFilters & { limit?: number; offset?: number } = {},
+): Promise<SecretRow[]> {
   const rows = await db
     .select()
     .from(nodes)
-    .where(and(...conditions))
+    .where(and(...secretConds(ownerId, filters)))
     .orderBy(desc(nodes.updatedAt))
-    .limit(500);
+    .limit(filters.limit ?? 500)
+    .offset(filters.offset ?? 0);
   return rows.map(nodeToRow);
+}
+
+/** Total secrets matching the same filters as `listSecrets` (drives pagination). */
+export async function countSecrets(ownerId: string, filters: ListFilters = {}): Promise<number> {
+  const [row] = await db
+    .select({ n: sql<number>`count(*)::int` })
+    .from(nodes)
+    .where(and(...secretConds(ownerId, filters)));
+  return row?.n ?? 0;
 }
 
 export async function getSecretMetadata(

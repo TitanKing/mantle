@@ -1,10 +1,12 @@
 'use client';
 
-import { useEffect, useMemo, useState, useTransition } from 'react';
+import { useEffect, useState, useTransition } from 'react';
 import { useRouter } from 'next/navigation';
 import { KeyRound, Plus, Search } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
+import { ListPager } from '@/components/layout/list-pager';
+import { useListNav } from '@/lib/use-list-nav';
 import { useToast } from '@/components/ui/toast';
 import { cn } from '@/lib/utils';
 import { SecretForm, emptySecretForm, KINDS, type Kind, type SecretBody } from './secret-form';
@@ -12,31 +14,44 @@ import { SecretDetail, type SecretRow } from './secret-detail';
 
 type Selection = { mode: 'create' } | { mode: 'view'; id: string } | null;
 
-export function SecretsClient({ initialSecrets }: { initialSecrets: SecretRow[] }) {
+export function SecretsClient({
+  initialSecrets,
+  total,
+  page,
+  pageSize,
+  query,
+  kind,
+}: {
+  initialSecrets: SecretRow[];
+  total: number;
+  page: number;
+  pageSize: number;
+  query: string;
+  kind: Kind | 'all';
+}) {
   const router = useRouter();
+  const { pending: navPending, go } = useListNav();
   const toast = useToast();
   const [secrets, setSecrets] = useState(initialSecrets);
-  const [query, setQuery] = useState('');
-  const [kindFilter, setKindFilter] = useState<Kind | 'all'>('all');
+  const [searchInput, setSearchInput] = useState(query);
   const [pending, startTransition] = useTransition();
   const [sel, setSel] = useState<Selection>(() =>
     initialSecrets[0] ? { mode: 'view', id: initialSecrets[0].id } : { mode: 'create' },
   );
 
+  // Re-seed on SSR nav (search / filter / page).
   useEffect(() => setSecrets(initialSecrets), [initialSecrets]);
 
-  const filtered = useMemo(() => {
-    const q = query.trim().toLowerCase();
-    return secrets.filter((s) => {
-      if (kindFilter !== 'all' && s.kind !== kindFilter) return false;
-      if (!q) return true;
-      return [s.title, s.description, s.summary ?? '', s.tags.join(' ')]
-        .join(' ')
-        .toLowerCase()
-        .includes(q);
-    });
-  }, [secrets, query, kindFilter]);
+  // Debounced search → URL (?q=); resets to page 1.
+  useEffect(() => {
+    const h = setTimeout(() => {
+      if (searchInput.trim() !== query) go({ q: searchInput.trim() || null, page: null });
+    }, 350);
+    return () => clearTimeout(h);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [searchInput]);
 
+  const filtering = !!query || kind !== 'all';
   const selected = sel?.mode === 'view' ? (secrets.find((s) => s.id === sel.id) ?? null) : null;
 
   const createSecret = async (body: SecretBody) => {
@@ -85,15 +100,15 @@ export function SecretsClient({ initialSecrets }: { initialSecrets: SecretRow[] 
           <div className="relative flex-1">
             <Search className="pointer-events-none absolute left-2 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" />
             <Input
-              value={query}
-              onChange={(e) => setQuery(e.target.value)}
+              value={searchInput}
+              onChange={(e) => setSearchInput(e.target.value)}
               placeholder="Search…"
               className="h-9 pl-8"
             />
           </div>
           <select
-            value={kindFilter}
-            onChange={(e) => setKindFilter(e.target.value as Kind | 'all')}
+            value={kind}
+            onChange={(e) => go({ kind: e.target.value === 'all' ? null : e.target.value, page: null })}
             className="h-9 rounded-md border border-input bg-background px-2 text-sm"
             aria-label="Filter by kind"
           >
@@ -106,18 +121,18 @@ export function SecretsClient({ initialSecrets }: { initialSecrets: SecretRow[] 
           </select>
         </div>
         <div className="space-y-2 p-3 md:flex-1 md:overflow-y-auto md:scrollbar-thin">
-          {filtered.length === 0 ? (
+          {secrets.length === 0 ? (
             <p className="rounded-md border border-dashed border-border bg-muted/30 px-4 py-8 text-center text-sm text-muted-foreground">
-              {secrets.length === 0 ? (
+              {filtering ? (
+                'No secrets match your search or filter.'
+              ) : (
                 <>
                   No secrets yet. Click <strong>New</strong> to add one.
                 </>
-              ) : (
-                'No secrets match your filters.'
               )}
             </p>
           ) : (
-            filtered.map((s) => {
+            secrets.map((s) => {
               const isSel = sel?.mode === 'view' && sel.id === s.id;
               return (
                 <button
@@ -159,6 +174,13 @@ export function SecretsClient({ initialSecrets }: { initialSecrets: SecretRow[] 
             })
           )}
         </div>
+        <ListPager
+          page={page}
+          total={total}
+          pageSize={pageSize}
+          pending={navPending}
+          onGo={(p) => go({ page: p > 1 ? p : null })}
+        />
       </div>
 
       {/* ── Right: create form | detail | empty ──────────────────── */}

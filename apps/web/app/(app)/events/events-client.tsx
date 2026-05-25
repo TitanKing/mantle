@@ -2,9 +2,12 @@
 
 import { useEffect, useMemo, useState, useTransition } from 'react';
 import { useRouter } from 'next/navigation';
-import { CalendarClock, MapPin, Plus } from 'lucide-react';
+import { CalendarClock, MapPin, Plus, Search } from 'lucide-react';
 import { useRealtime } from '@/components/realtime/use-realtime';
 import { Button } from '@/components/ui/button';
+import { Input } from '@/components/ui/input';
+import { ListPager } from '@/components/layout/list-pager';
+import { useListNav } from '@/lib/use-list-nav';
 import { useToast } from '@/components/ui/toast';
 import { cn } from '@/lib/utils';
 import { useNow } from '@/components/use-now';
@@ -36,32 +39,49 @@ function fmt(iso: string): string {
 }
 
 export function EventsClient({
-  initialUpcoming,
-  initialPast,
+  initialEvents,
+  total,
+  page,
+  pageSize,
+  query,
+  window,
 }: {
-  initialUpcoming: EventRow[];
-  initialPast: EventRow[];
+  initialEvents: EventRow[];
+  total: number;
+  page: number;
+  pageSize: number;
+  query: string;
+  window: 'upcoming' | 'past' | 'all';
 }) {
   const router = useRouter();
+  const { pending: navPending, go } = useListNav();
   const toast = useToast();
   const now = useNow(60_000); // minute tick drives live badges + grouping
   const tz = useMemo(() => Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC', []);
 
-  const [upcoming, setUpcoming] = useState(initialUpcoming);
-  const [past, setPast] = useState(initialPast);
+  const [events, setEvents] = useState(initialEvents);
+  const [searchInput, setSearchInput] = useState(query);
   const [pending, startTransition] = useTransition();
-  const [sel, setSel] = useState<Selection>(() => {
-    const first = initialUpcoming[0] ?? initialPast[0];
-    return first ? { mode: 'view', id: first.id } : { mode: 'create' };
-  });
+  const [sel, setSel] = useState<Selection>(() =>
+    initialEvents[0] ? { mode: 'view', id: initialEvents[0].id } : { mode: 'create' },
+  );
 
-  useEffect(() => setUpcoming(initialUpcoming), [initialUpcoming]);
-  useEffect(() => setPast(initialPast), [initialPast]);
+  // Re-seed on SSR nav (search / window / page).
+  useEffect(() => setEvents(initialEvents), [initialEvents]);
+
+  // Debounced search → URL (?q=); resets to page 1.
+  useEffect(() => {
+    const h = setTimeout(() => {
+      if (searchInput.trim() !== query) go({ q: searchInput.trim() || null, page: null });
+    }, 350);
+    return () => clearTimeout(h);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [searchInput]);
 
   // Live db-watch: Saskia adds an event / a reminder edit / another tab → refetch.
   useRealtime(['event'], () => router.refresh());
 
-  const all = useMemo(() => [...upcoming, ...past], [upcoming, past]);
+  const all = events;
   const selected = sel?.mode === 'view' ? (all.find((e) => e.id === sel.id) ?? null) : null;
 
   // Group by day once mounted; before that, a flat upcoming→past list (SSR-safe).
@@ -92,23 +112,20 @@ export function EventsClient({
       return;
     }
     const { event } = (await res.json()) as { event: EventRow };
-    if (new Date(event.startsAt).getTime() >= Date.now()) setUpcoming((p) => [event, ...p]);
-    else setPast((p) => [event, ...p]);
+    setEvents((p) => [event, ...p]);
     setSel({ mode: 'view', id: event.id });
     toast.success(`Saved “${event.title}”`);
     startTransition(() => router.refresh());
   };
 
   const onUpdated = (e: EventRow) => {
-    setUpcoming((p) => p.map((x) => (x.id === e.id ? e : x)));
-    setPast((p) => p.map((x) => (x.id === e.id ? e : x)));
+    setEvents((p) => p.map((x) => (x.id === e.id ? e : x)));
     startTransition(() => router.refresh());
   };
 
   const onDeleted = (id: string) => {
     const next = all.filter((e) => e.id !== id);
-    setUpcoming((p) => p.filter((e) => e.id !== id));
-    setPast((p) => p.filter((e) => e.id !== id));
+    setEvents((p) => p.filter((e) => e.id !== id));
     setSel(next[0] ? { mode: 'view', id: next[0].id } : { mode: 'create' });
     startTransition(() => router.refresh());
   };
@@ -167,11 +184,38 @@ export function EventsClient({
             <Plus /> New
           </Button>
         </div>
+        <div className="space-y-2 border-b border-border p-3">
+          <div className="relative">
+            <Search className="pointer-events-none absolute left-2 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" />
+            <Input
+              value={searchInput}
+              onChange={(e) => setSearchInput(e.target.value)}
+              placeholder="Search events…"
+              className="h-9 pl-8"
+            />
+          </div>
+          <select
+            value={window}
+            onChange={(e) => go({ window: e.target.value === 'upcoming' ? null : e.target.value, page: null })}
+            className="h-9 w-full rounded-md border border-input bg-background px-2 text-sm"
+            aria-label="Filter events"
+          >
+            <option value="upcoming">Upcoming</option>
+            <option value="past">Past</option>
+            <option value="all">All</option>
+          </select>
+        </div>
         <div className="space-y-3 p-3 md:flex-1 md:overflow-y-auto md:scrollbar-thin">
           {all.length === 0 ? (
             <p className="rounded-md border border-dashed border-border bg-muted/30 px-4 py-8 text-center text-sm text-muted-foreground">
-              No events yet. Click <strong>New</strong>, or ask Saskia (“remind me of my meeting at
-              10am”).
+              {query || window !== 'upcoming' ? (
+                'No events match your search or filter.'
+              ) : (
+                <>
+                  No upcoming events. Click <strong>New</strong>, or ask Saskia (“remind me of my
+                  meeting at 10am”).
+                </>
+              )}
             </p>
           ) : groups ? (
             GROUP_ORDER.filter((g) => groups[g].length > 0).map((g) => (
@@ -183,10 +227,17 @@ export function EventsClient({
               </section>
             ))
           ) : (
-            // Pre-mount fallback: flat upcoming → past (matches SSR).
+            // Pre-mount fallback: flat list (matches SSR order).
             <div className="space-y-2">{all.map(renderCard)}</div>
           )}
         </div>
+        <ListPager
+          page={page}
+          total={total}
+          pageSize={pageSize}
+          pending={navPending}
+          onGo={(p) => go({ page: p > 1 ? p : null })}
+        />
       </div>
 
       {/* ── Right: create | detail | empty ───────────────────────── */}

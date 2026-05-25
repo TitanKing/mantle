@@ -87,10 +87,10 @@ async function ensureRoot(ownerId: string): Promise<void> {
     });
 }
 
-export async function listEvents(
-  ownerId: string,
-  opts: { query?: string; window?: 'upcoming' | 'past' | 'all'; tag?: string } = {},
-): Promise<EventRow[]> {
+type ListEventsOpts = { query?: string; window?: 'upcoming' | 'past' | 'all'; tag?: string };
+
+/** Shared WHERE conditions for event list/count queries. */
+function eventConds(ownerId: string, opts: ListEventsOpts) {
   const conds = [eq(nodes.ownerId, ownerId), eq(nodes.type, 'event')];
   if (opts.query?.trim()) {
     const q = `%${opts.query.trim()}%`;
@@ -112,6 +112,13 @@ export async function listEvents(
   } else if (opts.window === 'past') {
     conds.push(sql`mantle_iso_to_ts(${nodes.data}->>'starts_at') < now()`);
   }
+  return conds;
+}
+
+export async function listEvents(
+  ownerId: string,
+  opts: ListEventsOpts & { limit?: number; offset?: number } = {},
+): Promise<EventRow[]> {
   const orderExpr =
     opts.window === 'past'
       ? desc(sql`mantle_iso_to_ts(${nodes.data}->>'starts_at')`)
@@ -119,10 +126,20 @@ export async function listEvents(
   const rows = await db
     .select()
     .from(nodes)
-    .where(and(...conds))
+    .where(and(...eventConds(ownerId, opts)))
     .orderBy(orderExpr)
-    .limit(500);
+    .limit(opts.limit ?? 500)
+    .offset(opts.offset ?? 0);
   return rows.map(rowOf);
+}
+
+/** Total events matching the same filters as `listEvents` (drives pagination). */
+export async function countEvents(ownerId: string, opts: ListEventsOpts = {}): Promise<number> {
+  const [row] = await db
+    .select({ n: sql<number>`count(*)::int` })
+    .from(nodes)
+    .where(and(...eventConds(ownerId, opts)));
+  return row?.n ?? 0;
 }
 
 export async function getEvent(ownerId: string, id: string): Promise<EventRow | null> {

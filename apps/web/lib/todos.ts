@@ -4,6 +4,7 @@ export {
   TODO_STATUSES,
   TODO_PRIORITIES,
   listTodos,
+  countTodos,
   getTodo,
   createTodo,
   updateTodo,

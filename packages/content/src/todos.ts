@@ -75,10 +75,15 @@ async function ensureRoot(ownerId: string): Promise<void> {
     });
 }
 
-export async function listTodos(
-  ownerId: string,
-  opts: { query?: string; status?: TodoStatus | 'all'; priority?: TodoPriority | 'all'; tag?: string } = {},
-): Promise<TodoRow[]> {
+type ListTodosOpts = {
+  query?: string;
+  status?: TodoStatus | 'all';
+  priority?: TodoPriority | 'all';
+  tag?: string;
+};
+
+/** Shared WHERE conditions for todo list/count queries. */
+function todoConds(ownerId: string, opts: ListTodosOpts) {
   const conds = [eq(nodes.ownerId, ownerId), eq(nodes.type, 'task')];
   if (opts.query?.trim()) {
     const q = `%${opts.query.trim()}%`;
@@ -96,11 +101,18 @@ export async function listTodos(
     conds.push(sql`coalesce(${nodes.data}->>'priority', 'normal') = ${opts.priority}`);
   }
   if (opts.tag) conds.push(sql`${opts.tag} = ANY(${nodes.tags})`);
+  return conds;
+}
+
+export async function listTodos(
+  ownerId: string,
+  opts: ListTodosOpts & { limit?: number; offset?: number } = {},
+): Promise<TodoRow[]> {
   // Sort by status (open first), then by due_at nulls last, then by updated_at desc.
   const rows = await db
     .select()
     .from(nodes)
-    .where(and(...conds))
+    .where(and(...todoConds(ownerId, opts)))
     .orderBy(
       // Direction must precede the null-ordering: `<expr> asc nulls last`.
       // Don't wrap in asc()/desc() — they append the direction AFTER the
@@ -109,8 +121,18 @@ export async function listTodos(
       sql`mantle_iso_to_ts(${nodes.data}->>'due_at') asc nulls last`,
       desc(nodes.updatedAt),
     )
-    .limit(500);
+    .limit(opts.limit ?? 500)
+    .offset(opts.offset ?? 0);
   return rows.map(rowOf);
+}
+
+/** Total todos matching the same filters as `listTodos` (drives pagination). */
+export async function countTodos(ownerId: string, opts: ListTodosOpts = {}): Promise<number> {
+  const [row] = await db
+    .select({ n: sql<number>`count(*)::int` })
+    .from(nodes)
+    .where(and(...todoConds(ownerId, opts)));
+  return row?.n ?? 0;
 }
 
 export async function getTodo(ownerId: string, id: string): Promise<TodoRow | null> {
