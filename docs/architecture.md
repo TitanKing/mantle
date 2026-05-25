@@ -506,7 +506,12 @@ Four guardrails ([`packages/tools/src/invoke-agent-guards.ts`](../packages/tools
    `memory_config.delegate_to: string[]` lists which slugs it may
    invoke. Empty/missing = no delegation. Self-references are refused
    even when present in the list — the closest thing to a recursion
-   footgun we have.
+   footgun we have. Editable via the **"Delegates to"** picker at
+   `/settings/agents`; `updateAgent` jsonb-**merges** `memory_config`
+   (`||`) so a form save never silently drops the allowlist. (An earlier
+   wholesale overwrite *did* drop it — the form doesn't render
+   `delegate_to`, so saving any agent wiped the grant. That's why
+   delegation looked broken until re-seeded.)
 4. **Cost attribution.** The child gets its own `traces` row
    (`kind='manual'`, `subjectKind='child_agent'`, `data.parent_trace_id`
    set for navigation). The child trace owns the child's full cost;
@@ -522,9 +527,16 @@ explicit "recall what we discussed last week" request to `remy`
 turns and hand back a synthesis. Remy is an `agents` row precisely
 because recall needs a tool loop (`invoke_agent` only targets
 `agents`); it runs at depth 2 so it iterates sub-ranges itself rather
-than sub-delegating. The `researcher` slug remains reserved for a
-future *outward* (online-research) agent. Full detail in
-[`recall.md`](./recall.md).
+than sub-delegating.
+
+**Shipped delegation target — "Researcher" (web search).** The *outward*
+twin of Remy: Saskia delegates an open-web question to `researcher`
+(slug), which calls the `web_search` builtin (Perplexity Sonar via the
+owner's OpenRouter key) and returns a cited synthesis. Saskia decides
+whether to keep it via `note_create` (then the extractor indexes it).
+Both targets are wired into the responder's `delegate_to` by their seed
+scripts (`pnpm -C apps/web seed:remy` / `seed:researcher`). Full detail
+in [`recall.md`](./recall.md).
 
 ## 9c. Encrypted API key vault
 
@@ -895,6 +907,68 @@ Two corollaries:
   `mentioned_in` rows, keeping the earliest). `extract:backfill` does *not*
   clean them — it only re-fires nodes still missing their index.
 
+## 9l. Model catalog — live context window + capabilities
+
+How the system knows what a model can do —
+[`packages/tracing/src/model-context.ts`](../packages/tracing/src/model-context.ts).
+
+**The problem it solves.** A model's context window and vision support are
+*provider* facts that change without notice — e.g. Claude Sonnet/Opus 4.x
+defaulting to a **1M** window. A hand-maintained table silently goes stale:
+the dashboard's "context %" once read a model as 200K when it was really 1M,
+over-reporting fill by 5×. So capability is sourced live and cached.
+
+**Authoritative source.** OpenRouter's public `GET /api/v1/models` (no API
+key required). Per slug we read:
+
+| Field | Used for |
+|---|---|
+| `top_provider.context_length` (fallback `context_length`) | the context window (`contextLimitFor`) |
+| `architecture.input_modalities` (`image` ⇒ multimodal) | vision routing (`modelSupportsVision`) |
+
+`supported_parameters` (`tools`, `structured_outputs`, `reasoning`, …) and
+`pricing` are available on the same response for future use.
+
+**The fetch — built to fail safe.** `refreshModelCatalog()` is the single
+entry point. It is **TTL-gated** (6h), **dedupes** concurrent callers
+(in-flight promise), has an **8s timeout**, and **never throws** — on any
+failure it keeps the last-good cache, degrading to a **static fallback
+table** that is kept roughly current (so even a cold start with OpenRouter
+down returns accurate numbers). The cache is per-process and in-memory; no
+DB, no migration.
+
+**The readers are sync** so callers don't have to await:
+`contextLimitFor(slug)` / `modelSupportsVision(slug)` return live data if
+cached, else the fallback (context) or the family heuristic (vision), else
+null/false. `contextSourceFor(slug)` reports provenance (`live` |
+`fallback` | `unknown`).
+
+**Warming.** Each consuming process fire-and-forgets `refreshModelCatalog()`
+where it reads capability — `recentAgentContext` (dashboard), the agent's
+attachment path, the web `/assistant` turn. Fire-and-forget is safe because
+the fallback is accurate: the first read after a cold start uses it, live
+data takes over once the fetch lands, and the TTL-gated calls keep it fresh.
+
+**Where the user sees it.**
+- **Usage card** (sidebar): per-agent context-fill bars, now correct, with
+  `live`/`fallback` provenance in the tooltip.
+- **`/settings/agents` → Model field**: a context-window readout for the
+  typed slug, served by [`/api/model-context`](../apps/web/app/api/model-context/route.ts)
+  (the same cached map) — "unknown for this slug" flags a typo'd id.
+
+**How to check by hand:** `curl -s https://openrouter.ai/api/v1/models` and
+read `context_length` / `top_provider.context_length` /
+`architecture.input_modalities` for the slug — that's the same source the
+code reads.
+
+> **Note — Mantle never sets a context "flag".** The window is a property of
+> the model slug + its OpenRouter route, not a request parameter. Mantle
+> sends only `model` + sampling params (no `provider` routing pref, no
+> `anthropic-beta` header). For providers where the big window is a beta,
+> OpenRouter handles the opt-in upstream and advertises the resulting ceiling
+> as `context_length`. So "1M vs 200K" is decided by the slug, and the
+> ceiling is read off the catalog — there's nothing to toggle.
+
 ## 10. The MCP server
 
 `apps/mcp/src/server.ts`, ~340 LOC. Exposes Claude's tools over stdio
@@ -1154,6 +1228,14 @@ from this list; what's here is genuinely still open.
 - **Attachment proxy** in `apps/web/app/api/attachments/[id]/route.ts`
   streams bytes through Next. Fine functionally; in prod a CDN or
   direct presigned-MinIO would scale better.
+- **Next-externalized packages must be declared in `apps/web`.** A
+  dep that Next keeps external (its `serverExternalPackages` default
+  list — e.g. `@aws-sdk/client-s3`, pulled in transitively via
+  `@mantle/storage`) must be resolvable *from the app dir*. Under
+  pnpm's isolated layout a transitive dep isn't, so Next errors
+  "Package … can't be external". Fix: list it directly in
+  `apps/web/package.json` (it dedupes to the workspace version). Watch
+  for this whenever a workspace package adds such a dep.
 
 **Telegram surface**
 - **Web UI for Telegram is missing.** Allowlist management, pairing-
@@ -1200,12 +1282,34 @@ from this list; what's here is genuinely still open.
   reveal end to end, tool-loop with a real DB) needs a test
   Postgres — probably a `docker-compose.test.yml`.
 
+**Agent delegation (`invoke_agent`) — audit follow-ups, none blocking**
+- **Child reply truncated at ~8 KB.** `truncateForModel` (tool-loop)
+  caps *every* tool result, including an `invoke_agent` result carrying
+  a child agent's full synthesis — so a long cited research answer can
+  be cut before the parent relays it. Delegation output should bypass
+  the cap or use a much larger one (the child already compressed the
+  work; the parent needs the whole thing).
+- **No timeout on the child invocation.** `client.chat.send` has no
+  deadline anywhere in the loop, so a hung upstream hangs the child →
+  the parent's synchronous `invoke_agent` step → the whole turn. Add a
+  per-call timeout + a clean timeout error.
+- **No spend cap on delegated children.** Workers have
+  `extract_cost_cap_micro_usd`; agents/children have none, and a parent
+  can fan out several `invoke_agent` calls per turn (each spawning a
+  multi-iteration child). Depth is bounded; per-turn breadth and
+  per-child spend are not.
+- **`data.parent_trace_id` is effectively always null.** Entry points
+  don't pass `parentTraceId`, so the child→parent backlink never
+  populates (parent→child via step `meta.child_trace_id` works). Read
+  `currentTrace()?.id` in the handler to fix the reverse link.
+- **No integration test of the wired path.** The pure guards have unit
+  coverage; the handler→bridge→runtime→child-loop chain (e.g. with a
+  fake invoker) does not.
+
 **Agent ergonomics**
-- **No UI for `delegate_to`.** The `invoke_agent` allowlist lives on
-  `memory_config.delegate_to` and is editable via the jsonb-config
-  editor at `/settings/agents` but there's no dedicated field. Build
-  this once delegation has been exercised enough to know the right
-  shape.
+- **`delegate_to` is now UI-editable** via the "Delegates to" picker at
+  `/settings/agents`, and `updateAgent` merges `memory_config` so saves
+  no longer wipe it. (Resolved — was previously DB/seed-only.)
 - **Production chat still routes through OpenRouter SDK directly**
   (responder, /assistant, reflector, extractor, summarizer). The
   chat adapter registry (xAI, HF, Anthropic, Google) is exercised
