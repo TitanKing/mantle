@@ -45,8 +45,11 @@ call; document the choice.
 - `app/(app)/settings/keys/keys-client.tsx` — provider dropdown (create form).
 - `app/(app)/settings/tools/tools-client.tsx` — `kind` (http/shell) + http `method`.
 - `app/(app)/settings/heartbeats/heartbeats-client.tsx` — `agent` + `skill`
-  (note: this file was last touched by a parallel session — re-read current
-  state before editing).
+  selects are the **only** remaining heartbeats cleanup. Otherwise it's already
+  conformant (master-detail, AlertDialog deletes, toast, `min-h-0`, accent
+  cards — done by a parallel session). It has **no Enabled `Switch` by design**:
+  heartbeats use a status enum (active/paused/completed/cancelled) with
+  Pause/Resume + Fire-now actions, not a boolean. Re-read before editing.
 - `app/(app)/settings/agents/agents-client.tsx` — `role`, API-key, embedding-model.
 - `app/(app)/settings/agents/persona-notes-editor.tsx` — note `kind` select.
 - `app/(app)/settings/ai-workers/worker-form.tsx` — apiKey/provider/model/voice
