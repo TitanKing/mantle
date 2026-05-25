@@ -1,7 +1,7 @@
 import { NextResponse } from 'next/server';
 import { requireOwner } from '@/lib/auth';
 import {
-  refreshContextLimits,
+  refreshModelCatalog,
   contextLimitMap,
   contextLimitsFetchedAt,
 } from '@mantle/tracing';
@@ -16,7 +16,7 @@ import {
  */
 export async function GET() {
   await requireOwner();
-  await refreshContextLimits();
+  await refreshModelCatalog();
   return NextResponse.json({
     limits: contextLimitMap(),
     fetchedAt: contextLimitsFetchedAt(),

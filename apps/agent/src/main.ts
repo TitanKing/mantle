@@ -53,7 +53,7 @@ import {
   type TtsParams,
 } from '@mantle/db';
 import { embed } from '@mantle/embeddings';
-import { maxImageBytesFor, modelSupportsVision, recordIngest, startTrace, step } from '@mantle/tracing';
+import { maxImageBytesFor, modelSupportsVision, recordIngest, refreshModelCatalog, startTrace, step } from '@mantle/tracing';
 import {
   buildChatMessages,
   buildAttachmentContextText,
@@ -876,6 +876,11 @@ async function handleMessage(messageId: string): Promise<void> {
         let responderUserText = row.text;
         let userImage: UserImage | undefined;
         if (attachmentContext) {
+          // Warm the live model catalog so the vision check below reads
+          // authoritative capability (architecture.input_modalities) rather
+          // than the heuristic. Fire-and-forget + TTL-gated; the static
+          // fallback covers the cold path.
+          void refreshModelCatalog();
           const caption = telegramCaption(row.text);
           const baseText =
             caption ||

@@ -22,8 +22,9 @@ export {
   contextSourceFor,
   contextLimitMap,
   contextLimitsFetchedAt,
-  refreshContextLimits,
+  refreshModelCatalog,
   modelSupportsVision,
   maxImageBytesFor,
   type ContextSource,
+  type LiveModelInfo,
 } from './model-context';

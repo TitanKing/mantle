@@ -3,7 +3,8 @@
  *
  * The AUTHORITATIVE source is OpenRouter's public `/api/v1/models`
  * response (`top_provider.context_length`), fetched and cached at runtime
- * by {@link refreshContextLimits}. The static map below is only a
+ * by {@link refreshModelCatalog} (which also captures vision capability —
+ * see {@link modelSupportsVision}). The static map below is only a
  * FALLBACK — used before the first live fetch lands or when OpenRouter is
  * unreachable. Keep it roughly current, but live data always wins.
  *
@@ -45,11 +46,19 @@ const FALLBACK_CONTEXT_LIMITS: Record<string, number> = {
 /** OpenRouter's public model catalog — no API key required. */
 const OPENROUTER_MODELS_URL = 'https://openrouter.ai/api/v1/models';
 /** Re-fetch the live catalog at most this often. */
-const CONTEXT_TTL_MS = 6 * 60 * 60 * 1000; // 6h
-/** Abort the catalog fetch if it stalls — a context bar must never hang a caller. */
-const CONTEXT_FETCH_TIMEOUT_MS = 8_000;
+const CATALOG_TTL_MS = 6 * 60 * 60 * 1000; // 6h
+/** Abort the catalog fetch if it stalls — must never hang a caller. */
+const CATALOG_FETCH_TIMEOUT_MS = 8_000;
 
-let liveLimits: Record<string, number> | null = null;
+/** What we keep per model from the live catalog. */
+export type LiveModelInfo = {
+  /** Total context window (input + output) for the default route. */
+  contextLength: number;
+  /** Whether the model accepts image input (architecture.input_modalities). */
+  vision: boolean;
+};
+
+let liveModels: Record<string, LiveModelInfo> | null = null;
 let liveFetchedAt = 0;
 let inFlight: Promise<void> | null = null;
 
@@ -57,14 +66,17 @@ type OpenRouterModel = {
   id?: string;
   context_length?: number | null;
   top_provider?: { context_length?: number | null } | null;
+  architecture?: { input_modalities?: string[] | null } | null;
 };
 
-/** Parse the OpenRouter catalog into a slug→context-length map. Prefers
- *  the default route's actual window (`top_provider.context_length`),
- *  falling back to the model-level `context_length`. Exported for unit
- *  testing — production calls it via {@link refreshContextLimits}. */
-export function parseCatalog(models: OpenRouterModel[]): Record<string, number> {
-  const out: Record<string, number> = {};
+/** Parse the OpenRouter catalog into a slug→{contextLength, vision} map.
+ *  Context prefers the default route's actual window
+ *  (`top_provider.context_length`), falling back to the model-level
+ *  `context_length`. Vision is read from `architecture.input_modalities`
+ *  (image input ⇒ multimodal). Exported for unit testing — production
+ *  calls it via {@link refreshModelCatalog}. */
+export function parseCatalog(models: OpenRouterModel[]): Record<string, LiveModelInfo> {
+  const out: Record<string, LiveModelInfo> = {};
   for (const m of models) {
     const id = typeof m.id === 'string' ? m.id.toLowerCase() : '';
     if (!id) continue;
@@ -76,27 +88,30 @@ export function parseCatalog(models: OpenRouterModel[]): Record<string, number> 
         : typeof base === 'number' && base > 0
           ? base
           : 0;
-    if (ctx > 0) out[id] = ctx;
+    if (ctx <= 0) continue;
+    const mods = m.architecture?.input_modalities;
+    const vision = Array.isArray(mods) && mods.includes('image');
+    out[id] = { contextLength: ctx, vision };
   }
   return out;
 }
 
 /**
- * Refresh the live context-limit cache from OpenRouter, at most once per
- * TTL. Safe to call on every request: TTL-gated, dedupes concurrent
- * callers, **never throws**, and keeps the last-good cache on failure (so
- * a transient OpenRouter outage degrades to last-known, then to the static
- * fallback). Await it for guaranteed-fresh numbers; fire-and-forget is
- * also fine since the fallback is accurate.
+ * Refresh the live model catalog from OpenRouter, at most once per TTL.
+ * Populates context windows AND vision capability. Safe to call on every
+ * request: TTL-gated, dedupes concurrent callers, **never throws**, and
+ * keeps the last-good cache on failure (degrading to last-known, then to
+ * the static fallbacks). Await it for guaranteed-fresh data; fire-and-forget
+ * is also fine since the fallbacks are accurate.
  */
-export async function refreshContextLimits(force = false): Promise<void> {
-  const fresh = liveLimits && Date.now() - liveFetchedAt < CONTEXT_TTL_MS;
+export async function refreshModelCatalog(force = false): Promise<void> {
+  const fresh = liveModels && Date.now() - liveFetchedAt < CATALOG_TTL_MS;
   if (fresh && !force) return;
   if (inFlight) return inFlight;
   inFlight = (async () => {
     try {
       const res = await fetch(OPENROUTER_MODELS_URL, {
-        signal: AbortSignal.timeout(CONTEXT_FETCH_TIMEOUT_MS),
+        signal: AbortSignal.timeout(CATALOG_FETCH_TIMEOUT_MS),
         headers: { accept: 'application/json' },
       });
       if (!res.ok) throw new Error(`openrouter /models ${res.status}`);
@@ -105,13 +120,13 @@ export async function refreshContextLimits(force = false): Promise<void> {
       // Only replace the cache on a non-empty parse — a malformed/empty
       // response shouldn't wipe good data.
       if (Object.keys(parsed).length > 0) {
-        liveLimits = parsed;
+        liveModels = parsed;
         liveFetchedAt = Date.now();
       }
     } catch (err) {
-      // Decorative metric — never let a failed refresh break a caller.
+      // Decorative metadata — never let a failed refresh break a caller.
       console.error(
-        '[model-context] live context-limit refresh failed:',
+        '[model-context] live model-catalog refresh failed:',
         err instanceof Error ? err.message : err,
       );
     } finally {
@@ -125,18 +140,18 @@ export type ContextSource = 'live' | 'fallback' | 'unknown';
 
 /** Total context window for a model slug: live OpenRouter data if cached,
  *  else the static fallback, else null. Sync — call
- *  {@link refreshContextLimits} first if you want guaranteed-fresh data. */
+ *  {@link refreshModelCatalog} first if you want guaranteed-fresh data. */
 export function contextLimitFor(modelSlug: string | null | undefined): number | null {
   if (!modelSlug) return null;
   const key = modelSlug.toLowerCase();
-  return liveLimits?.[key] ?? FALLBACK_CONTEXT_LIMITS[key] ?? null;
+  return liveModels?.[key]?.contextLength ?? FALLBACK_CONTEXT_LIMITS[key] ?? null;
 }
 
 /** Provenance of a slug's limit — for showing the user where it came from. */
 export function contextSourceFor(modelSlug: string | null | undefined): ContextSource {
   if (!modelSlug) return 'unknown';
   const key = modelSlug.toLowerCase();
-  if (liveLimits?.[key] != null) return 'live';
+  if (liveModels?.[key] != null) return 'live';
   if (FALLBACK_CONTEXT_LIMITS[key] != null) return 'fallback';
   return 'unknown';
 }
@@ -144,7 +159,11 @@ export function contextSourceFor(modelSlug: string | null | undefined): ContextS
 /** Merged slug→limit map (live overrides fallback) for bulk UI use, e.g.
  *  the agents form's per-model readout. */
 export function contextLimitMap(): Record<string, number> {
-  return { ...FALLBACK_CONTEXT_LIMITS, ...(liveLimits ?? {}) };
+  const live: Record<string, number> = {};
+  if (liveModels) {
+    for (const [k, v] of Object.entries(liveModels)) live[k] = v.contextLength;
+  }
+  return { ...FALLBACK_CONTEXT_LIMITS, ...live };
 }
 
 /** Epoch ms of the last successful live fetch, or null if it hasn't run. */
@@ -153,14 +172,29 @@ export function contextLimitsFetchedAt(): number | null {
 }
 
 /**
- * Whether a model can accept image input directly (multimodal). Used to
- * decide if the responder can be shown a raw image vs. needing a vision
- * worker to transcribe it first. Pattern-based rather than an exact list
- * so new versions of known multimodal families keep working.
+ * Whether a model accepts image input directly (multimodal). The
+ * AUTHORITATIVE source is the live OpenRouter catalog's
+ * `architecture.input_modalities` (populated by {@link refreshModelCatalog});
+ * for slugs not in the catalog, or before the first fetch lands, it falls
+ * back to a family pattern-match. Used to decide whether the responder can
+ * be shown a raw image vs. needing a vision worker to transcribe it first.
+ *
+ * Warm the catalog (fire-and-forget `refreshModelCatalog()`) wherever this
+ * is consumed so the live answer kicks in — the heuristic is only the
+ * cold-start / unlisted-slug safety net.
  */
 export function modelSupportsVision(modelSlug: string | null | undefined): boolean {
   if (!modelSlug) return false;
-  const s = modelSlug.toLowerCase();
+  const key = modelSlug.toLowerCase();
+  const live = liveModels?.[key];
+  if (live) return live.vision;
+  return modelSupportsVisionHeuristic(key);
+}
+
+/** Family pattern-match fallback for vision support — used only when the
+ *  live catalog hasn't loaded or doesn't list the slug. Lower-case slug in.
+ *  Pattern-based so new versions of known multimodal families keep working. */
+function modelSupportsVisionHeuristic(s: string): boolean {
   // Anthropic Claude 3+ — all current Claude chat models are multimodal.
   if (s.startsWith('anthropic/claude-')) return true;
   // OpenAI 4o / 4.1 / 5 / reasoning families (mini variants included).

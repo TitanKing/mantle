@@ -60,7 +60,7 @@ import {
   hasActiveHeartbeatsOnSurface,
   openHeartbeatsForSurface,
 } from '@mantle/heartbeats';
-import { startTrace, modelSupportsVision, maxImageBytesFor } from '@mantle/tracing';
+import { startTrace, modelSupportsVision, maxImageBytesFor, refreshModelCatalog } from '@mantle/tracing';
 
 /** Decoded byte size of a base64 string (tolerates a leading data-URL
  *  prefix). Used to size-check an inline image before sending it to a
@@ -388,6 +388,10 @@ export async function runAssistantTurn(
   // image" the SDK masks as a validation error; the size guard avoids it.)
   // Either way the node id is surfaced in the text so Saskia can pull the
   // picture back for a closer look via extract_from_image(node_id).
+  // Warm the live model catalog so the vision check below reads authoritative
+  // capability (architecture.input_modalities) rather than the heuristic.
+  // Fire-and-forget + TTL-gated; the static fallback covers the cold path.
+  if (options?.image) void refreshModelCatalog();
   const hasTranscript = !!options?.imageTranscript?.trim();
   const imageBytes = options?.image ? base64Bytes(options.image.base64) : 0;
   const withinImageLimit = imageBytes > 0 && imageBytes <= maxImageBytesFor(agent.model);
