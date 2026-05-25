@@ -6,6 +6,7 @@ import {
   Activity,
   BookText,
   Bot,
+  Boxes,
   CalendarDays,
   CheckSquare,
   ClipboardCheck,
@@ -71,6 +72,7 @@ export function SidebarNav({
     {
       label: 'Review',
       items: [
+        { name: 'Models', href: '/models', icon: Boxes },
         { name: 'Senders', href: '/settings/senders', icon: UserCheck, badge: pendingSenders },
         { name: 'Pending', href: '/pending', icon: ClipboardCheck, badge: pendingApprovals },
       ],
