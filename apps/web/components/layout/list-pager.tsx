@@ -4,9 +4,10 @@ import { ChevronLeft, ChevronRight } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 
 /**
- * Compact prev/next pager for the master-detail list panes (the /pages
- * pattern). Renders nothing when there's a single page. `onGo` receives the
- * target page number; the caller pushes it through `useListNav`.
+ * Compact footer pager for the master-detail list panes (the /pages pattern).
+ * Shown whenever there are items — it doubles as a "N total" count, with the
+ * arrows disabled at the bounds — and only hides when the list is empty.
+ * `onGo` receives the target page number; the caller pushes it via `useListNav`.
  */
 export function ListPager({
   page,
@@ -22,7 +23,7 @@ export function ListPager({
   onGo: (page: number) => void;
 }) {
   const totalPages = Math.max(1, Math.ceil(total / pageSize));
-  if (totalPages <= 1) return null;
+  if (total === 0) return null;
   return (
     <div className="flex items-center justify-between gap-2 border-t border-border px-3 py-2">
       <span className="text-xs text-muted-foreground tabular-nums">
