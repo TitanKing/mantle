@@ -10,9 +10,9 @@ export default async function EventsPage() {
     listEvents(user.id, { window: 'past' }),
   ]);
   return (
-    <div className="mx-auto max-w-5xl space-y-6 px-6 py-8">
+    <>
       <SetPageTitle title="Events" />
       <EventsClient initialUpcoming={upcoming} initialPast={past.slice(0, 25)} />
-    </div>
+    </>
   );
 }

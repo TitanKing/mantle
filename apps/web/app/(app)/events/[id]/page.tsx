@@ -13,7 +13,7 @@ export default async function EventDetailPage({
   const row = await getEvent(user.id, id);
   if (!row) notFound();
   return (
-    <div className="mx-auto max-w-3xl px-6 py-8">
+    <div className="mx-auto max-w-3xl py-2">
       <EventDetailClient initial={row} />
     </div>
   );
