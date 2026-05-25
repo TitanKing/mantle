@@ -1,19 +1,26 @@
 /**
- * Model → max-context-window-tokens map. Used by the usage widget
- * to compute "context %" — how full a recent turn's prompt was
- * relative to the model's maximum context window.
+ * Model → max-context-window-tokens.
  *
- * Values are total context length (input + output). Sourced from
- * provider documentation; replace with a daily fetch of OpenRouter's
- * /v1/models response when that lands.
+ * The AUTHORITATIVE source is OpenRouter's public `/api/v1/models`
+ * response (`top_provider.context_length`), fetched and cached at runtime
+ * by {@link refreshContextLimits}. The static map below is only a
+ * FALLBACK — used before the first live fetch lands or when OpenRouter is
+ * unreachable. Keep it roughly current, but live data always wins.
+ *
+ * Why live: provider context windows change without notice (e.g. Claude
+ * Sonnet/Opus moving to a 1M default), and a hand-maintained table
+ * silently goes stale — which made the dashboard's "context %" over-report
+ * usage by 5×. The fetch is keyless (the catalog is public), TTL-gated,
+ * and fails safe to this table.
+ *
+ * Values are total context length (input + output).
  */
-
-const CONTEXT_LIMITS: Record<string, number> = {
-  // Anthropic via OpenRouter
+const FALLBACK_CONTEXT_LIMITS: Record<string, number> = {
+  // Anthropic via OpenRouter — 4.x sonnet/opus default to a 1M window.
   'anthropic/claude-haiku-4.5': 200_000,
-  'anthropic/claude-sonnet-4.6': 200_000,
-  'anthropic/claude-opus-4.7': 200_000,
-  'anthropic/claude-opus-4.7-fast': 200_000,
+  'anthropic/claude-sonnet-4.6': 1_000_000,
+  'anthropic/claude-opus-4.7': 1_000_000,
+  'anthropic/claude-opus-4.7-fast': 1_000_000,
 
   // OpenAI via OpenRouter
   'openai/gpt-4o': 128_000,
@@ -35,9 +42,114 @@ const CONTEXT_LIMITS: Record<string, number> = {
   'x-ai/grok-4': 256_000,
 };
 
+/** OpenRouter's public model catalog — no API key required. */
+const OPENROUTER_MODELS_URL = 'https://openrouter.ai/api/v1/models';
+/** Re-fetch the live catalog at most this often. */
+const CONTEXT_TTL_MS = 6 * 60 * 60 * 1000; // 6h
+/** Abort the catalog fetch if it stalls — a context bar must never hang a caller. */
+const CONTEXT_FETCH_TIMEOUT_MS = 8_000;
+
+let liveLimits: Record<string, number> | null = null;
+let liveFetchedAt = 0;
+let inFlight: Promise<void> | null = null;
+
+type OpenRouterModel = {
+  id?: string;
+  context_length?: number | null;
+  top_provider?: { context_length?: number | null } | null;
+};
+
+/** Parse the OpenRouter catalog into a slug→context-length map. Prefers
+ *  the default route's actual window (`top_provider.context_length`),
+ *  falling back to the model-level `context_length`. Exported for unit
+ *  testing — production calls it via {@link refreshContextLimits}. */
+export function parseCatalog(models: OpenRouterModel[]): Record<string, number> {
+  const out: Record<string, number> = {};
+  for (const m of models) {
+    const id = typeof m.id === 'string' ? m.id.toLowerCase() : '';
+    if (!id) continue;
+    const top = m.top_provider?.context_length;
+    const base = m.context_length;
+    const ctx =
+      typeof top === 'number' && top > 0
+        ? top
+        : typeof base === 'number' && base > 0
+          ? base
+          : 0;
+    if (ctx > 0) out[id] = ctx;
+  }
+  return out;
+}
+
+/**
+ * Refresh the live context-limit cache from OpenRouter, at most once per
+ * TTL. Safe to call on every request: TTL-gated, dedupes concurrent
+ * callers, **never throws**, and keeps the last-good cache on failure (so
+ * a transient OpenRouter outage degrades to last-known, then to the static
+ * fallback). Await it for guaranteed-fresh numbers; fire-and-forget is
+ * also fine since the fallback is accurate.
+ */
+export async function refreshContextLimits(force = false): Promise<void> {
+  const fresh = liveLimits && Date.now() - liveFetchedAt < CONTEXT_TTL_MS;
+  if (fresh && !force) return;
+  if (inFlight) return inFlight;
+  inFlight = (async () => {
+    try {
+      const res = await fetch(OPENROUTER_MODELS_URL, {
+        signal: AbortSignal.timeout(CONTEXT_FETCH_TIMEOUT_MS),
+        headers: { accept: 'application/json' },
+      });
+      if (!res.ok) throw new Error(`openrouter /models ${res.status}`);
+      const body = (await res.json()) as { data?: OpenRouterModel[] };
+      const parsed = parseCatalog(body.data ?? []);
+      // Only replace the cache on a non-empty parse — a malformed/empty
+      // response shouldn't wipe good data.
+      if (Object.keys(parsed).length > 0) {
+        liveLimits = parsed;
+        liveFetchedAt = Date.now();
+      }
+    } catch (err) {
+      // Decorative metric — never let a failed refresh break a caller.
+      console.error(
+        '[model-context] live context-limit refresh failed:',
+        err instanceof Error ? err.message : err,
+      );
+    } finally {
+      inFlight = null;
+    }
+  })();
+  return inFlight;
+}
+
+export type ContextSource = 'live' | 'fallback' | 'unknown';
+
+/** Total context window for a model slug: live OpenRouter data if cached,
+ *  else the static fallback, else null. Sync — call
+ *  {@link refreshContextLimits} first if you want guaranteed-fresh data. */
 export function contextLimitFor(modelSlug: string | null | undefined): number | null {
   if (!modelSlug) return null;
-  return CONTEXT_LIMITS[modelSlug.toLowerCase()] ?? null;
+  const key = modelSlug.toLowerCase();
+  return liveLimits?.[key] ?? FALLBACK_CONTEXT_LIMITS[key] ?? null;
+}
+
+/** Provenance of a slug's limit — for showing the user where it came from. */
+export function contextSourceFor(modelSlug: string | null | undefined): ContextSource {
+  if (!modelSlug) return 'unknown';
+  const key = modelSlug.toLowerCase();
+  if (liveLimits?.[key] != null) return 'live';
+  if (FALLBACK_CONTEXT_LIMITS[key] != null) return 'fallback';
+  return 'unknown';
+}
+
+/** Merged slug→limit map (live overrides fallback) for bulk UI use, e.g.
+ *  the agents form's per-model readout. */
+export function contextLimitMap(): Record<string, number> {
+  return { ...FALLBACK_CONTEXT_LIMITS, ...(liveLimits ?? {}) };
+}
+
+/** Epoch ms of the last successful live fetch, or null if it hasn't run. */
+export function contextLimitsFetchedAt(): number | null {
+  return liveFetchedAt || null;
 }
 
 /**

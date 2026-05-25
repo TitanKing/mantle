@@ -59,9 +59,13 @@ function AgentContextRow({ ctx }: { ctx: AgentContext }) {
   const tokensLabel = formatTokens(ctx.lastTokensIn);
   const pctLabel = ctx.pct != null ? `${Math.round(ctx.pct * 100)}%` : '—';
   const limitLabel = ctx.contextLimit ? formatTokens(ctx.contextLimit) : 'unknown';
+  // Provenance of the limit, so the number is trustworthy at a glance:
+  // 'live' = fetched from OpenRouter, 'fallback' = static table.
+  const sourceLabel = ctx.contextSource === 'live' ? 'live' : ctx.contextSource === 'fallback' ? 'fallback' : '';
   const title =
     ctx.pct != null
-      ? `${label} (${ctx.modelSlug}) — last turn ${tokensLabel} / ${limitLabel} tokens`
+      ? `${label} (${ctx.modelSlug}) — last turn ${tokensLabel} / ${limitLabel} tokens` +
+        (sourceLabel ? ` · limit from ${sourceLabel}` : '')
       : `${label} (${ctx.modelSlug}) — last turn ${tokensLabel} tokens · context limit unknown for this model`;
   return (
     <li className="flex items-center gap-2 text-[11px]" title={title}>

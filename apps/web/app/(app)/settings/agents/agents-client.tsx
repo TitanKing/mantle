@@ -423,6 +423,25 @@ export function AgentsClient({
   const [form, setForm] = useState<FormState>(emptyForm());
   const [slugTouched, setSlugTouched] = useState(false);
 
+  // Live model → context-window map (OpenRouter catalog, cached server-side),
+  // fetched once so the Model field can show the real window for the typed
+  // slug — the same source the dashboard's context-% bars use.
+  const [contextLimits, setContextLimits] = useState<Record<string, number>>({});
+  useEffect(() => {
+    let cancelled = false;
+    fetch('/api/model-context')
+      .then((r) => (r.ok ? r.json() : null))
+      .then((d) => {
+        if (!cancelled && d?.limits) setContextLimits(d.limits as Record<string, number>);
+      })
+      .catch(() => {
+        /* readout is decorative — ignore fetch failures */
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
   const openCreate = () => {
     setForm(emptyForm());
     setSlugTouched(false);
@@ -801,6 +820,7 @@ export function AgentsClient({
                     <option key={m} value={m} />
                   ))}
                 </datalist>
+                <ContextWindowHint model={form.model} limits={contextLimits} />
               </div>
               <div className="space-y-1.5">
                 <Label htmlFor="priority">Priority</Label>
@@ -1516,5 +1536,45 @@ function DelegatePicker({
         </p>
       )}
     </div>
+  );
+}
+
+/**
+ * Readout under the Model field showing the resolved context window for the
+ * typed slug, from the live OpenRouter map (static fallback) fetched by the
+ * form. Renders nothing until a model is entered; says so plainly when a
+ * slug isn't in the catalog (usually a typo in the id).
+ */
+function ContextWindowHint({
+  model,
+  limits,
+}: {
+  model: string;
+  limits: Record<string, number>;
+}) {
+  const slug = model.trim().toLowerCase();
+  if (!slug) return null;
+  const limit = limits[slug];
+  if (!limit) {
+    return (
+      <p className="text-xs text-muted-foreground">
+        Context window:{' '}
+        <span className="text-amber-600 dark:text-amber-400">unknown for this slug</span> — check
+        the exact id at openrouter.ai/models.
+      </p>
+    );
+  }
+  const pretty =
+    limit >= 1_000_000
+      ? `${(limit / 1_000_000).toFixed(limit % 1_000_000 === 0 ? 0 : 1)}M`
+      : limit >= 1_000
+        ? `${Math.round(limit / 1_000)}k`
+        : `${limit}`;
+  return (
+    <p className="text-xs text-muted-foreground">
+      Context window:{' '}
+      <span className="font-medium text-foreground tabular-nums">{pretty}</span> tokens (
+      {limit.toLocaleString()})
+    </p>
   );
 }

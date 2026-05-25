@@ -12,7 +12,13 @@
  */
 
 import { describe, expect, it } from 'vitest';
-import { maxImageBytesFor, modelSupportsVision } from './model-context';
+import {
+  maxImageBytesFor,
+  modelSupportsVision,
+  parseCatalog,
+  contextLimitFor,
+  contextSourceFor,
+} from './model-context';
 
 describe('maxImageBytesFor', () => {
   it('keeps Anthropic under Bedrock\'s ~5 MB per-image cap', () => {
@@ -47,5 +53,83 @@ describe('modelSupportsVision', () => {
     expect(modelSupportsVision('deepseek/deepseek-chat')).toBe(false);
     expect(modelSupportsVision(null)).toBe(false);
     expect(modelSupportsVision(undefined)).toBe(false);
+  });
+});
+
+/**
+ * Context-window source. `parseCatalog` is the pure heart of the live
+ * OpenRouter fetch — getting its precedence wrong (model-level vs.
+ * provider-level context_length) is exactly how the dashboard's "context %"
+ * went 5× stale. The readers are tested against the static fallback only
+ * (no network) so they stay deterministic and offline.
+ */
+describe('parseCatalog', () => {
+  it('prefers top_provider.context_length over the model-level value', () => {
+    const out = parseCatalog([
+      {
+        id: 'anthropic/claude-sonnet-4.6',
+        context_length: 200_000,
+        top_provider: { context_length: 1_000_000 },
+      },
+    ]);
+    expect(out['anthropic/claude-sonnet-4.6']).toBe(1_000_000);
+  });
+
+  it('falls back to model-level context_length when top_provider is missing/null', () => {
+    const out = parseCatalog([
+      { id: 'a/one', context_length: 128_000, top_provider: null },
+      { id: 'a/two', context_length: 64_000 },
+      { id: 'a/three', context_length: 32_000, top_provider: { context_length: null } },
+    ]);
+    expect(out['a/one']).toBe(128_000);
+    expect(out['a/two']).toBe(64_000);
+    expect(out['a/three']).toBe(32_000);
+  });
+
+  it('lowercases ids so lookups are case-insensitive', () => {
+    const out = parseCatalog([
+      { id: 'Anthropic/Claude-Opus-4.7', top_provider: { context_length: 1_000_000 } },
+    ]);
+    expect(out['anthropic/claude-opus-4.7']).toBe(1_000_000);
+  });
+
+  it('skips entries with no id or no positive context length', () => {
+    const out = parseCatalog([
+      { context_length: 100_000 }, // no id
+      { id: '', context_length: 100_000 }, // empty id
+      { id: 'a/zero', context_length: 0 }, // zero
+      { id: 'a/neg', context_length: -1 }, // negative
+      { id: 'a/none' }, // no length at all
+      { id: 'a/ok', context_length: 50_000 },
+    ]);
+    expect(out).toEqual({ 'a/ok': 50_000 });
+  });
+});
+
+describe('contextLimitFor / contextSourceFor (static fallback, no live refresh)', () => {
+  it('returns the corrected 1M fallback for 4.x sonnet/opus', () => {
+    // The bug this whole change fixes: these used to read 200k.
+    expect(contextLimitFor('anthropic/claude-sonnet-4.6')).toBe(1_000_000);
+    expect(contextLimitFor('anthropic/claude-opus-4.7')).toBe(1_000_000);
+    expect(contextLimitFor('anthropic/claude-haiku-4.5')).toBe(200_000);
+  });
+
+  it('is case-insensitive on the slug', () => {
+    expect(contextLimitFor('Anthropic/Claude-Sonnet-4.6')).toBe(1_000_000);
+  });
+
+  it('returns null + unknown for an uncatalogued slug', () => {
+    expect(contextLimitFor('totally/not-a-real-model')).toBeNull();
+    expect(contextSourceFor('totally/not-a-real-model')).toBe('unknown');
+  });
+
+  it('reports fallback provenance before any live fetch', () => {
+    expect(contextSourceFor('anthropic/claude-sonnet-4.6')).toBe('fallback');
+  });
+
+  it('handles null/undefined slugs gracefully', () => {
+    expect(contextLimitFor(null)).toBeNull();
+    expect(contextLimitFor(undefined)).toBeNull();
+    expect(contextSourceFor(null)).toBe('unknown');
   });
 });

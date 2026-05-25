@@ -17,4 +17,13 @@ export {
 
 export { fallbackCostMicroUsd } from './pricing';
 export { captureLlmUsage, type LlmUsageSink } from './llm-usage';
-export { contextLimitFor, modelSupportsVision, maxImageBytesFor } from './model-context';
+export {
+  contextLimitFor,
+  contextSourceFor,
+  contextLimitMap,
+  contextLimitsFetchedAt,
+  refreshContextLimits,
+  modelSupportsVision,
+  maxImageBytesFor,
+  type ContextSource,
+} from './model-context';

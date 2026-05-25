@@ -1,6 +1,6 @@
 import { and, desc, eq, gte, sql } from 'drizzle-orm';
 import { agents, db, traceSteps, traces } from '@mantle/db';
-import { contextLimitFor } from '@mantle/tracing';
+import { contextLimitFor, contextSourceFor, refreshContextLimits, type ContextSource } from '@mantle/tracing';
 
 /**
  * Aggregate metrics computed over the traces + trace_steps tables.
@@ -55,6 +55,9 @@ export type AgentContext = {
   modelSlug: string;
   lastTokensIn: number;
   contextLimit: number | null;
+  /** Where contextLimit came from: live OpenRouter data, the static
+   *  fallback, or unknown (slug not in either). Surfaced in the UI. */
+  contextSource: ContextSource;
   pct: number | null;
   lastRunAt: string;
 };
@@ -81,6 +84,10 @@ type AgentContextRow = {
  * UI shows a greyed-out bar.
  */
 export async function recentAgentContext(userId: string): Promise<AgentContext[]> {
+  // Warm the live context-limit cache without blocking this render — the
+  // static fallback is accurate, so the first paint is already correct and
+  // live data takes over once the (TTL-gated, keyless) fetch completes.
+  void refreshContextLimits();
   const since = new Date(Date.now() - 24 * 3600_000);
   const result = await db.execute<AgentContextRow>(sql`
     WITH latest_trace AS (
@@ -118,6 +125,7 @@ export async function recentAgentContext(userId: string): Promise<AgentContext[]
       modelSlug: r.model,
       lastTokensIn: tokensIn,
       contextLimit: limit,
+      contextSource: contextSourceFor(r.model),
       pct: limit ? Math.min(1, tokensIn / limit) : null,
       lastRunAt: new Date(r.started_at).toISOString(),
     };
