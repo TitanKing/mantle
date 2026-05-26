@@ -48,6 +48,7 @@ ai_workers (
   name          text,         -- display label
   kind          ai_worker_kind, -- enum: reflector | extractor | summarizer
                               --       | tts | stt | vision | image_gen
+                              --       | embedding
   provider      text,         -- 'openrouter' | 'openai' | 'xai' |
                               -- 'huggingface' | 'anthropic' | 'google' |
                               -- 'elevenlabs' | ...
@@ -87,7 +88,11 @@ type ReflectorParams = ChatLlmParams & {
 type ExtractorParams = ChatLlmParams & {
   target_types?: string[]; extract_facts?: boolean
   extract_cost_cap_micro_usd?: number
-  embedding_model?: string
+  embedding_model?: string                        // legacy override; see §5e
+}
+type EmbeddingParams = {
+  output_dimensions?: number                      // rare — only honoured by
+                                                  // Gemini-embedding-2-preview
 }
 // ...etc per kind
 ```
@@ -471,6 +476,131 @@ can run for the same worker without conflicting.
 
 ---
 
+## 5e. Embedding — the cross-cutting kind
+
+Added in migration `0047_ai_worker_kind_embedding.sql`. Unlike the
+other worker kinds (which are each triggered by one signal — `tts` by
+voice replies, `extractor` by `pg_notify('node_ingested')`, etc.),
+**embedding is read by every memory layer in the stack**:
+
+1. **Extractor write path** — every `node_ingested` produces a vector
+   on `nodes.embedding`, `entities.embedding`, `facts.embedding`.
+2. **Responder + assistant** — embed the inbound message to retrieve
+   semantic memory.
+3. **`recall_window` builtin (Remy)** — embeds the query for
+   time-windowed semantic search.
+4. **MCP `search_chunks`** — Claude Desktop's tool call.
+5. **Tool-result spill store `read_result query`** — embeds the query
+   against the spilled artifact's chunks (`tool_result_chunks`).
+6. **Assistant per-turn retrieval** — same embed-and-search pattern as
+   the responder.
+
+Before this kind existed, the model was either env-implicit
+(`MANTLE_EMBEDDING_MODEL` or the hardcoded fallback) or set as a
+per-worker override on the extractor only. The override field covered
+just one of those six call sites — a misleading "this is THE knob"
+shape — so embedding got promoted to a first-class kind.
+
+### 5e.1 Resolution chain
+
+```
+Any code calling embed() / embedBatch()
+   │
+   ├─ explicit opts.model passed?  ── yes ──→ use it (per-call override)
+   │
+   └─ no? ── resolveEmbeddingModel(ownerId)
+                 │
+                 ├─ ai_workers row, kind=embedding, enabled, is_default ── yes ──→ use its model
+                 │
+                 ├─ MANTLE_EMBEDDING_MODEL env var?              ── yes ──→ use it
+                 │
+                 └─ no?                                          ──→ openai/text-embedding-3-small (hardcoded fallback)
+```
+
+Lives in [`packages/embeddings/src/index.ts`](../packages/embeddings/src/index.ts).
+The resolver caches per-ownerId in-process for 60s — necessary because
+the extractor batches embed many texts per ingest, and recall + spill
+embed per query. The cache is dropped on `clearEmbeddingModelCache(ownerId)`
+which the workers form mutations call after every save / setDefault /
+delete that touches an embedding worker. So a model swap kicks in on
+the next ingest / recall, not after a TTL.
+
+### 5e.2 Discovery is keyless
+
+OpenRouter splits its catalog: chat + image at `/api/v1/models`,
+**embeddings at `/api/v1/embeddings/models`** (the main catalog
+intentionally excludes embedding routes). Both endpoints are keyless.
+Same response shape (id, name, context_length, pricing, architecture),
+disjoint by design.
+
+The workers form's embedding picker fetches the embeddings endpoint
+directly via `discoverEmbeddingModelsOpenRouter()` in
+[`actions.ts`](../apps/web/app/(app)/settings/ai-workers/actions.ts).
+The /models page's OpenRouter view also fetches both and concatenates
+(`Promise.allSettled` so a flake on one doesn't blank the page) —
+[`apps/web/lib/model-explorer.ts`](../apps/web/lib/model-explorer.ts).
+
+Heuristic gotcha: 13 of OR's 25 embedding models lack `embed` in their
+slug (sentence-transformers, GTE, E5, BGE, MiniLM, MPNet, paraphrase
+families). The /models fetcher overrides `kind: 'embedding'` on the
+embeddings-endpoint branch unconditionally — the URL is the source of
+truth, not the slug.
+
+### 5e.3 Two cliffs, both handled in the form
+
+A model swap can fail in two distinct ways. The form surfaces both:
+
+**(a) Dimension mismatch — column rejects the insert.** The brain has
+`vector(1536)` columns (`nodes.embedding`, `entities.embedding`,
+`facts.embedding`, `content_chunks.embedding`). Switching to a model
+that emits anything other than 1536 dims (e.g. `text-embedding-3-large`
+at 3072) would crash ingest on its first call.
+
+The form has a **"Test dimensions" button** that embeds the string
+`'dimension probe'` with the picked model and reads back the actual
+vector length. The result populates a per-slug detected-dim cache and
+also drives a hand-curated `KNOWN_DIMS` allow-list (12 verified slugs)
+as a fallback. When dim is **known and ≠ 1536**, the Save button is
+hard-blocked with a destructive-banner explanation — switching to a
+non-1536 model needs a schema migration on every vector column, which
+isn't a button.
+
+**(b) Vector-space drift — column accepts, retrieval silently breaks.**
+Two embedding models with the same dim (both 1536) produce vectors in
+*completely different coordinate systems*. Cosine similarity across
+spaces is meaningless: existing vectors embedded with model A return
+random matches for queries embedded with model B. The column accepts
+the inserts; the brain just stops working semantically.
+
+The form has a **"Rebuild Index" button** (edit mode only, gated on
+`!modelDirty` so the save commits first) that wraps
+[`runReembed(ownerId, opts)`](../packages/embeddings/src/reembed.ts).
+The helper walks `nodes`, `entities`, `facts`; re-embeds every row
+against the current resolver value; idempotent under the
+`embedding_cache` so re-running against the same model is free. Per-owner
+in-flight Map prevents double-click / multi-tab waste — the cache key
+includes `(ownerId, model, dryRun)`.
+
+The CLI `pnpm re-embed` shares the same code path. The script became a
+thin wrapper around `runReembed`; the UI button does the same thing
+without leaving the browser.
+
+### 5e.4 The legacy override field
+
+`ExtractorParams.embedding_model` predates this kind. Now relabelled
+"Embedding model override (advanced)" with a pointer at the canonical
+worker. Kept functional for niche cases (cache preservation during a
+migration, historical reproduction) but discouraged — mismatched
+embedders across consumers produce silent retrieval degradation, which
+is a bigger UX failure than a missing per-worker knob. Same applies to
+`agents.memory_config.embedding_model` (responder / assistant per-turn
+retrieval override).
+
+The intended path: set the embedding AI worker, leave every override
+blank. The resolver picks it up everywhere.
+
+---
+
 ## 6. Testing affordances
 
 Each worker kind has a test button in `/settings/ai-workers/<id>`:
@@ -559,6 +689,11 @@ What an operator needs to do to make every capability work:
      OpenAI gpt-4o-mini-tts with voice=nova.
    - **STT** — required for voice-message transcription. Default:
      OpenAI whisper-1.
+   - **Embedding** — optional but recommended. Without one, the
+     resolver falls through env → hardcoded
+     `openai/text-embedding-3-small`. Creating the worker makes the
+     model an explicit DB choice instead of an env-implicit fallback,
+     and unlocks the form's Test / Rebuild affordances. See §5e.
    - Vision / image-gen — config saved but dispatch not yet wired.
 
 Each worker has its own model, API key, params. Multiple workers per
@@ -585,6 +720,12 @@ If you're reading the code, the canonical files to start with are:
    that ties it all together; reactive provider/model/voice dropdowns
 10. `apps/agent/src/main.ts` (search for `getSttAdapter` /
     `getTtsAdapter`) — runtime integration for voice in/out
+11. `packages/embeddings/src/index.ts` — `resolveEmbeddingModel`,
+    `embed`, `embedBatch`, `clearEmbeddingModelCache`. The resolver
+    chain + per-ownerId cache.
+12. `packages/embeddings/src/reembed.ts` — `runReembed`, used by both
+    the CLI script (`pnpm re-embed`) and the workers form's
+    Rebuild Index button.
 
 ---
 
@@ -603,10 +744,12 @@ Open questions and likely next moves:
   failover from OpenRouter → direct providers if OR has an outage,
   and unlocks cost-arbitrage logic (use cheapest provider for a
   given model family).
-- **Embedding adapter interface.** Embeddings currently flow through
-  `@mantle/embeddings` directly to OpenRouter; pulling them into the
-  adapter layer would let workers configure their own embedding model
-  (Cohere, Voyage, etc.) per use case.
+- **Embedding adapter interface.** Embeddings are now a first-class
+  worker kind (§5e) but still route through `@mantle/embeddings` →
+  OpenRouter directly. A proper `EmbeddingDispatcher` in the adapter
+  layer would unlock Cohere / Voyage AI / direct-OpenAI as embedding
+  providers without the OR margin. Worth it when an operator actually
+  asks; speculative until then.
 - **Provider-aware cost tracking.** Each adapter knows the price of
   the call it made; surfacing per-provider spend in `/debug` would
   make cost-conscious provider choice obvious.

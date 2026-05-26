@@ -639,10 +639,20 @@ model swap takes effect on the next ingest / recall instead of waiting
 the TTL. Discovery for the embedding kind uses OpenRouter's keyless
 `/api/v1/embeddings/models` catalog — 25 models with pricing — because
 OR's main `/v1/models` deliberately excludes embedding routes (separate
-endpoint). The form's `EmbeddingFields` block surfaces a hard warning
-when the picked model's dimensions don't match the brain's `vector(1536)`
-column — switching to a different-dim model needs a one-shot
-`pnpm re-embed` pass, or new inserts will fail.
+endpoint).
+
+The form's `EmbeddingFields` block handles the two cliffs a model swap
+can hit. A **Test dimensions** button embeds a probe string and reports
+the actual output dim — replaces the hand-maintained allow-list as the
+authoritative dim source. When the dim is known and ≠ 1536, the Save
+button is **hard-blocked** — switching to a non-1536 model needs a
+schema migration on every `vector(1536)` column (nodes, entities, facts,
+content_chunks), not just a re-embed. When the dim matches but the
+*model* changed, a **Rebuild Index** button re-embeds every stored
+vector against the saved model — same code path as the `pnpm re-embed`
+CLI via `@mantle/embeddings#runReembed`, cache-aware so re-running
+against the same model is free. Full detail in
+[`ai-workers.md` §5e](./ai-workers.md#5e-embedding--the-cross-cutting-kind).
 
 **The provider adapter framework** lives in `@mantle/voice` and is the
 layer that lets us swap providers without changing call sites. Three
