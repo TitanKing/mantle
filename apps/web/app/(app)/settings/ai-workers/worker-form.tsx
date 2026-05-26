@@ -221,15 +221,31 @@ export function WorkerForm({ mode, kind, worker, keys, action, enabled, isDefaul
   // up automatically. The `!` is safe: every AiWorkerKind has an
   // entry in CAPABILITY_FOR_KIND (proven by providers.test.ts).
   const capability = CAPABILITY_FOR_KIND[kind]!;
-  const eligibleProviders = providersForCapability(capability);
+  const catalogProviders = providersForCapability(capability);
+
+  // Some kinds are catalog-capable across many providers but the runtime
+  // pipes them all through OpenRouter — chat-shaped workers (reflector,
+  // extractor, summarizer) all construct `new OpenRouter(...)` at call
+  // time regardless of the worker.provider field. Showing other
+  // providers in the dropdown would mislead the operator into
+  // configurations that fail at first call. The form clamps the
+  // dropdown to the providers the runtime actually accepts.
+  //
+  // Embedding / TTS / STT / Vision / Image-gen all dispatch through
+  // the adapter registry — those kinds use the full catalog list.
+  const RUNTIME_OR_ONLY_KINDS = new Set(['reflector', 'extractor', 'summarizer']);
+  const eligibleProviders = RUNTIME_OR_ONLY_KINDS.has(kind)
+    ? catalogProviders.filter((p) => p.id === 'openrouter')
+    : catalogProviders;
   const selectedProvider = eligibleProviders.find((p) => p.id === provider);
 
-  // Filter the api-key dropdown to keys whose provider can do this
-  // worker's capability — picking an Anthropic key for a TTS worker is
-  // nonsense and surfacing it in the picker just creates a mistake to
-  // make. Falls back to the full key list when the eligible-provider
-  // list is empty (defensive — shouldn't happen given §10 of the test
-  // suite locks every kind in).
+  // Filter the api-key dropdown to keys whose service matches one of the
+  // RUNTIME-eligible providers. The runtime-only filter above means
+  // chat-shaped kinds only accept OpenRouter keys here, even though
+  // other providers declare chat capability in the catalog. Falls back
+  // to the full key list when the eligible-provider list is empty
+  // (defensive — shouldn't happen given §10 of the test suite locks
+  // every kind in).
   const eligibleProviderIds = new Set(eligibleProviders.map((p) => p.id as string));
   const eligibleKeys =
     eligibleProviderIds.size > 0
@@ -570,6 +586,15 @@ export function WorkerForm({ mode, kind, worker, keys, action, enabled, isDefaul
                 No adapter registered for <code>{selectedProvider.id}</code> ·{' '}
                 <code>{capability}</code>. The UI saves the config, but calls will fail
                 until we ship the dispatch code for this provider.
+              </p>
+            )}
+            {RUNTIME_OR_ONLY_KINDS.has(kind) && (
+              <p className="text-xs text-muted-foreground">
+                Chat-shaped workers (reflector / extractor / summarizer) route through
+                OpenRouter — the model slug's <code>provider/model</code> prefix selects
+                the upstream (e.g. <code>anthropic/claude-haiku-4.5</code>). The provider
+                dropdown is locked here because the runtime doesn't yet dispatch chat
+                through direct providers.
               </p>
             )}
           </div>

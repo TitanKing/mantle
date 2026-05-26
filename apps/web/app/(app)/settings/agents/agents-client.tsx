@@ -910,29 +910,66 @@ export function AgentsClient({
               </div>
               <div className="space-y-1.5">
                 <Label htmlFor="apiKey">API key</Label>
-                <select
-                  id="apiKey"
-                  value={form.apiKeyId}
-                  onChange={(e) => setForm((f) => ({ ...f, apiKeyId: e.target.value }))}
-                  className={SELECT_CLASS}
-                  required
-                >
-                  <option value="">— select a key —</option>
-                  {apiKeys.map((k) => (
-                    <option key={k.id} value={k.id}>
-                      {k.service} / {k.label} ({k.masked})
-                    </option>
-                  ))}
-                </select>
-                {apiKeys.length === 0 && (
-                  <p className="text-xs text-muted-foreground">
-                    No keys saved.{' '}
-                    <a href="/settings/keys" className="underline">
-                      Add one
-                    </a>{' '}
-                    first.
-                  </p>
-                )}
+                {(() => {
+                  // Agents route through OpenRouter at runtime — the
+                  // agent loop constructs `new OpenRouter({apiKey})`
+                  // regardless of what's stored. Filtering the dropdown
+                  // to OR-only keys means an operator can't quietly
+                  // configure a non-OR key and get a 401 on first turn.
+                  // The model slug's `provider/model` prefix selects
+                  // the upstream (e.g. `anthropic/claude-…`) — that's
+                  // where the multi-provider routing actually lives.
+                  const eligibleAgentKeys = apiKeys.filter(
+                    (k) => k.service === 'openrouter',
+                  );
+                  return (
+                    <>
+                      <select
+                        id="apiKey"
+                        value={form.apiKeyId}
+                        onChange={(e) =>
+                          setForm((f) => ({ ...f, apiKeyId: e.target.value }))
+                        }
+                        className={SELECT_CLASS}
+                        required
+                      >
+                        <option value="">— select a key —</option>
+                        {eligibleAgentKeys.map((k) => (
+                          <option key={k.id} value={k.id}>
+                            {k.service} / {k.label} ({k.masked})
+                          </option>
+                        ))}
+                      </select>
+                      {apiKeys.length > 0 && eligibleAgentKeys.length === 0 && (
+                        <p className="text-xs text-amber-600 dark:text-amber-400">
+                          Agents route through OpenRouter. None of your saved keys
+                          are for <code>openrouter</code>. Add one at{' '}
+                          <a href="/settings/keys" className="underline">
+                            /settings/keys
+                          </a>{' '}
+                          — the model slug's <code>provider/model</code> prefix
+                          (e.g. <code>anthropic/claude-haiku-4.5</code>) selects
+                          the upstream provider.
+                        </p>
+                      )}
+                      {apiKeys.length === 0 && (
+                        <p className="text-xs text-muted-foreground">
+                          No keys saved.{' '}
+                          <a href="/settings/keys" className="underline">
+                            Add one
+                          </a>{' '}
+                          first.
+                        </p>
+                      )}
+                      {eligibleAgentKeys.length > 0 && (
+                        <p className="text-xs text-muted-foreground">
+                          Agents route through OpenRouter — the model slug's
+                          prefix selects the upstream provider.
+                        </p>
+                      )}
+                    </>
+                  );
+                })()}
               </div>
             </div>
 
