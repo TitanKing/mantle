@@ -133,6 +133,17 @@ interface TtsDispatcher {
 interface SttDispatcher { ... transcribe(...) ... }
 interface VisionDispatcher { ... extract(...) ... }
 interface ImageGenDispatcher { ... generate(...) ... }
+
+interface EmbeddingDispatcher {
+  providerId: ProviderId
+  adapterName: string
+  embed(req: EmbedRequest): Promise<EmbedResult>
+  /** Text-only adapters return false for non-text items; callers
+   *  surface 'multimodal needs OpenRouter' before the API call. */
+  acceptsInput?(input: EmbedInput): boolean
+  discoverModels?(apiKey: string): Promise<DiscoveryResult<EmbeddingModelInfo>>
+  staticCatalog?(): readonly EmbeddingModelInfo[]
+}
 ```
 
 Each is a stable contract. Callers never construct provider-specific
@@ -154,6 +165,11 @@ registerChatAdapter(xaiChatAdapter)
 registerChatAdapter(huggingfaceChatAdapter)
 registerChatAdapter(anthropicChatAdapter)
 registerChatAdapter(googleChatAdapter)
+registerEmbeddingAdapter(openrouterEmbedding)
+registerEmbeddingAdapter(openaiEmbedding)
+registerEmbeddingAdapter(googleEmbedding)
+registerEmbeddingAdapter(mistralEmbedding)
+registerEmbeddingAdapter(cohereEmbedding)
 ```
 
 The runtime looks up `getChatAdapter(worker.provider)` /
@@ -165,17 +181,27 @@ in the UI dropdown.
 
 ### 3.3 Currently shipped adapters
 
-| Provider | Chat | TTS | STT | Vision | Image-gen |
-|---|---|---|---|---|---|
-| OpenRouter | ✅ (direct SDK, not via registry) | — | — | — | — |
-| OpenAI | (via OpenRouter) | ✅ openai-tts | ✅ openai-stt | ✅ openai-vision | ✅ openai-image (gpt-image-1 / DALL-E 3 / DALL-E 2) |
-| xAI (Grok) | ✅ xai-chat | ✅ xai-tts | ✅ xai-stt | ✅ xai-vision | ✅ xai-image (grok-imagine-image) |
-| Hugging Face | ✅ huggingface-chat | — | — | — | ✅ huggingface-image (FLUX-1, SDXL, SD 3.5) |
-| Anthropic (direct) | ✅ anthropic-chat | — | — | ✅ anthropic-vision | — *(provider doesn't ship image-gen)* |
-| Google (Gemini) | ✅ google-chat | ✅ google-tts | ✅ google-stt (via generateContent) | ✅ google-vision | ✅ google-image (Imagen 3 / 4) |
-| ElevenLabs | — | ✅ elevenlabs-tts | ✅ elevenlabs-stt (Scribe v1) | — | — |
-| Deepgram | — | — | ✅ deepgram-stt | — | — |
-| AssemblyAI | — | — | ✅ assemblyai-stt | — | — |
+| Provider | Chat | Embedding | TTS | STT | Vision | Image-gen |
+|---|---|---|---|---|---|---|
+| OpenRouter | ✅ (direct SDK¹) | ✅ openrouter-embedding (only multimodal-capable adapter) | — | — | — | — |
+| OpenAI | via OpenRouter¹ | ✅ openai-embedding | ✅ openai-tts | ✅ openai-stt | ✅ openai-vision | ✅ openai-image (gpt-image-1 / DALL-E 3 / DALL-E 2) |
+| xAI (Grok) | ✅ xai-chat | — | ✅ xai-tts | ✅ xai-stt | ✅ xai-vision | ✅ xai-image (grok-imagine-image) |
+| Hugging Face | ✅ huggingface-chat | — | — | — | — | ✅ huggingface-image (FLUX-1, SDXL, SD 3.5) |
+| Anthropic (direct) | ✅ anthropic-chat¹ | — *(provider defers to Voyage AI)* | — | — | ✅ anthropic-vision | — |
+| Google (Gemini) | ✅ google-chat | ✅ google-embedding | ✅ google-tts | ✅ google-stt | ✅ google-vision | ✅ google-image (Imagen 3 / 4) |
+| Mistral | — | ✅ mistral-embedding | — | — | — | — |
+| Cohere | — | ✅ cohere-embedding | — | — | — | — |
+| ElevenLabs | — | — | ✅ elevenlabs-tts | ✅ elevenlabs-stt (Scribe v1) | — | — |
+| Deepgram | — | — | — | ✅ deepgram-stt | — | — |
+| AssemblyAI | — | — | — | ✅ assemblyai-stt | — | — |
+
+¹ **Chat adapters exist for xAI / HF / Anthropic / Google but the
+chat-shaped *worker runtime* still routes through `new OpenRouter()`
+regardless of the worker's `provider` field.** The adapters are
+exercised by the worker form's "Test chat" affordance and stand ready
+for a future migration of the production chat path (§5e + §10 — the
+"Phase 3" handover spec). The form clamps chat-shaped workers and
+agents to `service='openrouter'` keys until that migration ships.
 
 Vision providers also power the **Telegram photo ingest** pipeline
 (photo → default vision worker → note in `/files`) and Saskia's
@@ -506,18 +532,24 @@ shape — so embedding got promoted to a first-class kind.
 ```
 Any code calling embed() / embedBatch()
    │
-   ├─ explicit opts.model passed?  ── yes ──→ use it (per-call override)
+   ├─ explicit opts (model / provider / apiKeyId)?  ── yes ──→ use it (per-call override)
    │
-   └─ no? ── resolveEmbeddingModel(ownerId)
+   └─ no? ── resolveEmbeddingConfig(ownerId)
                  │
-                 ├─ ai_workers row, kind=embedding, enabled, is_default ── yes ──→ use its model
+                 ├─ ai_workers row, kind=embedding, enabled, is_default ── yes ──→ use its (model, provider, apiKeyId)
                  │
-                 ├─ MANTLE_EMBEDDING_MODEL env var?              ── yes ──→ use it
-                 │
-                 └─ no?                                          ──→ openai/text-embedding-3-small (hardcoded fallback)
+                 └─ no? ──→ { model: env var || hardcoded fallback,
+                             provider: 'openrouter',
+                             apiKeyId: null }
 ```
 
 Lives in [`packages/embeddings/src/index.ts`](../packages/embeddings/src/index.ts).
+The resolver returns the FULL config (model + provider + apiKeyId), not
+just the model slug — because dispatch needs all three to talk to the
+right adapter with the right key. A backward-compat `resolveEmbeddingModel`
+remains as a thin wrapper for the few callers that only need the model
+(the reembed script's logging line).
+
 The resolver caches per-ownerId in-process for 60s — necessary because
 the extractor batches embed many texts per ingest, and recall + spill
 embed per query. The cache is dropped on `clearEmbeddingModelCache(ownerId)`
@@ -525,28 +557,84 @@ which the workers form mutations call after every save / setDefault /
 delete that touches an embedding worker. So a model swap kicks in on
 the next ingest / recall, not after a TTL.
 
-### 5e.2 Discovery is keyless
+### 5e.2 Adapter dispatch (Stage 1 of the runtime-honesty push)
+
+`@mantle/embeddings#embed()` was originally hardcoded to OpenRouter's
+endpoint with `getApiKey(ownerId, 'openrouter')` — even though the
+worker schema carried `provider` and `apiKeyId` fields. **The Stage 1
+work landed in [`5dc3984`](https://github.com/TitanKing/mantle/commit/5dc3984)
+makes embedding genuinely multi-provider**: the runtime dispatches
+through the same adapter registry the TTS/STT/vision/image-gen kinds
+use, and the form unlocks the provider dropdown to match.
+
+Five embedding adapters in [`packages/voice/src/adapters/`](../packages/voice/src/adapters/):
+
+| Adapter | Endpoint | Multimodal | Discovery |
+|---|---|---|---|
+| `openrouter-embedding` | `/api/v1/embeddings` | ✅ (gemini-embedding-2-preview, nemotron-embed-vl) | keyless via `/api/v1/embeddings/models` |
+| `openai-embedding` | `/v1/embeddings` | text-only | filtered `/v1/models` |
+| `google-embedding` | `:batchEmbedContents` (model in URL path, key as query string) | text-only | filtered `/v1beta/models` by `embedContent` capability |
+| `mistral-embedding` | `/v1/embeddings` (OpenAI-compatible) | text-only | filtered `/v1/models` |
+| `cohere-embedding` | `/v2/embed` (own shape: `texts`, `input_type`, `embedding_types`) | text-only | filtered `/v1/models` |
+
+Each adapter implements:
+- `embed(req)` — translates the unified `EmbedRequest` to the provider's
+  native shape, parses the response back to `EmbedResult`.
+- `acceptsInput(item)` — text-only adapters return `false` on
+  multimodal items so the caller surfaces a clear "use OpenRouter for
+  multimodal" error rather than letting the upstream API reject it.
+- `discoverModels(apiKey)` — per-provider catalog fetch, falls back to
+  `staticCatalog()` if the API call fails.
+
+The runtime path in [`packages/embeddings/src/index.ts`](../packages/embeddings/src/index.ts):
+
+```
+embed(ownerId, text) → embedBatch → embedMultimodal
+   │
+   ├─ resolveEmbeddingConfig(ownerId)       — DB lookup, 60s cached
+   ├─ getEmbeddingAdapter(config.provider)  — registry lookup
+   ├─ adapter.acceptsInput per input        — text/multimodal guard
+   ├─ embedding_cache lookup by (model, content_hash)
+   ├─ for misses: apiKey via getApiKeyById(apiKeyId) or
+   │     getApiKey(ownerId, provider) fallback
+   └─ adapter.embed({apiKey, model, input, dimensions: 1536})
+```
+
+The cache stays keyed on `(model, content_hash)` so two providers
+serving the same slug share entries. Different slugs (OR's
+`openai/text-embedding-3-small` vs OpenAI direct's
+`text-embedding-3-small`) cache separately — they produce identical
+vectors but a cache miss on first use after a provider swap is acceptable.
+
+### 5e.3 Discovery — per-provider
 
 OpenRouter splits its catalog: chat + image at `/api/v1/models`,
 **embeddings at `/api/v1/embeddings/models`** (the main catalog
 intentionally excludes embedding routes). Both endpoints are keyless.
-Same response shape (id, name, context_length, pricing, architecture),
-disjoint by design.
 
-The workers form's embedding picker fetches the embeddings endpoint
-directly via `discoverEmbeddingModelsOpenRouter()` in
-[`actions.ts`](../apps/web/app/(app)/settings/ai-workers/actions.ts).
-The /models page's OpenRouter view also fetches both and concatenates
-(`Promise.allSettled` so a flake on one doesn't blank the page) —
-[`apps/web/lib/model-explorer.ts`](../apps/web/lib/model-explorer.ts).
+Direct providers each have their own discovery quirks the adapter
+encapsulates:
+- **OpenAI**: `/v1/models` returns everything (chat + embeddings +
+  audio + image); the adapter filters by id pattern `/embedding/i`.
+- **Google**: `/v1beta/models` returns everything; filter by
+  `supportedGenerationMethods` containing `embedContent`.
+- **Mistral**: `/v1/models` is small enough that an id pattern filter
+  matches reliably (`/embed/i`).
+- **Cohere**: `/v1/models` includes an `endpoints` array per model;
+  filter by `endpoints.includes('embed')`.
 
-Heuristic gotcha: 13 of OR's 25 embedding models lack `embed` in their
-slug (sentence-transformers, GTE, E5, BGE, MiniLM, MPNet, paraphrase
-families). The /models fetcher overrides `kind: 'embedding'` on the
-embeddings-endpoint branch unconditionally — the URL is the source of
-truth, not the slug.
+The `/models` page's OpenRouter view fetches both
+`/v1/models` and `/v1/embeddings/models` in parallel via
+`Promise.allSettled` (so a flake on one doesn't blank the page) and
+concatenates — [`apps/web/lib/model-explorer.ts`](../apps/web/lib/model-explorer.ts).
 
-### 5e.3 Two cliffs, both handled in the form
+Heuristic gotcha worth knowing: 13 of OR's 25 embedding models lack
+`embed` in their slug (sentence-transformers, GTE, E5, BGE, MiniLM,
+MPNet, paraphrase families). The /models fetcher overrides
+`kind: 'embedding'` on the embeddings-endpoint branch unconditionally
+— the URL is the source of truth, not the slug pattern.
+
+### 5e.4 Two cliffs, both handled in the form
 
 A model swap can fail in two distinct ways. The form surfaces both:
 
@@ -585,7 +673,7 @@ The CLI `pnpm re-embed` shares the same code path. The script became a
 thin wrapper around `runReembed`; the UI button does the same thing
 without leaving the browser.
 
-### 5e.4 The legacy override field
+### 5e.5 The legacy override field
 
 `ExtractorParams.embedding_model` predates this kind. Now relabelled
 "Embedding model override (advanced)" with a pointer at the canonical
@@ -699,6 +787,25 @@ What an operator needs to do to make every capability work:
 Each worker has its own model, API key, params. Multiple workers per
 kind are allowed (priority + is_default flag picks the winner).
 
+### 8.1 Provider routing today — what goes through what
+
+Different kinds dispatch differently. This matters because the form is
+clamped to match: showing operators a configuration the runtime won't
+honour creates the worst kind of bug (silent failure at first call).
+
+| Kind | Runtime path | `provider` field | `apiKeyId` field | API key dropdown filter |
+|---|---|---|---|---|
+| **TTS / STT / Vision / Image-gen** | Adapter registry — `getXxxAdapter(worker.provider)` | ✅ honoured — picks the adapter | ✅ honoured | filtered to keys whose service ∈ providers declaring this capability |
+| **Embedding** | Adapter registry — `getEmbeddingAdapter(worker.provider)` (Stage 1, §5e.2) | ✅ honoured — picks the adapter | ✅ honoured | filtered to keys whose service ∈ {openrouter, openai, google, mistral, cohere} |
+| **Reflector / Extractor / Summarizer** | `new OpenRouter({apiKey})` directly | ❌ ignored — provider clamped to `openrouter` in the form | ✅ honoured (must be an OR key) | filtered to `service === 'openrouter'` only |
+| **Agents** (responder / assistant / custom) | `new OpenRouter({apiKey})` directly | ❌ no `provider` column on the schema | ✅ honoured (must be an OR key) | filtered to `service === 'openrouter'` only |
+
+**Why the clamps for chat-shaped + agents:** the production chat path
+hasn't been migrated to the adapter registry yet. Migrating it is the
+**Phase 3** work documented in §10 — once it ships, those rows in the
+table flip to "adapter registry, provider honoured." The forms will
+unlock automatically because the clamp is one set check.
+
 ---
 
 ## 9. Implementation map
@@ -731,25 +838,136 @@ If you're reading the code, the canonical files to start with are:
 
 ## 10. Future shape
 
-Open questions and likely next moves:
+### 10.1 Phase 3 — Direct-provider routing for chat-shaped workers + agents
+
+**Status: deferred. The work is fully scoped here so a fresh session can pick it up.**
+
+**What's outstanding.** The chat-shaped workers (reflector / extractor /
+summarizer) and all agents (responder / assistant / custom) still
+construct `new OpenRouter({apiKey})` directly instead of going through
+the chat adapter registry. The forms reflect this honestly today —
+clamped to `service='openrouter'` keys with explanatory copy — but
+that's the *less ambitious* end-state. The bigger move is to migrate
+the runtime so the `provider` field actually controls dispatch, the
+same way TTS / STT / Vision / Image-gen / Embedding already do.
+
+**Why it was deferred.** For a single-user OpenRouter-only install
+(today's typical Mantle operator), the cost-benefit is poor:
+OpenRouter's chat margin is in the low single digits, the engineering
+effort is ~800-1000 LOC, and the user-facing experience already works.
+Stage 2 of the runtime-honesty push made the forms honest about the
+status quo so an open-source contributor doesn't get confused — that's
+the immediate UX win. Phase 3 is the structural move that follows when
+either (a) operators ask for direct-Anthropic / direct-OpenAI routing
+for cost reasons, (b) a multi-provider failover story becomes useful,
+or (c) someone wants to wire Voyage AI for embeddings as a non-OR
+embedding provider.
+
+#### Concrete work for Phase 3
+
+Five sub-pieces, mergeable in order. Each is independently shippable.
+
+**3a. Migrate `apps/agent/src/extractor.ts` to the chat adapter registry**
+(~50 LOC). The simplest piece. Replace `new OpenRouter({apiKey})` with
+`getChatAdapter(worker.provider).chat({...})`. The chat dispatchers
+already exist (xai-chat, huggingface-chat, anthropic-chat, google-chat
+in `packages/voice/src/adapters/`), they just aren't called from
+production. The extractor's chat call is a single turn — no tool
+loop — so the call-site change is mechanical. Same for
+[`apps/agent/src/summarizer.ts`](../apps/agent/src/summarizer.ts) and
+[`apps/agent/src/reflector.ts`](../apps/agent/src/reflector.ts) — same
+shape, same fix.
+
+**3b. Tool loop refactor** (~400-500 LOC, the hard piece).
+[`packages/agent-runtime/src/tool-loop.ts`](../packages/agent-runtime/src/tool-loop.ts)
+currently calls `client.chat.send()` on the OpenRouter SDK — tightly
+coupled to OR's response shape. Migrating means:
+- The chat adapters need to expose tool-call info on `ChatResult`
+  (today their `chat()` returns just `{text, model, tokensIn, tokensOut}`).
+- Each provider serialises tool calls differently:
+  Anthropic emits `tool_use` blocks inside `content[]`, OpenAI emits
+  a `tool_calls` array on the message, Google emits `functionCall`
+  on `parts[]`. Each adapter has to normalise to a single shape that
+  `runToolLoop` can iterate.
+- Streaming was previously deferred (see [the streaming feasibility
+  conversation](https://github.com/TitanKing/mantle/commits/main) —
+  search for "Assistant streaming"); not in scope for Phase 3 either.
+  Keep one-shot calls for now.
+
+**3c. Add `provider` column to `agents` table** (~100 LOC). New migration
+(`0048_agents_provider.sql`), Drizzle schema update, agents-client.tsx
+gets a provider dropdown. Same `RUNTIME_OR_ONLY_KINDS`-equivalent
+mechanism the workers form uses — except inverted: now that the
+runtime supports direct providers, the form unlocks the dropdown.
+
+**3d. Unclamp the workers + agents forms** (~50 LOC). Remove the
+`RUNTIME_OR_ONLY_KINDS` set in
+[`apps/web/app/(app)/settings/ai-workers/worker-form.tsx`](../apps/web/app/(app)/settings/ai-workers/worker-form.tsx).
+Remove the `service === 'openrouter'` filter in
+[`apps/web/app/(app)/settings/agents/agents-client.tsx`](../apps/web/app/(app)/settings/agents/agents-client.tsx).
+The KeyValidityHint and capability filters take over from there —
+they already work for the other kinds.
+
+**3e. Docs cleanup** (~30 LOC). Update §8.1 routing table to flip
+chat-shaped + agents to "adapter registry, provider honoured". Remove
+the "Stage 2 clamps" notes from §5e and the worker form. Update
+[`docs/architecture.md`](./architecture.md) §16 (known sharp edges)
+to retire the "production chat still routes through OpenRouter SDK
+directly" entry.
+
+#### Order of execution
+
+Recommended sequence (each commit-sized, independently mergeable):
+
+1. **3a first** — easiest, validates the chat adapter framework end-to-end
+   against real production traffic without touching the tool loop.
+   Single-turn chat is the unit test of the adapter; if Anthropic-direct
+   works for the extractor, it'll work everywhere.
+2. **3b next** — the tool loop refactor. Most of the engineering risk
+   is here.
+3. **3c then 3d together** — schema change + form unlock. Trivial after
+   the runtime supports it.
+4. **3e last** — docs cleanup once the migration is durable.
+
+#### Risk surfaces a fresh session should look at carefully
+
+- **Cache key sensitivity in tool-loop steps.** Anthropic's prompt
+  caching (the `cache_control: { type: 'ephemeral' }` markers on the
+  system block + digest block) is emitted by the OpenRouter SDK
+  call. The chat adapters need to honour it too — `ChatOptions` should
+  grow a `cacheControl?` option or the adapters should detect it from
+  message metadata. Worth tracing through carefully because cache hits
+  are the dominant cost-saving on the responder path.
+- **Tool-call reassembly.** Streaming is out of scope (per the
+  deferred streaming discussion), so this is simpler than it could
+  be — but each provider's response format still differs. Anthropic's
+  `tool_use` blocks have `input` as a parsed object; OpenAI's
+  `tool_calls[].function.arguments` is a JSON string. The adapter
+  layer has to normalise.
+- **Usage capture.** `captureLlmUsage` reads `result.usage` to bill
+  token counts to the trace. Every chat adapter needs to populate
+  `ChatResult.tokensIn` / `tokensOut` consistently — the existing
+  OpenRouter SDK path is the reference shape.
+- **Trace prompt-cache breakpoints.** When migrating, verify
+  `read_result` / tool-result spill still triggers the right break-
+  points for re-sent context. That's covered by integration testing
+  on the responder path post-3b.
+
+### 10.2 Other open items
 
 - **Vision adapter for whiteboard ingestion.** Image attachments
   arrive → vision adapter extracts markdown → ingested as a note.
   OpenAI / Anthropic / Google all do this; pick one as the first
-  built-in.
+  built-in flow.
 - **Image-gen tool for the responder.** Tool wrapper on top of an
   image-gen adapter so Saskia can generate diagrams / illustrations
   when asked.
-- **Migrating the production chat path** to the registry. Lets us
-  failover from OpenRouter → direct providers if OR has an outage,
-  and unlocks cost-arbitrage logic (use cheapest provider for a
-  given model family).
-- **Embedding adapter interface.** Embeddings are now a first-class
-  worker kind (§5e) but still route through `@mantle/embeddings` →
-  OpenRouter directly. A proper `EmbeddingDispatcher` in the adapter
-  layer would unlock Cohere / Voyage AI / direct-OpenAI as embedding
-  providers without the OR margin. Worth it when an operator actually
-  asks; speculative until then.
+- **Voyage AI as an embedding provider.** Now that the embedding
+  adapter framework is in (§5e.2), adding Voyage is just another
+  adapter file + a `SUPPORTED_PROVIDERS` entry. Worth doing if/when
+  Anthropic users ask for "the official Anthropic-recommended
+  embedding path."
 - **Provider-aware cost tracking.** Each adapter knows the price of
   the call it made; surfacing per-provider spend in `/debug` would
-  make cost-conscious provider choice obvious.
+  make cost-conscious provider choice obvious. Easy add post-Phase 3
+  once all paths go through adapters.

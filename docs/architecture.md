@@ -1517,9 +1517,18 @@ from this list; what's here is genuinely still open.
   (responder, /assistant, reflector, extractor, summarizer). The
   chat adapter registry (xAI, HF, Anthropic, Google) is exercised
   for new workers that opt into those providers and for the "Test
-  chat" UI affordance. Migrating the production chat path to use
-  the adapter registry is non-breaking work — deferred until a real
-  reason emerges (multi-provider failover, cost arbitrage, etc.).
+  chat" UI affordance. The workers form clamps chat-shaped kinds
+  + the agents form clamps API keys to `service='openrouter'` so the
+  form matches reality — see [`ai-workers.md` §8.1](./ai-workers.md#81-provider-routing-today--what-goes-through-what)
+  for the per-kind routing table. The full migration spec ("**Phase 3**")
+  is documented in [`ai-workers.md` §10.1](./ai-workers.md#101-phase-3--direct-provider-routing-for-chat-shaped-workers--agents)
+  — pick it up when there's a real reason (operator asks for direct-
+  provider routing, multi-provider failover, cost arbitrage).
+- **Embedding is fully adapter-routed** as of the Stage 1 push
+  (5dc3984). `@mantle/embeddings` dispatches through
+  `getEmbeddingAdapter(provider)` — five adapters (openrouter, openai,
+  google, mistral, cohere) covering both OR-routed and direct-
+  provider modes. See [`ai-workers.md` §5e.2](./ai-workers.md#5e2-adapter-dispatch-stage-1-of-the-runtime-honesty-push).
 
 ---
 
