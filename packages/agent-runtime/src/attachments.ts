@@ -26,9 +26,11 @@ import {
   parseDocumentBytes,
   transcodeImageForVision,
   INGESTABLE_EXTS,
+  TEXT_EXTS,
+  TIKA_EXTS,
 } from '@mantle/files';
 import { DEFAULT_VISION_DESCRIBE_PROMPT, getVisionAdapter } from '@mantle/voice';
-import { fallbackCostMicroUsd, recordStepUsage } from '@mantle/tracing';
+import { fallbackCostMicroUsd, recordStepUsage, step } from '@mantle/tracing';
 
 /** Max chars of parsed document text folded into a responder prompt. The full
  *  text is persisted + indexed by the extractor; the turn only needs a slice. */
@@ -182,7 +184,32 @@ export async function extractAttachmentForTurn(opts: {
 
   if (INGESTABLE_EXTS.has(ext)) {
     try {
-      const raw = (await parseDocumentBytes(opts.bytes, ext)).trim();
+      // Trace the parse for the live path too, mirroring the durable extractor
+      // (apps/agent/src/extractor.ts readNodeBodyRaw). Makes Tika vs in-process
+      // parser tiers visible in /traces on conversational attachments — same
+      // diagnostic value as the durable path: parser=tika+chars_out=0 means
+      // "Tika is down" vs "doc really has no text" without spelunking logs.
+      const route =
+        ext === 'pdf' ? 'pdf-parse'
+        : ext === 'docx' ? 'mammoth'
+        : ext === 'xlsx' || ext === 'xls' ? 'sheetjs'
+        : TEXT_EXTS.has(ext) ? 'utf8'
+        : TIKA_EXTS.has(ext) ? 'tika'
+        : 'none';
+      const raw = (
+        await step(
+          {
+            name: 'parse_document',
+            kind: 'compute',
+            input: { ext, parser: route, bytes_in: opts.bytes.length, filename: opts.filename },
+          },
+          async (h) => {
+            const t = await parseDocumentBytes(opts.bytes, ext);
+            h.setMeta({ parser: route, chars_out: t.length, empty: t.trim().length === 0 });
+            return t;
+          },
+        )
+      ).trim();
       if (!raw) {
         return { kind: 'file', text: '', note: `No text could be extracted from ${opts.filename}.` };
       }

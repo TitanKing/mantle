@@ -58,6 +58,15 @@ services:
     image: apache/tika:3.3.0.0
     container_name: mantle_tika
     restart: unless-stopped
+    environment:
+      # Cap JVM heap so Tika can't balloon on a malicious or pathological
+      # document. Default JVM in containers auto-sizes to ~1/4 of host RAM
+      # (with no upper bound besides cgroup limits) — fine on a beefy VPS
+      # but unbounded. 512 MB max + 128 MB min covers Mantle's 25 MB
+      # MAX_UPLOAD_BYTES cap with headroom. Adjust JAVA_OPTS if a real
+      # document type pushes it (parse_document step's `chars_out: 0` +
+      # short duration is the signal that Tika OOM'd).
+      JAVA_OPTS: "-Xmx512m -Xms128m"
     ports:
       # 9998 on the host. apps/web + workers run as native Node in dev
       # and reach Tika here. TIKA_URL in .env.local must match.

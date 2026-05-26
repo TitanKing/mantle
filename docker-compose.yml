@@ -94,6 +94,10 @@ services:
     image: apache/tika:3.3.0.0
     container_name: mantle_tika
     restart: unless-stopped
+    environment:
+      # Cap JVM heap so Tika can't balloon on a malicious or pathological
+      # document. See docker-compose.dev.yml for the rationale.
+      JAVA_OPTS: "-Xmx512m -Xms128m"
     healthcheck:
       # apache/tika image has only bash (no curl/wget/nc), so probe via
       # bash's built-in /dev/tcp + a minimal HTTP/1.0 GET against /version.
