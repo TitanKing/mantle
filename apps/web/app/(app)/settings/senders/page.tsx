@@ -8,6 +8,10 @@ import { SetPageTitle } from '@/components/layout/page-title';
 import { Button } from '@/components/ui/button';
 import { SubmitButton } from '@/components/ui/submit-button';
 import { setDomainStatus, setSenderStatus } from './actions';
+import { DenyMarketingButton } from './deny-marketing';
+import { dominantKind, dominantKindWhere, parseKindParam } from './dominant-kind';
+import { KindFilter } from './kind-filter';
+import { KindPill } from './kind-pill';
 import { ManualEntry } from './manual-entry';
 import { PreviewButton } from './preview-button';
 import { SearchBox } from './search-box';
@@ -21,13 +25,14 @@ const PAGE_SIZE = 50;
 export default async function SendersPage({
   searchParams,
 }: {
-  searchParams: Promise<{ tab?: string; q?: string; page?: string }>;
+  searchParams: Promise<{ tab?: string; q?: string; page?: string; kind?: string }>;
 }) {
   const user = await requireOwner();
   const params = await searchParams;
   const tab: Tab = (TABS as string[]).includes(params.tab ?? '') ? (params.tab as Tab) : 'pending';
   const search = (params.q ?? '').trim().toLowerCase();
   const page = Math.max(1, Number.parseInt(params.page ?? '1', 10) || 1);
+  const kind = parseKindParam(params.kind);
 
   // Top-line counts for the tab badges — always the per-status totals
   // (not the search-filtered totals), so flipping tabs always shows the
@@ -49,14 +54,32 @@ export default async function SendersPage({
       sql`(${emailSenders.address} ilike ${like} OR ${emailSenders.domain} ilike ${like} OR coalesce(${emailSenders.displayName}, '') ilike ${like})`,
     );
   }
+  if (kind) conds.push(dominantKindWhere(kind));
 
-  const [rows, totalRow] = await Promise.all([
+  // Bulk-deny-marketing affordance lives on the pending tab and shows a
+  // live count — same WHERE as the main list, but ignores any active `kind`
+  // filter (we *always* want to know "of the pending senders matching my
+  // search, how many are marketing?", regardless of which sub-tab is on).
+  const bulkConds = [eq(emailSenders.userId, user.id), eq(emailSenders.status, 'pending')];
+  if (search) {
+    const like = '%' + search + '%';
+    bulkConds.push(
+      sql`(${emailSenders.address} ilike ${like} OR ${emailSenders.domain} ilike ${like} OR coalesce(${emailSenders.displayName}, '') ilike ${like})`,
+    );
+  }
+  bulkConds.push(dominantKindWhere('marketing'));
+
+  const [rows, totalRow, bulkMarketingRow] = await Promise.all([
     db
       .select({
         address: emailSenders.address,
         domain: emailSenders.domain,
         displayName: emailSenders.displayName,
         messageCount: emailSenders.messageCount,
+        directCount: emailSenders.directCount,
+        listCount: emailSenders.listCount,
+        automatedCount: emailSenders.automatedCount,
+        marketingCount: emailSenders.marketingCount,
         firstSeenAt: emailSenders.firstSeenAt,
         lastSeenAt: emailSenders.lastSeenAt,
         sourceAccountId: emailSenders.sourceAccountId,
@@ -70,8 +93,15 @@ export default async function SendersPage({
       .select({ c: sql<number>`count(*)::int` })
       .from(emailSenders)
       .where(and(...conds)),
+    tab === 'pending'
+      ? db
+          .select({ c: sql<number>`count(*)::int` })
+          .from(emailSenders)
+          .where(and(...bulkConds))
+      : Promise.resolve([{ c: 0 }]),
   ]);
   const total = totalRow[0]?.c ?? 0;
+  const bulkMarketingCount = bulkMarketingRow[0]?.c ?? 0;
 
   const accounts = await db
     .select({ id: emailAccounts.id, address: emailAccounts.address })
@@ -109,13 +139,24 @@ export default async function SendersPage({
         <SearchBox initial={search} />
       </nav>
 
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <KindFilter active={kind} tab={tab} search={search} />
+        {tab === 'pending' && (
+          <DenyMarketingButton count={bulkMarketingCount} search={search} />
+        )}
+      </div>
+
       {rows.length === 0 ? (
         <p className="rounded-md border border-dashed border-border p-8 text-center text-sm text-muted-foreground">
-          {search
-            ? `No ${tab} senders match “${search}”.`
-            : tab === 'pending'
-              ? 'No pending senders. Connect an IMAP account or wait for the next sync.'
-              : `No ${tab} senders yet.`}
+          {search && kind
+            ? `No ${tab} ${kind} senders match “${search}”.`
+            : kind
+              ? `No ${tab} senders classified as ${kind} yet.`
+              : search
+                ? `No ${tab} senders match “${search}”.`
+                : tab === 'pending'
+                  ? 'No pending senders. Connect an IMAP account or wait for the next sync.'
+                  : `No ${tab} senders yet.`}
         </p>
       ) : (
         <div className="rounded-md border border-border">
@@ -123,6 +164,11 @@ export default async function SendersPage({
           {rows.map((r) => {
             const accountAddr = r.sourceAccountId ? accountById.get(r.sourceAccountId) : undefined;
             const domainOverride = domainStatus.get(r.domain);
+            const rowKind = dominantKind(r);
+            // hrefBase that preserves the operator's current tab + search so
+            // tapping a pill narrows without losing context.
+            const pillHrefBase =
+              `/settings/senders?tab=${tab}` + (search ? `&q=${encodeURIComponent(search)}` : '');
             return (
               <li
                 key={r.address}
@@ -134,6 +180,7 @@ export default async function SendersPage({
                     {r.displayName && (
                       <span className="truncate text-xs text-muted-foreground">{r.address}</span>
                     )}
+                    <KindPill kind={rowKind} hrefBase={pillHrefBase} />
                   </div>
                   <div className="mt-0.5 flex flex-wrap items-center gap-x-3 gap-y-0.5 text-xs text-muted-foreground">
                     <span>

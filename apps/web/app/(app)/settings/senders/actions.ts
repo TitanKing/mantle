@@ -1,7 +1,7 @@
 'use server';
 
 import { revalidatePath } from 'next/cache';
-import { and, eq } from 'drizzle-orm';
+import { and, eq, sql } from 'drizzle-orm';
 import PgBoss from 'pg-boss';
 import {
   db,
@@ -10,6 +10,7 @@ import {
   emailSenders,
   type EmailSenderDomain,
 } from '@mantle/db';
+import { dominantKindWhere } from './dominant-kind';
 import {
   domainOf,
   imap,
@@ -329,5 +330,37 @@ export async function bulkSetSenderStatus(formData: FormData) {
   }
   revalidatePath('/settings/senders');
   revalidatePath('/inbox');
+}
+
+/**
+ * Bulk-deny every pending sender currently classified as marketing-dominant
+ * (per the same threshold used by the pill — see `dominant-kind.ts`),
+ * optionally scoped to a search term so "deny everything matching 'mailchimp'"
+ * is one click. Used by the conditional button on the pending tab.
+ *
+ * Single UPDATE — no backfill side-effects (deny doesn't trigger one) and no
+ * per-row loop, since denied is the terminal state we want them all in.
+ */
+export async function denyAllMarketing(formData: FormData) {
+  const user = await requireOwner();
+  const search = String(formData.get('q') ?? '').trim().toLowerCase();
+  const like = '%' + search + '%';
+
+  const conds = [
+    eq(emailSenders.userId, user.id),
+    eq(emailSenders.status, 'pending'),
+    dominantKindWhere('marketing'),
+  ];
+  if (search) {
+    conds.push(
+      sql`(${emailSenders.address} ilike ${like} OR ${emailSenders.domain} ilike ${like} OR coalesce(${emailSenders.displayName}, '') ilike ${like})`,
+    );
+  }
+
+  await db
+    .update(emailSenders)
+    .set({ status: 'denied', decidedAt: new Date() })
+    .where(and(...conds));
+  revalidatePath('/settings/senders');
 }
 
