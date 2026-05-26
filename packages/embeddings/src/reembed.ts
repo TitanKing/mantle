@@ -165,7 +165,13 @@ export async function runReembed(
   ownerId: string,
   opts: ReembedOpts,
 ): Promise<ReembedResult> {
-  const cacheKey = opts.dryRun ? `${ownerId}:dry` : ownerId;
+  // Key the in-flight slot on (ownerId, model, dryRun). Coalescing two
+  // calls with the same model is the whole point — it stops double-click
+  // / multi-tab waste. But two concurrent calls with DIFFERENT models
+  // would have aliased to the same slot and silently shared the first
+  // one's promise, returning vectors from the wrong model's space —
+  // the audit-caught footgun the model component fixes.
+  const cacheKey = `${ownerId}:${opts.model}:${opts.dryRun ? 'dry' : 'live'}`;
   const existing = _inflight.get(cacheKey);
   if (existing) return existing;
   const promise = _runReembedInner(ownerId, opts).finally(() => {
