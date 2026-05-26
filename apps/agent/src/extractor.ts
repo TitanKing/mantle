@@ -53,7 +53,7 @@ import {
 } from '@mantle/db';
 import { getApiKeyById } from '@mantle/api-keys';
 import { embed } from '@mantle/embeddings';
-import { diskPathForFile, extOf, mimeForExt, parseDocumentBytes, INGESTABLE_EXTS } from '@mantle/files';
+import { diskPathForFile, extOf, mimeForExt, parseDocumentBytes, INGESTABLE_EXTS, TEXT_EXTS, TIKA_EXTS } from '@mantle/files';
 import { currentTrace, recordSkippedTrace, startTrace, step } from '@mantle/tracing';
 import { captureLlmUsage, runVisionWorker } from '@mantle/agent-runtime';
 import { chunkDocText, mentionRefs } from '@mantle/content';
@@ -268,10 +268,35 @@ async function readNodeBodyRaw(node: typeof nodes.$inferSelect): Promise<string>
       try {
         const { promises: fs } = await import('node:fs');
         const buf = await fs.readFile(diskPath);
-        const text = await parseDocumentBytes(buf, ext);
+        // Wrap the parse in a step so the trace shows WHICH tier ran
+        // (pdf-parse / mammoth / sheetjs / utf8 / tika), how long it took,
+        // and how many chars came out. Particularly important for Tika
+        // since it's an HTTP call with its own failure modes (service down,
+        // timeout, unparseable bytes — all swallowed to '' by design); the
+        // step makes Tika invisible→visible without changing behaviour.
+        const route =
+          ext === 'pdf' ? 'pdf-parse'
+          : ext === 'docx' ? 'mammoth'
+          : ext === 'xlsx' || ext === 'xls' ? 'sheetjs'
+          : TEXT_EXTS.has(ext) ? 'utf8'
+          : TIKA_EXTS.has(ext) ? 'tika'
+          : 'none';
+        const text = await step(
+          {
+            name: 'parse_document',
+            kind: 'compute',
+            input: { ext, parser: route, bytes_in: buf.length, filename },
+          },
+          async (h) => {
+            const t = await parseDocumentBytes(buf, ext);
+            h.setMeta({ parser: route, chars_out: t.length, empty: t.trim().length === 0 });
+            return t;
+          },
+        );
         if (text.trim().length > 0) return text;
       } catch {
-        // Parse / disk read failed. Fall through to the title.
+        // Parse / disk read failed. The step (if it opened) already
+        // recorded the error; fall through to the title.
       }
     }
   }
