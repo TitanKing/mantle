@@ -160,6 +160,15 @@ export interface ChatModelInfo {
 export interface ChatResult {
   text: string;
   model: string;
+  /** Tool calls the model wants to make. When non-empty, the
+   *  tool-loop dispatches each one and feeds results back. Adapters
+   *  normalise from their provider's native shape (Anthropic
+   *  `tool_use` blocks, Google `functionCall` parts, OpenAI
+   *  `tool_calls`) to this single grammar.
+   *
+   *  Important: when toolCalls is non-empty, `text` may be empty —
+   *  the model emitted only tool calls and no narrative this turn. */
+  toolCalls?: ChatToolCall[];
   tokensIn?: number;
   tokensOut?: number;
   /** Tokens served from the provider's prompt cache, billed at the
@@ -184,6 +193,77 @@ export interface ChatResult {
    *  `fallbackCostMicroUsd(model, ...)`. */
   reportedCostUsd?: number;
 }
+
+/** A single tool the model can call. Mirrors the OpenAI function-tool
+ *  shape since every adapter we're likely to talk to either accepts
+ *  this natively (OpenRouter / xAI / HF) or translates from it
+ *  (Anthropic `tool_use`, Google `functionDeclarations`). */
+export interface ChatToolDefinition {
+  type: 'function';
+  function: {
+    name: string;
+    description: string;
+    /** JSON Schema describing the tool's arguments. Pass the same
+     *  shape your `tools` table's `input_schema` carries. */
+    parameters: Record<string, unknown>;
+  };
+}
+
+/** One tool call returned by the model. Adapters normalise from
+ *  provider-specific shapes (Anthropic `tool_use` blocks, Google
+ *  `functionCall` parts) to this single shape so the tool-loop only
+ *  iterates one grammar. */
+export interface ChatToolCall {
+  /** Provider-assigned id, used to pair the tool result back in the
+   *  next request. For Anthropic this is the `tool_use.id` (toolu_*);
+   *  for OpenAI-shape providers it's `tool_calls[].id` (call_*); for
+   *  Google we synthesise an id since Gemini's functionCall has no
+   *  natural id field. */
+  id: string;
+  type: 'function';
+  function: {
+    name: string;
+    /** Stringified JSON args. Anthropic returns a parsed object as
+     *  `input`; the adapter stringifies it here so the loop sees a
+     *  single shape. Callers parse via @mantle/agent-runtime/tool-args
+     *  defensively because not every model emits valid JSON. */
+    arguments: string;
+  };
+}
+
+/** A tool message in the conversation — i.e. the user-facing surface
+ *  of "here's what the tool returned." Adapters translate to the
+ *  provider's native tool-result shape (Anthropic emits this as a
+ *  `user` message with a `tool_result` block; Google as a `function`
+ *  message with `functionResponse`; OpenAI/OR/HF as a `tool` message). */
+export type ChatToolMessage = {
+  role: 'tool';
+  toolCallId: string;
+  /** The tool result, already serialised to a string. */
+  content: string;
+};
+
+/** Assistant turn — can carry text content, tool calls, or both. The
+ *  tool-loop pushes this back into the conversation after each LLM
+ *  round so the next request sees the model's prior tool_use + the
+ *  matching tool_result pairs. */
+export type ChatAssistantMessage = {
+  role: 'assistant';
+  /** Null when the model only emitted tool calls (no text turn). */
+  content: string | null;
+  toolCalls?: ChatToolCall[];
+};
+
+/** The tool-loop-shaped message union. Distinct from the simpler
+ *  string-content shape `ChatOptions.messages` carries because
+ *  tool-loop calls need a wider grammar (multi-turn tool exchanges).
+ *  Adapters consume both via the unified `ChatOptions.messagesTool` /
+ *  `ChatOptions.messages` discriminator. */
+export type ChatToolLoopMessage =
+  | { role: 'system'; content: string }
+  | { role: 'user'; content: string }
+  | ChatAssistantMessage
+  | ChatToolMessage;
 
 /** Prompt-cache hints for the adapter. Anthropic and (less aggressively)
  *  OpenAI bill cached input at a fraction of the fresh rate when the
@@ -211,11 +291,24 @@ export interface ChatOptions {
   model: string;
   /** Standard chat-completion messages. The adapter is free to
    *  transform these into the provider's native shape (e.g. Anthropic's
-   *  separate `system` field), but we present a uniform interface. */
-  messages: Array<{
-    role: 'system' | 'user' | 'assistant';
-    content: string;
-  }>;
+   *  separate `system` field), but we present a uniform interface.
+   *
+   *  The grammar is `ChatToolLoopMessage[]` — wide enough to carry the
+   *  tool-loop path (assistant turns with `toolCalls`, `tool` result
+   *  messages) AND structurally compatible with the simpler shape every
+   *  chat-shaped worker (extractor / summarizer / reflector) emits: a
+   *  plain `{role, content: string}[]` array is a valid
+   *  ChatToolLoopMessage[] for `system`/`user` roles. */
+  messages: ChatToolLoopMessage[];
+  /** Tools the model is allowed to call. Adapters translate this to
+   *  the provider's native function-tool shape. When omitted or empty,
+   *  the adapter MUST NOT send the field — some providers reject empty
+   *  tool arrays. */
+  tools?: ChatToolDefinition[];
+  /** Steering hint for tool selection. The runtime only uses 'auto'
+   *  (default) and 'none' today; we expose the OpenAI-style union so
+   *  forcing a specific tool is a non-breaking addition later. */
+  toolChoice?: 'auto' | 'none';
   temperature?: number;
   maxTokens?: number;
   topP?: number;

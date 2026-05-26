@@ -675,6 +675,9 @@ importers:
       '@mantle/tracing':
         specifier: workspace:*
         version: link:../tracing
+      '@mantle/voice':
+        specifier: workspace:*
+        version: link:../voice
       '@openrouter/sdk':
         specifier: ^0.12.35
         version: 0.12.35

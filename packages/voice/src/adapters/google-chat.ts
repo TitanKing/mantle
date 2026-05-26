@@ -24,14 +24,34 @@ import type {
   ChatModelInfo,
   ChatOptions,
   ChatResult,
+  ChatToolCall,
 } from './types';
 import type { DiscoveryResult } from '../discover';
 import { GOOGLE_BASE_URL, GOOGLE_CHAT_MODELS } from '../catalogs/google';
 
-type GeminiPart = { text: string };
+/** A Gemini content part. The runtime emits three kinds:
+ *  - text: narrative content
+ *  - functionCall: the model's tool-call request (on a model-role content)
+ *  - functionResponse: our tool result fed back (on a user-role content) */
+type GeminiPart =
+  | { text: string }
+  | { functionCall: { name: string; args: Record<string, unknown> } }
+  | { functionResponse: { name: string; response: Record<string, unknown> } };
+
 type GeminiContent = {
   role: 'user' | 'model';
   parts: GeminiPart[];
+};
+
+/** Gemini's tool declaration is a single `functionDeclarations` array
+ *  carrying every callable function — different shape from OpenAI's
+ *  per-tool wrapping. */
+type GeminiToolDeclaration = {
+  functionDeclarations: Array<{
+    name: string;
+    description: string;
+    parameters: Record<string, unknown>;
+  }>;
 };
 
 type GeminiResponse = {
@@ -60,10 +80,32 @@ type GeminiListModelsResponse = {
   }>;
 };
 
+/** Synthetic id Gemini calls don't have natural ids. We mint
+ *  `gemini_call_<n>` so the runtime's tool-loop can pair the result. */
+function synthCallId(counter: number): string {
+  return `gemini_call_${counter}`;
+}
+
 /**
- * Translate OpenAI-shaped messages into Gemini's `contents` array
- * plus a separate `systemInstruction`. Drops any non-text content
- * (Mantle's ChatOptions is text-only today; vision arrives later).
+ * Translate ChatOptions.messages → Gemini's `contents` + separate
+ * `systemInstruction`. Handles four transformations:
+ *
+ *   1. **System extraction** — `systemInstruction` is its own top-level
+ *      field, not part of `contents`.
+ *
+ *   2. **Role rename** — assistant → 'model' (Gemini's name for the
+ *      role) and tool → 'user' (Gemini doesn't have a 'tool' role; tool
+ *      results travel as user-role content with a functionResponse part).
+ *
+ *   3. **Assistant tool calls** → `parts: [functionCall: {name, args}]`.
+ *      Anthropic and OpenAI carry an id on each call; Gemini doesn't —
+ *      we mint synthetic ids on the way IN (extractGoogleToolCalls)
+ *      so the runtime can pair, and discard them on the way OUT
+ *      (functionResponse matches purely by name on the wire).
+ *
+ *   4. **Tool result** (`role:'tool'`) → user-role content with a
+ *      functionResponse part. The result's text body becomes
+ *      `response.result` (we wrap the string so the JSON parses).
  */
 function splitSystemAndContents(
   messages: ChatOptions['messages'],
@@ -73,22 +115,118 @@ function splitSystemAndContents(
 } {
   const sys: string[] = [];
   const contents: GeminiContent[] = [];
+  // Map runtime tool-call id → tool name so a subsequent tool message
+  // (which only carries the id) can resolve back to the name Gemini
+  // expects in functionResponse.
+  const toolCallNameById = new Map<string, string>();
+
   for (const m of messages) {
     if (m.role === 'system') {
-      sys.push(m.content);
-    } else {
+      const content = typeof m.content === 'string' ? m.content : '';
+      sys.push(content);
+      continue;
+    }
+    if (m.role === 'user') {
       contents.push({
-        // Gemini calls the assistant role 'model'. Anything other than
-        // user/assistant is treated as user — defensive default.
-        role: m.role === 'assistant' ? 'model' : 'user',
-        parts: [{ text: m.content }],
+        role: 'user',
+        parts: [{ text: typeof m.content === 'string' ? m.content : '' }],
+      });
+      continue;
+    }
+    if (m.role === 'tool') {
+      // Gemini's functionResponse needs the original tool name. If the
+      // tool-loop is calling us with a paired toolCallId, look it up.
+      // Falls back to the id itself when unknown (rare; means a tool
+      // message without a matching prior assistant tool_use call).
+      const name = toolCallNameById.get(m.toolCallId) ?? m.toolCallId;
+      // The response payload is the tool's JSON-serialised return value.
+      // Gemini wants a parsed object — wrap the string under a `result`
+      // key when the payload isn't a valid JSON object.
+      let parsedResponse: Record<string, unknown>;
+      try {
+        const obj = JSON.parse(m.content);
+        parsedResponse =
+          obj && typeof obj === 'object' && !Array.isArray(obj)
+            ? obj
+            : { result: m.content };
+      } catch {
+        parsedResponse = { result: m.content };
+      }
+      contents.push({
+        role: 'user',
+        parts: [{ functionResponse: { name, response: parsedResponse } }],
+      });
+      continue;
+    }
+    // assistant — may have content, toolCalls, or both
+    const parts: GeminiPart[] = [];
+    if (typeof m.content === 'string' && m.content.length > 0) {
+      parts.push({ text: m.content });
+    }
+    if ('toolCalls' in m && Array.isArray(m.toolCalls)) {
+      for (const tc of m.toolCalls) {
+        let args: Record<string, unknown>;
+        try {
+          const obj = JSON.parse(tc.function.arguments || '{}');
+          args = obj && typeof obj === 'object' && !Array.isArray(obj) ? obj : {};
+        } catch {
+          args = {};
+        }
+        parts.push({ functionCall: { name: tc.function.name, args } });
+        toolCallNameById.set(tc.id, tc.function.name);
+      }
+    }
+    if (parts.length === 0) {
+      // Empty assistant turn — Gemini rejects empty parts arrays. Send
+      // a single empty-text part to keep the turn structurally valid.
+      parts.push({ text: '' });
+    }
+    contents.push({ role: 'model', parts });
+  }
+  return {
+    ...(sys.length > 0
+      ? { systemInstruction: { parts: [{ text: sys.join('\n\n') }] } }
+      : {}),
+    contents,
+  };
+}
+
+/** Translate ChatOptions.tools → Gemini's functionDeclarations form. */
+function buildGoogleTools(opts: ChatOptions): GeminiToolDeclaration[] | undefined {
+  if (!opts.tools || opts.tools.length === 0) return undefined;
+  return [
+    {
+      functionDeclarations: opts.tools.map((t) => ({
+        name: t.function.name,
+        description: t.function.description,
+        parameters: t.function.parameters,
+      })),
+    },
+  ];
+}
+
+/** Walk parts[], surface every functionCall as a normalised ChatToolCall.
+ *  Mints synthetic ids since Gemini's functionCall has no id field. */
+function extractGoogleToolCalls(
+  parts: GeminiPart[] | undefined,
+): ChatToolCall[] | undefined {
+  if (!parts) return undefined;
+  const calls: ChatToolCall[] = [];
+  let counter = 0;
+  for (const p of parts) {
+    if ('functionCall' in p) {
+      counter += 1;
+      calls.push({
+        id: synthCallId(counter),
+        type: 'function',
+        function: {
+          name: p.functionCall.name,
+          arguments: JSON.stringify(p.functionCall.args ?? {}),
+        },
       });
     }
   }
-  return {
-    ...(sys.length > 0 ? { systemInstruction: { parts: [{ text: sys.join('\n\n') }] } } : {}),
-    contents,
-  };
+  return calls.length > 0 ? calls : undefined;
 }
 
 async function googleChat(opts: ChatOptions): Promise<ChatResult> {
@@ -104,9 +242,23 @@ async function googleChat(opts: ChatOptions): Promise<ChatResult> {
   if (typeof opts.maxTokens === 'number') generationConfig.maxOutputTokens = opts.maxTokens;
   if (typeof opts.topP === 'number') generationConfig.topP = opts.topP;
 
+  const tools = buildGoogleTools(opts);
+
+  // toolConfig.functionCallingConfig.mode:
+  //   - 'AUTO' (default) — model decides when to call
+  //   - 'NONE' — disables tool calling for this request
+  //   - 'ANY' — forces some tool (we don't expose this through the
+  //     'auto'/'none' contract). Map our 'auto'/'none' accordingly.
+  const toolConfig =
+    opts.toolChoice === 'none'
+      ? { functionCallingConfig: { mode: 'NONE' as const } }
+      : undefined;
+
   const body: Record<string, unknown> = {
     contents,
     ...(systemInstruction ? { systemInstruction } : {}),
+    ...(tools ? { tools } : {}),
+    ...(toolConfig ? { toolConfig } : {}),
     ...(Object.keys(generationConfig).length > 0 ? { generationConfig } : {}),
     ...(opts.extra ?? {}),
   };
@@ -128,13 +280,18 @@ async function googleChat(opts: ChatOptions): Promise<ChatResult> {
     throw new Error(`google chat ${res.status}: ${errBody.slice(0, 400)}`);
   }
   const parsed = (await res.json()) as GeminiResponse;
-  // Response shape: candidates[0].content.parts[].text. Concatenate
-  // all text parts in case the model returned multi-part output.
+  // Response shape: candidates[0].content.parts[]. Walk every part:
+  // text parts carry narrative; functionCall parts carry tool calls.
   const parts = parsed.candidates?.[0]?.content?.parts ?? [];
-  const text = parts.map((p) => p.text).filter(Boolean).join('');
+  const text = parts
+    .map((p) => ('text' in p ? p.text : ''))
+    .filter(Boolean)
+    .join('');
+  const toolCalls = extractGoogleToolCalls(parts);
   return {
     text: text.trim(),
     model: parsed.modelVersion || opts.model,
+    ...(toolCalls && toolCalls.length > 0 ? { toolCalls } : {}),
     tokensIn: parsed.usageMetadata?.promptTokenCount,
     tokensOut: parsed.usageMetadata?.candidatesTokenCount,
     cacheReadTokens: parsed.usageMetadata?.cachedContentTokenCount,

@@ -35,6 +35,7 @@ import type {
   ChatModelInfo,
   ChatOptions,
   ChatResult,
+  ChatToolCall,
 } from './types';
 import type { DiscoveryResult } from '../discover';
 import {
@@ -42,72 +43,151 @@ import {
   OPENROUTER_CHAT_MODELS,
 } from '../catalogs/openrouter';
 
-/** The SDK's `ChatMessage` union is wider than ours; we only emit the
- *  text-shaped subset. Either content is a plain string or a
- *  single-element array of one text block (with optional cache_control).
- *  Tool messages are out of scope for this adapter — the tool-loop
- *  builds them in its own grammar in 3b. */
+/** Text content block. Used for messages that need a cache_control
+ *  marker (the array form is required — markers hang off the block,
+ *  not the message). */
 type OrChatTextBlock = {
   type: 'text';
   text: string;
   cacheControl?: { type: 'ephemeral' };
 };
 
+/** Mirror of the OR SDK's chat message union, narrowed to what we
+ *  emit. The SDK accepts a wider shape (images, tool calls, etc.);
+ *  we only build the slice the runtime uses. */
 type OrChatMessage =
   | { role: 'system'; content: string | OrChatTextBlock[] }
   | { role: 'user'; content: string | OrChatTextBlock[] }
-  | { role: 'assistant'; content: string };
+  | {
+      role: 'assistant';
+      content: string | null;
+      toolCalls?: Array<{
+        id: string;
+        type: 'function';
+        function: { name: string; arguments: string };
+      }>;
+    }
+  | { role: 'tool'; toolCallId: string; content: string };
 
 /** Find the index of the final user-role message — the spot we attach
  *  the lastUserMessage cache marker to (when requested). */
 function lastUserIndex(messages: ChatOptions['messages']): number {
   for (let i = messages.length - 1; i >= 0; i -= 1) {
-    if (messages[i]!.role === 'user') return i;
+    const m = messages[i]!;
+    if (m.role === 'user') return i;
   }
   return -1;
 }
 
 /** Convert ChatOptions.messages → OR SDK message shape, applying
- *  cache_control markers when the caller asked for them. */
+ *  cache_control markers when the caller asked for them. Handles both
+ *  the simple shape (chat-shaped workers, 3a) and the wider tool-loop
+ *  shape (3b) carrying assistant.toolCalls and tool messages. */
 function buildMessages(
   messages: ChatOptions['messages'],
   cacheControl?: ChatCacheControl,
 ): OrChatMessage[] {
   const lastUser = cacheControl?.lastUserMessage ? lastUserIndex(messages) : -1;
-  return messages.map((m, idx) => {
+  return messages.map((m, idx): OrChatMessage => {
     if (m.role === 'system') {
+      const content = typeof m.content === 'string' ? m.content : '';
       if (cacheControl?.systemPrompt) {
         return {
           role: 'system',
           content: [
             {
               type: 'text',
-              text: m.content,
+              text: content,
               cacheControl: { type: 'ephemeral' },
             },
           ],
         };
       }
-      return { role: 'system', content: m.content };
+      return { role: 'system', content };
     }
     if (m.role === 'user') {
+      const content = typeof m.content === 'string' ? m.content : '';
       if (idx === lastUser) {
         return {
           role: 'user',
           content: [
             {
               type: 'text',
-              text: m.content,
+              text: content,
               cacheControl: { type: 'ephemeral' },
             },
           ],
         };
       }
-      return { role: 'user', content: m.content };
+      return { role: 'user', content };
     }
-    // assistant
-    return { role: 'assistant', content: m.content };
+    if (m.role === 'assistant') {
+      // Tool-loop shape: content may be null when the model only
+      // emitted toolCalls; toolCalls carry the function name + args
+      // we re-send to pair with the next round's tool results.
+      return {
+        role: 'assistant',
+        content: m.content as string | null,
+        ...('toolCalls' in m && m.toolCalls
+          ? { toolCalls: m.toolCalls.map((c) => ({ id: c.id, type: 'function', function: c.function })) }
+          : {}),
+      };
+    }
+    // m.role === 'tool' — only present from the tool-loop path.
+    return {
+      role: 'tool',
+      toolCallId: m.toolCallId,
+      content: m.content,
+    };
   });
+}
+
+/** Translate ChatOptions.tools (OpenAI-compat shape) → the OR SDK's
+ *  tools input. The SDK uses camelCase on its typed surface; the
+ *  outbound zod schema converts to snake_case on the wire. */
+function buildTools(opts: ChatOptions): Array<Record<string, unknown>> | undefined {
+  if (!opts.tools || opts.tools.length === 0) return undefined;
+  return opts.tools.map((t) => ({
+    type: 'function',
+    function: {
+      name: t.function.name,
+      description: t.function.description,
+      parameters: t.function.parameters,
+    },
+  }));
+}
+
+/** Pull normalised tool calls off the OR response. OR mirrors the OpenAI
+ *  shape — `choices[0].message.toolCalls` (camelCase on the SDK's
+ *  typed surface) or `tool_calls` (snake_case on the raw JSON). */
+function extractToolCalls(message: unknown): ChatToolCall[] | undefined {
+  if (!message || typeof message !== 'object') return undefined;
+  const calls =
+    (message as { toolCalls?: unknown }).toolCalls ??
+    (message as { tool_calls?: unknown }).tool_calls;
+  if (!Array.isArray(calls) || calls.length === 0) return undefined;
+  return calls
+    .map((c: unknown): ChatToolCall | null => {
+      if (!c || typeof c !== 'object') return null;
+      const id = (c as { id?: unknown }).id;
+      const fn = (c as { function?: unknown }).function;
+      if (typeof id !== 'string' || !fn || typeof fn !== 'object') return null;
+      const name = (fn as { name?: unknown }).name;
+      const args = (fn as { arguments?: unknown }).arguments;
+      if (typeof name !== 'string') return null;
+      return {
+        id,
+        type: 'function',
+        function: {
+          name,
+          // OR's typed shape returns arguments already as a JSON string;
+          // be defensive in case a route returns a parsed object.
+          arguments:
+            typeof args === 'string' ? args : JSON.stringify(args ?? {}),
+        },
+      };
+    })
+    .filter((c): c is ChatToolCall => c !== null);
 }
 
 /** Extract the reply text from the OR SDK's chat completion response.
@@ -147,6 +227,7 @@ async function openrouterChat(opts: ChatOptions): Promise<ChatResult> {
   });
 
   const messages = buildMessages(opts.messages, opts.cacheControl);
+  const tools = buildTools(opts);
 
   const result = await client.chat.send({
     chatRequest: {
@@ -154,6 +235,16 @@ async function openrouterChat(opts: ChatOptions): Promise<ChatResult> {
       messages: messages as unknown as Parameters<
         typeof client.chat.send
       >[0]['chatRequest']['messages'],
+      ...(tools
+        ? {
+            tools: tools as unknown as Parameters<
+              typeof client.chat.send
+            >[0]['chatRequest']['tools'],
+          }
+        : {}),
+      ...(opts.toolChoice
+        ? { toolChoice: opts.toolChoice as 'auto' | 'none' }
+        : {}),
       ...(typeof opts.temperature === 'number'
         ? { temperature: opts.temperature }
         : {}),
@@ -170,6 +261,7 @@ async function openrouterChat(opts: ChatOptions): Promise<ChatResult> {
 
   const choice = result.choices?.[0];
   const text = extractReplyText(choice?.message).trim();
+  const toolCalls = extractToolCalls(choice?.message);
   const usage = result.usage;
   // The SDK's `cost` field is a USD number when OR reports it (always
   // for routes where OR has direct billing visibility). We expose it
@@ -181,6 +273,7 @@ async function openrouterChat(opts: ChatOptions): Promise<ChatResult> {
   return {
     text,
     model: (result as { model?: string }).model || opts.model,
+    ...(toolCalls && toolCalls.length > 0 ? { toolCalls } : {}),
     tokensIn: usage?.promptTokens,
     tokensOut: usage?.completionTokens,
     cacheReadTokens: usage?.promptTokensDetails?.cachedTokens ?? undefined,

@@ -25,7 +25,6 @@
  *     delegation.
  */
 
-import { OpenRouter } from '@openrouter/sdk';
 import { and, eq } from 'drizzle-orm';
 import {
   db,
@@ -39,6 +38,7 @@ import { getApiKeyById } from '@mantle/api-keys';
 import { currentTrace, startTrace } from '@mantle/tracing';
 import type { AgentInvoker, InvokeAgentResult } from '@mantle/tools';
 import { MAX_AGENT_DEPTH } from '@mantle/tools';
+import { getChatAdapter } from '@mantle/voice';
 import { resolveAgentTools, runToolLoop } from './tool-loop';
 import { resolveAgentSkills, composeSystemPromptWithSkills, effectiveToolSlugs } from './skills';
 import type { ChatMessage } from './messages';
@@ -94,11 +94,17 @@ export const invokeAgent: AgentInvoker = async ({
     };
   }
 
-  const client = new OpenRouter({
-    apiKey,
-    httpReferer: 'https://mantle.crossworks.network',
-    appTitle: 'Mantle',
-  });
+  // Resolve the chat adapter for the child agent's provider. Same
+  // default-to-openrouter pattern as the responder until 3c adds the
+  // column to the agents table.
+  const childProvider = (target as { provider?: string }).provider ?? 'openrouter';
+  const childAdapter = getChatAdapter(childProvider);
+  if (!childAdapter) {
+    return {
+      ok: false,
+      error: `agent '${agentSlug}' provider '${childProvider}' has no registered chat adapter`,
+    };
+  }
 
   // Compose system prompt + tool allowlist exactly the same way the
   // entry-point flow does. The child gets full access to its own
@@ -139,7 +145,8 @@ export const invokeAgent: AgentInvoker = async ({
     },
     async () => {
       const result = await runToolLoop({
-        client,
+        adapter: childAdapter,
+        apiKey,
         model: target.model,
         params: (target.params ?? {}) as AgentParams,
         ownerId,

@@ -20,7 +20,6 @@
  */
 
 import postgres from 'postgres';
-import { OpenRouter } from '@openrouter/sdk';
 import { and, asc, desc, eq, gte, inArray, isNull, lt, ne, sql } from 'drizzle-orm';
 import {
   db,
@@ -41,6 +40,7 @@ import { ensureDatedUploadFolder, upsertFile } from '@mantle/files';
 import { getApiKey, getApiKeyById } from '@mantle/api-keys';
 import {
   composeAudioTagInstructions,
+  getChatAdapter,
   getSttAdapter,
   getTtsAdapter,
   stripAudioTags,
@@ -934,14 +934,22 @@ async function handleMessage(messageId: string): Promise<void> {
           },
         );
 
-        const client = new OpenRouter({
-          apiKey,
-          httpReferer: 'https://mantle.crossworks.network',
-          appTitle: 'Mantle',
-        });
+        // Resolve the chat adapter for this agent's provider. Today's
+        // schema has no `provider` column on agents (that's 3c) — default
+        // to 'openrouter' until 3c flips the schema + reads from the
+        // column. The Stage 2 form clamps already constrain operators
+        // to OR-shaped keys for agents, so this default is honest.
+        const agentProvider =
+          (agent as { provider?: string }).provider ?? 'openrouter';
+        const chatAdapter = getChatAdapter(agentProvider);
+        if (!chatAdapter) {
+          throw new Error(
+            `responder: no chat adapter registered for provider '${agentProvider}' (agent ${agent.slug})`,
+          );
+        }
 
         console.log(
-          `[agent] → ${row.fromName ?? 'unknown'} via ${agent.model} (${row.text.length}c, ${history.length} turns, ${digests.length} digests, ${relevantFacts.length} facts, ${contentHits.length} content)`,
+          `[agent] → ${row.fromName ?? 'unknown'} via ${chatAdapter.adapterName}:${agent.model} (${row.text.length}c, ${history.length} turns, ${digests.length} digests, ${relevantFacts.length} facts, ${contentHits.length} content)`,
         );
 
         // Resolve the agent's tool allowlist, unioned with every attached
@@ -975,7 +983,8 @@ async function handleMessage(messageId: string): Promise<void> {
         const allowedTools = await resolveAgentTools(USER_ID!, allowedToolSlugs);
 
         const loopOutcome = await runToolLoop({
-          client,
+          adapter: chatAdapter,
+          apiKey,
           model: agent.model,
           params: (agent.params ?? {}) as Record<string, never>,
           ownerId: USER_ID!,

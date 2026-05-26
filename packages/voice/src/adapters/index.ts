@@ -124,11 +124,16 @@ export {
 } from './registry';
 
 export {
+  type ChatAssistantMessage,
   type ChatCacheControl,
   type ChatDispatcher,
   type ChatModelInfo,
   type ChatOptions,
   type ChatResult,
+  type ChatToolCall,
+  type ChatToolDefinition,
+  type ChatToolLoopMessage,
+  type ChatToolMessage,
   type TtsDispatcher,
   type SttDispatcher,
   type VisionDispatcher,

@@ -20,15 +20,26 @@ import type {
   ChatModelInfo,
   ChatOptions,
   ChatResult,
+  ChatToolCall,
 } from './types';
 import type { DiscoveryResult } from '../discover';
 import { XAI_BASE_URL, XAI_CHAT_MODELS } from '../catalogs/xai';
+
+type XaiToolCall = {
+  id: string;
+  type: 'function';
+  function: { name: string; arguments: string };
+};
 
 type XaiChatResponse = {
   id: string;
   model: string;
   choices: Array<{
-    message?: { role: string; content?: string };
+    message?: {
+      role: string;
+      content?: string | null;
+      tool_calls?: XaiToolCall[];
+    };
     text?: string;
   }>;
   usage?: {
@@ -42,6 +53,49 @@ type XaiChatResponse = {
   };
 };
 
+/** xAI accepts OpenAI-shape messages. Tool messages use `tool_call_id`
+ *  on the wire (snake_case); the adapter converts our `toolCallId`. */
+type XaiMessage =
+  | { role: 'system' | 'user'; content: string }
+  | {
+      role: 'assistant';
+      content: string | null;
+      tool_calls?: XaiToolCall[];
+    }
+  | { role: 'tool'; tool_call_id: string; content: string };
+
+function toXaiMessages(messages: ChatOptions['messages']): XaiMessage[] {
+  return messages.map((m): XaiMessage => {
+    if (m.role === 'system' || m.role === 'user') {
+      return { role: m.role, content: typeof m.content === 'string' ? m.content : '' };
+    }
+    if (m.role === 'assistant') {
+      const tc = 'toolCalls' in m && m.toolCalls
+        ? m.toolCalls.map((c) => ({ id: c.id, type: 'function' as const, function: c.function }))
+        : undefined;
+      return {
+        role: 'assistant',
+        content: (m.content as string | null) ?? null,
+        ...(tc ? { tool_calls: tc } : {}),
+      };
+    }
+    // tool
+    return { role: 'tool', tool_call_id: m.toolCallId, content: m.content };
+  });
+}
+
+function extractXaiToolCalls(
+  message: XaiChatResponse['choices'][number]['message'],
+): ChatToolCall[] | undefined {
+  const tc = message?.tool_calls;
+  if (!tc || tc.length === 0) return undefined;
+  return tc.map((c) => ({
+    id: c.id,
+    type: 'function' as const,
+    function: { name: c.function.name, arguments: c.function.arguments ?? '{}' },
+  }));
+}
+
 type ListModelsResponse = {
   data?: Array<{ id: string }>;
 };
@@ -50,9 +104,13 @@ async function xaiChat(opts: ChatOptions): Promise<ChatResult> {
   if (!opts.apiKey) throw new Error('xai-chat: apiKey required');
   if (!opts.model) throw new Error('xai-chat: model required');
 
+  const tools = opts.tools && opts.tools.length > 0 ? opts.tools : undefined;
+
   const body: Record<string, unknown> = {
     model: opts.model,
-    messages: opts.messages,
+    messages: toXaiMessages(opts.messages),
+    ...(tools ? { tools } : {}),
+    ...(opts.toolChoice ? { tool_choice: opts.toolChoice } : {}),
     ...(typeof opts.temperature === 'number' ? { temperature: opts.temperature } : {}),
     ...(typeof opts.maxTokens === 'number' ? { max_tokens: opts.maxTokens } : {}),
     ...(typeof opts.topP === 'number' ? { top_p: opts.topP } : {}),
@@ -76,11 +134,13 @@ async function xaiChat(opts: ChatOptions): Promise<ChatResult> {
   // OpenAI-compat shape — text lives at choices[0].message.content,
   // with a fallback to legacy choices[0].text in case of unusual
   // response routing.
-  const text =
-    parsed.choices?.[0]?.message?.content ?? parsed.choices?.[0]?.text ?? '';
+  const message = parsed.choices?.[0]?.message;
+  const text = message?.content ?? parsed.choices?.[0]?.text ?? '';
+  const toolCalls = extractXaiToolCalls(message);
   return {
     text: text.trim(),
     model: parsed.model || opts.model,
+    ...(toolCalls && toolCalls.length > 0 ? { toolCalls } : {}),
     tokensIn: parsed.usage?.prompt_tokens,
     tokensOut: parsed.usage?.completion_tokens,
     cacheReadTokens: parsed.usage?.prompt_tokens_details?.cached_tokens,

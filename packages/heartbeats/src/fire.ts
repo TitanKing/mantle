@@ -20,7 +20,6 @@
  */
 
 import { and, eq } from 'drizzle-orm';
-import { OpenRouter } from '@openrouter/sdk';
 import {
   db,
   agents,
@@ -32,6 +31,7 @@ import {
 } from '@mantle/db';
 import { getApiKeyById } from '@mantle/api-keys';
 import { currentTrace, recordSkippedTrace, startTrace, step } from '@mantle/tracing';
+import { getChatAdapter } from '@mantle/voice';
 import { accountForChat, sendMessage } from '@mantle/telegram';
 import {
   composeSystemPromptWithSkills,
@@ -192,11 +192,13 @@ async function fireInner(
   const tools = await resolveAgentTools(hb.ownerId, [...allSlugs]);
 
   // 4. Run loop inside a trace + heartbeat context --------------
-  const client = new OpenRouter({
-    apiKey,
-    httpReferer: 'https://mantle.crossworks.network',
-    appTitle: 'Mantle',
-  });
+  const hbProvider = (agent as { provider?: string }).provider ?? 'openrouter';
+  const hbAdapter = getChatAdapter(hbProvider);
+  if (!hbAdapter) {
+    throw new Error(
+      `heartbeats/fire: no chat adapter registered for provider '${hbProvider}' (agent ${agent.slug})`,
+    );
+  }
 
   const userPrompt = buildHeartbeatPrompt({
     hb,
@@ -241,7 +243,8 @@ async function fireInner(
         openedTraceId = currentTrace()?.id ?? null;
         const result = await withHeartbeatContext({ heartbeatId: hb.id, slug: hb.slug, ownerId: hb.ownerId }, () =>
           runToolLoop({
-            client,
+            adapter: hbAdapter,
+            apiKey,
             model: agent.model,
             params: (agent.params ?? {}) as AgentParams,
             ownerId: hb.ownerId,

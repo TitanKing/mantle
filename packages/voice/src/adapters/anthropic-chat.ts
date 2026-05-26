@@ -27,6 +27,7 @@ import type {
   ChatModelInfo,
   ChatOptions,
   ChatResult,
+  ChatToolCall,
 } from './types';
 import type { DiscoveryResult } from '../discover';
 import {
@@ -35,18 +36,39 @@ import {
   ANTHROPIC_CHAT_MODELS,
 } from '../catalogs/anthropic';
 
-/** Anthropic content block. `string` content is the simple shape; the
+/** Anthropic content blocks. `string` content is the simple shape; the
  *  array form is required when any block needs a `cache_control` marker
- *  (since the cache marker hangs off the block, not the message). */
+ *  or when carrying tool_use / tool_result blocks. */
 type AnthropicTextBlock = {
   type: 'text';
   text: string;
   cache_control?: { type: 'ephemeral' };
 };
 
+type AnthropicToolUseBlock = {
+  type: 'tool_use';
+  id: string;
+  name: string;
+  input: Record<string, unknown>;
+};
+
+type AnthropicToolResultBlock = {
+  type: 'tool_result';
+  tool_use_id: string;
+  content: string;
+  /** Set on the tool result when our local handler errored — Claude
+   *  uses this to decide whether to retry vs. surface the failure. */
+  is_error?: boolean;
+};
+
+type AnthropicContentBlock =
+  | AnthropicTextBlock
+  | AnthropicToolUseBlock
+  | AnthropicToolResultBlock;
+
 type AnthropicMessage = {
   role: 'user' | 'assistant';
-  content: string | AnthropicTextBlock[];
+  content: string | AnthropicContentBlock[];
 };
 
 /** The top-level `system` field accepts either a plain string OR an
@@ -54,12 +76,28 @@ type AnthropicMessage = {
  *  carries a cache_control marker. */
 type AnthropicSystemField = string | AnthropicTextBlock[];
 
+/** Anthropic's tool declaration shape on the request. */
+type AnthropicTool = {
+  name: string;
+  description: string;
+  input_schema: Record<string, unknown>;
+};
+
 type AnthropicResponse = {
   id: string;
   type: 'message';
   role: 'assistant';
   model: string;
-  content: Array<{ type: 'text'; text: string } | { type: string }>;
+  /** Multi-block response. Text blocks carry narrative content;
+   *  tool_use blocks carry the model's tool-call requests. Both can
+   *  appear in the same response — text-then-tool-use is the typical
+   *  shape when the model says "I'll look this up" before calling. */
+  content: Array<
+    | { type: 'text'; text: string }
+    | { type: 'tool_use'; id: string; name: string; input: Record<string, unknown> }
+    | { type: string }
+  >;
+  stop_reason?: 'end_turn' | 'tool_use' | 'max_tokens' | string;
   usage?: {
     input_tokens?: number;
     output_tokens?: number;
@@ -85,26 +123,144 @@ type AnthropicListModelsResponse = {
 };
 
 /**
- * Pull the system message(s) out of an OpenAI-style messages array
- * and concatenate them into the single top-level string Anthropic
- * expects. Returns the remaining user/assistant turns.
+ * Translate ChatOptions.messages → Anthropic's request shape.
+ *
+ * Three transformations live here:
+ *
+ *   1. **System extraction.** System role → top-level `system` field
+ *      (Anthropic doesn't accept system as a message role). Multiple
+ *      systems are joined with blank-line separators.
+ *
+ *   2. **Assistant tool calls.** `{role:'assistant', toolCalls:[...]}` →
+ *      assistant message with tool_use blocks. The model's prior
+ *      tool_use blocks must be re-sent verbatim (with the same ids)
+ *      so the matching tool_result the next user turn carries pairs
+ *      correctly.
+ *
+ *   3. **Tool results.** `{role:'tool', toolCallId, content}` → user
+ *      message with a tool_result content block. Anthropic models tool
+ *      results as USER turns (not a separate tool role like OpenAI),
+ *      because conceptually the user is feeding tool output back to
+ *      the assistant. The runtime sees this as a `tool` message in
+ *      its own grammar; we translate at the boundary.
+ *
+ * The runtime emits tool messages in OpenAI ordering — assistant turn
+ * with multiple tool_calls, then one `tool` message per result. We
+ * collapse consecutive tool messages into a single user message with
+ * multiple tool_result blocks (Anthropic's preferred shape; sending
+ * separate user messages each carrying one tool_result also works but
+ * adds turn overhead).
  */
 function splitSystemAndMessages(
   messages: ChatOptions['messages'],
 ): { system: string; rest: AnthropicMessage[] } {
   const sys: string[] = [];
   const rest: AnthropicMessage[] = [];
+
+  // Collect consecutive `tool` messages so they coalesce into a single
+  // user turn (per the comment above).
+  let pendingToolResults: AnthropicToolResultBlock[] = [];
+  const flushToolResults = () => {
+    if (pendingToolResults.length === 0) return;
+    rest.push({ role: 'user', content: pendingToolResults });
+    pendingToolResults = [];
+  };
+
   for (const m of messages) {
     if (m.role === 'system') {
-      sys.push(m.content);
-    } else {
-      // Anthropic's `messages` array only takes user/assistant. If a
-      // caller somehow inserts another role, drop it rather than
-      // letting the API 400.
-      rest.push({ role: m.role as 'user' | 'assistant', content: m.content });
+      flushToolResults();
+      const content = typeof m.content === 'string' ? m.content : '';
+      sys.push(content);
+      continue;
     }
+    if (m.role === 'tool') {
+      pendingToolResults.push({
+        type: 'tool_result',
+        tool_use_id: m.toolCallId,
+        content: m.content,
+      });
+      continue;
+    }
+    flushToolResults();
+    if (m.role === 'user') {
+      rest.push({
+        role: 'user',
+        content: typeof m.content === 'string' ? m.content : '',
+      });
+      continue;
+    }
+    // assistant — may have content, toolCalls, or both
+    const hasToolCalls =
+      'toolCalls' in m && Array.isArray(m.toolCalls) && m.toolCalls.length > 0;
+    if (!hasToolCalls) {
+      rest.push({
+        role: 'assistant',
+        content: typeof m.content === 'string' ? m.content : '',
+      });
+      continue;
+    }
+    // Build a mixed content array: text block first (if any), then
+    // every tool_use block in original order. Empty text blocks are
+    // omitted — Anthropic rejects empty text content.
+    const blocks: AnthropicContentBlock[] = [];
+    if (typeof m.content === 'string' && m.content.length > 0) {
+      blocks.push({ type: 'text', text: m.content });
+    }
+    for (const tc of m.toolCalls ?? []) {
+      let parsedInput: Record<string, unknown>;
+      try {
+        const obj = JSON.parse(tc.function.arguments || '{}');
+        parsedInput =
+          obj && typeof obj === 'object' && !Array.isArray(obj) ? obj : {};
+      } catch {
+        // Anthropic requires `input` to be a parsed object. If the
+        // upstream caller's stringified args don't parse, send {} —
+        // the loop's `tool-args` parser will surface the error in
+        // the tool_result on the next round.
+        parsedInput = {};
+      }
+      blocks.push({
+        type: 'tool_use',
+        id: tc.id,
+        name: tc.function.name,
+        input: parsedInput,
+      });
+    }
+    rest.push({ role: 'assistant', content: blocks });
   }
+  flushToolResults();
   return { system: sys.join('\n\n'), rest };
+}
+
+/** Translate ChatOptions.tools → Anthropic's `tools` field shape. */
+function buildAnthropicTools(opts: ChatOptions): AnthropicTool[] | undefined {
+  if (!opts.tools || opts.tools.length === 0) return undefined;
+  return opts.tools.map((t) => ({
+    name: t.function.name,
+    description: t.function.description,
+    input_schema: t.function.parameters,
+  }));
+}
+
+/** Pull tool_use blocks off the Anthropic response and normalise. */
+function extractAnthropicToolCalls(
+  parsed: AnthropicResponse,
+): ChatToolCall[] | undefined {
+  const uses = parsed.content.filter(
+    (c): c is { type: 'tool_use'; id: string; name: string; input: Record<string, unknown> } =>
+      c.type === 'tool_use',
+  );
+  if (uses.length === 0) return undefined;
+  return uses.map((u) => ({
+    id: u.id,
+    type: 'function',
+    function: {
+      name: u.name,
+      // Stringify Anthropic's parsed `input` so the loop's single
+      // grammar holds.
+      arguments: JSON.stringify(u.input ?? {}),
+    },
+  }));
 }
 
 async function anthropicChat(opts: ChatOptions): Promise<ChatResult> {
@@ -122,24 +278,28 @@ async function anthropicChat(opts: ChatOptions): Promise<ChatResult> {
       ? [{ type: 'text', text: system, cache_control: { type: 'ephemeral' } }]
       : system
     : undefined;
+  const lastUserIdx = cacheControl?.lastUserMessage ? lastUserIndex(rest) : -1;
   const messagesField: AnthropicMessage[] = rest.map((m, idx) => {
-    const isLastUser =
-      cacheControl?.lastUserMessage &&
-      m.role === 'user' &&
-      // Find the last user message in the array. We mark only that one.
-      idx === lastUserIndex(rest);
-    if (!isLastUser) return m;
+    if (idx !== lastUserIdx) return m;
+    // The lastUser marker only attaches to a plain-string user message;
+    // a user message that's already a tool_result block array is left
+    // alone (cache_control on tool_result blocks isn't supported the
+    // same way, and tool-loop calls have their own cache shape via
+    // the system block).
+    if (typeof m.content !== 'string') return m;
     return {
       role: m.role,
       content: [
         {
           type: 'text',
-          text: typeof m.content === 'string' ? m.content : '',
+          text: m.content,
           cache_control: { type: 'ephemeral' },
         },
       ],
     };
   });
+
+  const tools = buildAnthropicTools(opts);
 
   const body: Record<string, unknown> = {
     model: opts.model,
@@ -148,10 +308,21 @@ async function anthropicChat(opts: ChatOptions): Promise<ChatResult> {
     // ceiling; callers override via opts.maxTokens.
     max_tokens: opts.maxTokens ?? 4096,
     ...(systemField !== undefined ? { system: systemField } : {}),
+    ...(tools ? { tools } : {}),
+    // Anthropic's tool_choice supports 'auto' (default) and 'any' (force
+    // some tool). We map our 'auto'/'none' carefully:
+    //   - 'auto' is the default → omit the field
+    //   - 'none' has no direct Anthropic equivalent → omit tools instead.
+    // The tool_choice translation needed here today is therefore none.
     ...(typeof opts.temperature === 'number' ? { temperature: opts.temperature } : {}),
     ...(typeof opts.topP === 'number' ? { top_p: opts.topP } : {}),
     ...(opts.extra ?? {}),
   };
+
+  // 'none' tool choice: drop the tools field so the model can't call.
+  if (opts.toolChoice === 'none' && tools) {
+    delete body.tools;
+  }
 
   const res = await fetch(`${ANTHROPIC_BASE_URL}/v1/messages`, {
     method: 'POST',
@@ -168,15 +339,18 @@ async function anthropicChat(opts: ChatOptions): Promise<ChatResult> {
     throw new Error(`anthropic chat ${res.status}: ${errBody.slice(0, 400)}`);
   }
   const parsed = (await res.json()) as AnthropicResponse;
-  // Response shape: content is an array of blocks; the first text
-  // block carries the reply. Other blocks may exist for tool use,
-  // which we ignore for the chat-only path.
-  const textBlock = parsed.content.find(
+  // Response shape: content is an array of blocks; collect every text
+  // block's text (the model can split narrative across multiple text
+  // blocks when tool_use blocks interleave).
+  const textBlocks = parsed.content.filter(
     (c): c is { type: 'text'; text: string } => c.type === 'text',
   );
+  const text = textBlocks.map((b) => b.text).join('');
+  const toolCalls = extractAnthropicToolCalls(parsed);
   return {
-    text: (textBlock?.text ?? '').trim(),
+    text: text.trim(),
     model: parsed.model || opts.model,
+    ...(toolCalls && toolCalls.length > 0 ? { toolCalls } : {}),
     tokensIn: parsed.usage?.input_tokens,
     tokensOut: parsed.usage?.output_tokens,
     cacheReadTokens: parsed.usage?.cache_read_input_tokens,

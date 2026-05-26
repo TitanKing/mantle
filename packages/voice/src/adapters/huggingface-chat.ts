@@ -31,6 +31,7 @@ import type {
   ChatModelInfo,
   ChatOptions,
   ChatResult,
+  ChatToolCall,
 } from './types';
 import type { DiscoveryResult } from '../discover';
 import {
@@ -40,10 +41,20 @@ import {
   type HuggingfaceRoutingPolicy,
 } from '../catalogs/huggingface';
 
+type HfToolCall = {
+  id: string;
+  type: 'function';
+  function: { name: string; arguments: string };
+};
+
 type HfChatResponse = {
   model: string;
   choices: Array<{
-    message?: { role: string; content?: string };
+    message?: {
+      role: string;
+      content?: string | null;
+      tool_calls?: HfToolCall[];
+    };
   }>;
   usage?: {
     prompt_tokens?: number;
@@ -54,6 +65,46 @@ type HfChatResponse = {
     prompt_tokens_details?: { cached_tokens?: number };
   };
 };
+
+type HfMessage =
+  | { role: 'system' | 'user'; content: string }
+  | {
+      role: 'assistant';
+      content: string | null;
+      tool_calls?: HfToolCall[];
+    }
+  | { role: 'tool'; tool_call_id: string; content: string };
+
+function toHfMessages(messages: ChatOptions['messages']): HfMessage[] {
+  return messages.map((m): HfMessage => {
+    if (m.role === 'system' || m.role === 'user') {
+      return { role: m.role, content: typeof m.content === 'string' ? m.content : '' };
+    }
+    if (m.role === 'assistant') {
+      const tc = 'toolCalls' in m && m.toolCalls
+        ? m.toolCalls.map((c) => ({ id: c.id, type: 'function' as const, function: c.function }))
+        : undefined;
+      return {
+        role: 'assistant',
+        content: (m.content as string | null) ?? null,
+        ...(tc ? { tool_calls: tc } : {}),
+      };
+    }
+    return { role: 'tool', tool_call_id: m.toolCallId, content: m.content };
+  });
+}
+
+function extractHfToolCalls(
+  message: HfChatResponse['choices'][number]['message'],
+): ChatToolCall[] | undefined {
+  const tc = message?.tool_calls;
+  if (!tc || tc.length === 0) return undefined;
+  return tc.map((c) => ({
+    id: c.id,
+    type: 'function' as const,
+    function: { name: c.function.name, arguments: c.function.arguments ?? '{}' },
+  }));
+}
 
 type HfListModelsResponse = {
   data?: Array<{ id: string }>;
@@ -86,9 +137,13 @@ async function hfChat(opts: ChatOptions): Promise<ChatResult> {
   const routing = (opts.extra?.routing as string | undefined) ?? undefined;
   const model = applyRoutingSuffix(opts.model, routing);
 
+  const tools = opts.tools && opts.tools.length > 0 ? opts.tools : undefined;
+
   const body: Record<string, unknown> = {
     model,
-    messages: opts.messages,
+    messages: toHfMessages(opts.messages),
+    ...(tools ? { tools } : {}),
+    ...(opts.toolChoice ? { tool_choice: opts.toolChoice } : {}),
     ...(typeof opts.temperature === 'number' ? { temperature: opts.temperature } : {}),
     ...(typeof opts.maxTokens === 'number' ? { max_tokens: opts.maxTokens } : {}),
     ...(typeof opts.topP === 'number' ? { top_p: opts.topP } : {}),
@@ -108,12 +163,15 @@ async function hfChat(opts: ChatOptions): Promise<ChatResult> {
     throw new Error(`huggingface chat ${res.status}: ${errBody.slice(0, 400)}`);
   }
   const parsed = (await res.json()) as HfChatResponse;
-  const text = parsed.choices?.[0]?.message?.content ?? '';
+  const message = parsed.choices?.[0]?.message;
+  const text = message?.content ?? '';
+  const toolCalls = extractHfToolCalls(message);
   return {
     text: text.trim(),
     // Echo the model HF says it actually served — useful for /traces
     // when :fastest routes to different sub-providers across runs.
     model: parsed.model || model,
+    ...(toolCalls && toolCalls.length > 0 ? { toolCalls } : {}),
     tokensIn: parsed.usage?.prompt_tokens,
     tokensOut: parsed.usage?.completion_tokens,
     cacheReadTokens: parsed.usage?.prompt_tokens_details?.cached_tokens,

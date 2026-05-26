@@ -1,5 +1,5 @@
 /**
- * Multi-turn tool-call loop. Wraps a single OpenRouter chat into an
+ * Multi-turn tool-call loop. Wraps a single chat-adapter call into an
  * iterative cycle:
  *
  *   1. send messages → assistant response
@@ -15,9 +15,16 @@
  * `step({kind: 'compute'})` so the reactflow visual shows the full
  * chain. Failures inside tool handlers don't kill the loop — they're
  * surfaced to the model as tool results so it can recover.
+ *
+ * Phase-3b note: dispatches through `getChatAdapter(provider).chat()`
+ * instead of constructing the OpenRouter SDK inline. The adapter
+ * normalises tool calls across providers (Anthropic tool_use blocks,
+ * Google functionCall parts, OpenAI tool_calls[]) into a single shape
+ * the loop iterates. cacheControl markers travel through ChatOptions
+ * so the system block + last-user breakpoints fire on cache-aware
+ * providers (Anthropic, OR-via-Anthropic).
  */
 
-import type { OpenRouter } from '@openrouter/sdk';
 import { currentTrace, step } from '@mantle/tracing';
 import {
   dispatchTool,
@@ -33,7 +40,13 @@ import {
 import { and, eq, sql } from 'drizzle-orm';
 import { db, pendingToolCalls, type Tool, type AgentParams } from '@mantle/db';
 import type { ToolArtifact } from '@mantle/tools';
-import { captureLlmUsage } from './llm-usage';
+import {
+  getChatAdapter,
+  type ChatDispatcher,
+  type ChatToolDefinition,
+  type ChatToolLoopMessage,
+} from '@mantle/voice';
+import { recordChatUsage } from './llm-usage';
 import type { ChatMessage } from './messages';
 import { parseToolArgs } from './tool-args';
 
@@ -76,7 +89,17 @@ export type ToolLoopResult = {
 };
 
 export type ToolLoopArgs = {
-  client: OpenRouter;
+  /** Pre-resolved chat adapter for the agent's provider. Callers
+   *  resolve via `getChatAdapter(agent.provider)` and pass it down —
+   *  pre-resolving (vs. looking up inside the loop) means a missing
+   *  adapter is caught at the call site with the agent context
+   *  available for the error message, not inside the loop's first
+   *  iteration. */
+  adapter: ChatDispatcher;
+  /** API key for the adapter's provider. Resolved by the caller from
+   *  the agent's apiKeyId (the agents table has the same apiKeyId
+   *  column the ai_workers table uses). */
+  apiKey: string;
   model: string;
   params: AgentParams;
   ownerId: string;
@@ -141,14 +164,13 @@ export async function resolveAgentTools(
 }
 
 /**
- * Convert resolved tools to the OpenRouter `tools` parameter shape.
+ * Convert resolved tools to the chat-adapter `tools` parameter shape.
  * The slug becomes the function name (no remapping at runtime —
- * keeps the model's tool_use names directly resolvable).
+ * keeps the model's tool_use names directly resolvable). Adapters
+ * translate this OpenAI-compat shape to their native form (Anthropic's
+ * `input_schema`, Google's `functionDeclarations`, etc.).
  */
-export function buildToolsForModel(tools: Tool[]): Array<{
-  type: 'function';
-  function: { name: string; description: string; parameters: Record<string, unknown> };
-}> {
+export function buildToolsForModel(tools: Tool[]): ChatToolDefinition[] {
   return tools.map((t) => ({
     type: 'function',
     function: {
@@ -187,41 +209,44 @@ export async function runToolLoop(args: ToolLoopArgs): Promise<ToolLoopResult> {
   for (let iter = 0; iter < maxIters; iter++) {
     const result = await step(
       {
-        name: iter === 0 ? 'openrouter_chat' : `openrouter_chat[${iter}]`,
+        name:
+          iter === 0
+            ? `${args.adapter.adapterName}_chat`
+            : `${args.adapter.adapterName}_chat[${iter}]`,
         kind: 'llm_call',
-        input: { model: args.model, iter, tools: toolsForModel.length },
+        input: {
+          model: args.model,
+          provider: args.adapter.providerId,
+          iter,
+          tools: toolsForModel.length,
+        },
       },
       async (h) => {
-        const r = await args.client.chat.send({
-          chatRequest: {
-            model: args.model,
-            // Cast: ChatMessage extends the SDK's union but the SDK's
-            // input zod is strict about the shape. We've matched it
-            // exactly above; the cast is just to silence TS.
-            messages: messages as unknown as Parameters<typeof args.client.chat.send>[0]['chatRequest']['messages'],
-            ...(sendTools ? { tools: toolsForModel as unknown as Parameters<typeof args.client.chat.send>[0]['chatRequest']['tools'] } : {}),
-            ...(typeof args.params.temperature === 'number' ? { temperature: args.params.temperature } : {}),
-            ...(typeof args.params.max_tokens === 'number' ? { maxTokens: args.params.max_tokens } : {}),
-            ...(typeof args.params.top_p === 'number' ? { topP: args.params.top_p } : {}),
-          },
+        const r = await args.adapter.chat({
+          apiKey: args.apiKey,
+          model: args.model,
+          messages: messages as unknown as ChatToolLoopMessage[],
+          ...(sendTools ? { tools: toolsForModel } : {}),
+          // Prompt-cache breakpoints: mark the system block (persona +
+          // skills stay turn-to-turn) and the most recent user message
+          // (re-sent context monotonically grows; pre-mark for next-turn
+          // cache hit). Adapters whose providers don't support cache
+          // markers ignore this — see ChatCacheControl docs.
+          cacheControl: { systemPrompt: true, lastUserMessage: true },
+          ...(typeof args.params.temperature === 'number' ? { temperature: args.params.temperature } : {}),
+          ...(typeof args.params.max_tokens === 'number' ? { maxTokens: args.params.max_tokens } : {}),
+          ...(typeof args.params.top_p === 'number' ? { topP: args.params.top_p } : {}),
         });
-        captureLlmUsage(h, r, args.model);
+        recordChatUsage(h, r, args.model);
         return r;
       },
     );
 
-    if (!('choices' in result)) {
-      throw new Error('tool_loop: unexpected streaming response');
-    }
-    const msg = result.choices[0]?.message;
-    const calls = (msg && 'toolCalls' in msg ? msg.toolCalls : undefined) as
-      | Array<{ id: string; type: 'function'; function: { name: string; arguments: string } }>
-      | undefined;
+    const calls = result.toolCalls;
 
     if (!calls || calls.length === 0) {
       // Final text response. Done.
-      const raw = msg && 'content' in msg ? msg.content : null;
-      const text = typeof raw === 'string' ? raw.trim() : '';
+      const text = result.text;
       messages.push({ role: 'assistant', content: text });
       return { reply: text, messages, iterations: iter + 1, toolCalls, pendingIds, artifacts };
     }
@@ -231,8 +256,7 @@ export async function runToolLoop(args: ToolLoopArgs): Promise<ToolLoopResult> {
     // pairing. content may be empty when the model only wanted to call.
     messages.push({
       role: 'assistant',
-      content:
-        msg && 'content' in msg && typeof msg.content === 'string' ? msg.content : null,
+      content: result.text || null,
       toolCalls: calls.map((c) => ({
         id: c.id,
         type: 'function',
@@ -428,28 +452,31 @@ export async function runToolLoop(args: ToolLoopArgs): Promise<ToolLoopResult> {
   // under maxIters.
   const finalResult = await step(
     {
-      name: 'openrouter_chat[force_final]',
+      name: `${args.adapter.adapterName}_chat[force_final]`,
       kind: 'llm_call',
-      input: { model: args.model, reason: 'max_iters_reached' },
+      input: {
+        model: args.model,
+        provider: args.adapter.providerId,
+        reason: 'max_iters_reached',
+      },
     },
     async (h) => {
-      const r = await args.client.chat.send({
-        chatRequest: {
-          model: args.model,
-          messages: messages as unknown as Parameters<typeof args.client.chat.send>[0]['chatRequest']['messages'],
-          // No tools on the final pass — force a text answer.
-        },
+      const r = await args.adapter.chat({
+        apiKey: args.apiKey,
+        model: args.model,
+        messages: messages as unknown as ChatToolLoopMessage[],
+        // toolChoice: 'none' explicitly disables tool calling for the
+        // final pass — force a text answer. Adapters whose providers
+        // don't honour 'none' fall back to dropping the tools field
+        // (Anthropic) or no-op (xAI/HF treat it as auto).
+        toolChoice: 'none',
+        cacheControl: { systemPrompt: true },
       });
-      captureLlmUsage(h, r, args.model);
+      recordChatUsage(h, r, args.model);
       return r;
     },
   );
-  if (!('choices' in finalResult)) {
-    throw new Error('tool_loop: unexpected streaming response on force_final');
-  }
-  const lastMsg = finalResult.choices[0]?.message;
-  const raw = lastMsg && 'content' in lastMsg ? lastMsg.content : null;
-  const text = typeof raw === 'string' ? raw.trim() : '';
+  const text = finalResult.text;
   messages.push({ role: 'assistant', content: text });
   return { reply: text, messages, iterations: maxIters + 1, toolCalls, pendingIds, artifacts };
 }

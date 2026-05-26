@@ -23,8 +23,8 @@
 import { and, asc, eq, sql } from 'drizzle-orm';
 import { db, nodes, telegramMessages, getDefaultWorker } from '@mantle/db';
 import { getApiKeyById } from '@mantle/api-keys';
-import { buildChatMessages } from '@mantle/agent-runtime';
-import { OpenRouter } from '@openrouter/sdk';
+import { buildChatMessages, flattenChatMessagesForAdapter } from '@mantle/agent-runtime';
+import { getChatAdapter } from '@mantle/voice';
 
 const OWNER_ID = process.env.ALLOWED_USER_ID;
 
@@ -34,12 +34,8 @@ Write a single factual summary of the whole transcript in 3-6 sentences (no head
 
 Output ONLY the summary text — no preamble, no JSON, no markdown.`;
 
-function summaryText(result: unknown): string {
-  if (!result || typeof result !== 'object' || !('choices' in result)) return '';
-  const choices = (result as { choices?: Array<{ message?: { content?: unknown } }> }).choices;
-  const content = choices?.[0]?.message?.content;
-  return typeof content === 'string' ? content.trim() : '';
-}
+// (summaryText helper retired with the OpenRouter SDK direct call —
+//  the typed ChatResult now carries `text` directly.)
 
 async function main() {
   const dryRun = process.argv.includes('--dry-run');
@@ -58,11 +54,13 @@ async function main() {
     console.error(`regenerate-digests: api_key_id ${worker.apiKeyId} not decryptable`);
     process.exit(1);
   }
-  const client = new OpenRouter({
-    apiKey,
-    httpReferer: 'https://mantle.crossworks.network',
-    appTitle: 'Mantle',
-  });
+  const adapter = getChatAdapter(worker.provider);
+  if (!adapter) {
+    console.error(
+      `regenerate-digests: no chat adapter for provider '${worker.provider}'`,
+    );
+    process.exit(1);
+  }
 
   // Corrupted digests = conversation-digest notes with no data.content.
   const digests = await db
@@ -123,8 +121,12 @@ async function main() {
       history: [],
       newUserText: transcript,
     });
-    const result = await client.chat.send({ chatRequest: { model: worker.model, messages } });
-    const summary = summaryText(result);
+    const result = await adapter.chat({
+      apiKey,
+      model: worker.model,
+      messages: flattenChatMessagesForAdapter(messages),
+    });
+    const summary = result.text.trim();
     if (!summary) {
       console.warn(`  · ${d.title} — LLM returned empty summary (skipped)`);
       skipped++;

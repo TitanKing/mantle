@@ -20,7 +20,6 @@
  * 'assistant_turn' trace kind in a follow-up if cost/visibility matters.
  */
 
-import { OpenRouter } from '@openrouter/sdk';
 import { and, desc, eq, inArray, isNull, lt, ne, or, sql } from 'drizzle-orm';
 import {
   db,
@@ -52,7 +51,7 @@ import {
   type UserImage,
 } from '@mantle/agent-runtime';
 import { registerAgentInvoker, type ToolArtifact } from '@mantle/tools';
-import { stripAudioTags } from '@mantle/voice';
+import { getChatAdapter, stripAudioTags } from '@mantle/voice';
 import { buildTimeContextLine, loadProfilePreferences } from '@mantle/content';
 import {
   buildOpenHeartbeatContext,
@@ -432,11 +431,16 @@ export async function runAssistantTurn(
       userImage: image,
     });
 
-  const client = new OpenRouter({
-    apiKey,
-    httpReferer: 'https://mantle.crossworks.network',
-    appTitle: 'Mantle',
-  });
+  // Resolve the chat adapter for this agent's provider. Default to
+  // 'openrouter' until 3c flips the agents schema. Stage 2 form clamps
+  // currently constrain operators to OR-shaped keys for agents.
+  const assistantProvider = (agent as { provider?: string }).provider ?? 'openrouter';
+  const assistantAdapter = getChatAdapter(assistantProvider);
+  if (!assistantAdapter) {
+    throw new Error(
+      `web/assistant: no chat adapter registered for provider '${assistantProvider}' (agent ${agent.slug})`,
+    );
+  }
 
   const params = (agent.params ?? {}) as AgentParams;
   // Resolve the agent's tool allowlist, unioned with every attached
@@ -489,7 +493,8 @@ export async function runAssistantTurn(
       },
       async () =>
         runToolLoop({
-          client,
+          adapter: assistantAdapter,
+          apiKey,
           model: agent.model,
           params,
           ownerId,
