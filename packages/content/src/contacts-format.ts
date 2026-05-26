@@ -121,6 +121,24 @@ export function isPlausibleEmail(s: string): boolean {
   return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(e);
 }
 
+/**
+ * A contact has a usable identity when at least one of name, last name, or
+ * company is set. Email/cell alone aren't enough — they're contact channels,
+ * not identities. Used by the save-side validation in `updateContact` and by
+ * the client form to pre-check before fetch. Pure + exported.
+ */
+export function hasIdentity(input: {
+  firstName?: string;
+  lastName?: string;
+  company?: string;
+}): boolean {
+  return Boolean(
+    (input.firstName ?? '').trim() ||
+      (input.lastName ?? '').trim() ||
+      (input.company ?? '').trim(),
+  );
+}
+
 /** Derive the title shown for a contact, in precedence order:
  *   1. Person name ("First Last") — the most specific identifier when set.
  *   2. Company / organisation name — for supplier/org contacts with no person.

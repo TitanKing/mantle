@@ -9,6 +9,7 @@ export {
   deleteContact,
   digitsOnly,
   formatCell,
+  hasIdentity,
   normalizeCountryCode,
   normalizeEmail,
   isPlausibleEmail,

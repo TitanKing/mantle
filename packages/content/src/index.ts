@@ -132,6 +132,7 @@ export {
   digitsOnly,
   deriveContactTitle,
   formatCell,
+  hasIdentity,
   isPlausibleEmail,
   normalizeCountryCode,
   normalizeEmail,

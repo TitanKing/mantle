@@ -3,6 +3,7 @@ import {
   deriveContactTitle,
   digitsOnly,
   formatCell,
+  hasIdentity,
   isPlausibleEmail,
   normalizeCountryCode,
   normalizeEmail,
@@ -74,6 +75,28 @@ describe('isPlausibleEmail', () => {
   });
   it.each(['', 'no-at', 'no@dot', '@no-local.com', 'spaces in@x.com'])('rejects %p', (bad) => {
     expect(isPlausibleEmail(bad)).toBe(false);
+  });
+});
+
+describe('hasIdentity', () => {
+  it('accepts a first name alone', () => {
+    expect(hasIdentity({ firstName: 'Jane' })).toBe(true);
+  });
+  it('accepts a last name alone', () => {
+    expect(hasIdentity({ lastName: 'Smith' })).toBe(true);
+  });
+  it('accepts a company alone (org/supplier contact)', () => {
+    expect(hasIdentity({ company: 'Modular' })).toBe(true);
+  });
+  it('rejects an entirely empty input (e.g. a blank draft on save)', () => {
+    expect(hasIdentity({})).toBe(false);
+    expect(hasIdentity({ firstName: '', lastName: '', company: '' })).toBe(false);
+    // Email/cell alone do NOT satisfy — they're channels, not identities.
+    // (No properties on the input type for them, but if extra keys leak in
+    // the function only inspects the three identity slots.)
+  });
+  it('treats whitespace-only as empty', () => {
+    expect(hasIdentity({ firstName: '   ', company: '\t\n' })).toBe(false);
   });
 });
 

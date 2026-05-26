@@ -21,6 +21,7 @@ import {
   deriveContactTitle,
   digitsOnly,
   formatCell,
+  hasIdentity,
   isPlausibleEmail,
   normalizeCountryCode,
   normalizeEmail,
@@ -43,6 +44,7 @@ export {
   deriveContactTitle,
   digitsOnly,
   formatCell,
+  hasIdentity,
   isPlausibleEmail,
   normalizeCountryCode,
   normalizeEmail,
@@ -383,6 +385,14 @@ export async function updateContact(
       input.description ?? (typeof oldData.description === 'string' ? oldData.description : ''),
   };
   const fields = normalizeContactInput(merged);
+
+  // Save-time validation: a real contact needs at least one identifying field.
+  // Email/cell alone aren't enough — they're channels, not identities. (The
+  // CREATE path stays permissive so the `+` button can still spawn a blank
+  // draft; the user is required to fill in identity on first save.)
+  if (!hasIdentity(fields)) {
+    throw new Error('A contact needs at least a first name, last name, or company.');
+  }
 
   // Did any extractor-visible field change? If so the prior summary/embedding
   // is stale — clear them so the re-extract on UPDATE writes a fresh pass.

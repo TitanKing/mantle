@@ -33,6 +33,7 @@ import { useListNav } from '@/lib/use-list-nav';
 // browser. The DB-using server code keeps using @/lib/contacts as before.
 import {
   formatCell,
+  hasIdentity,
   normalizeCountryCode,
   type ContactRow,
 } from '@mantle/content/contacts-format';
@@ -211,6 +212,14 @@ function ContactForm({ contact }: { contact: ContactRow }) {
   const cellPreview = useMemo(() => formatCell(countryCode, cell), [countryCode, cell]);
 
   const onSave = () => {
+    // Client-side identity check — mirrors the server-side guard in
+    // updateContact, so the user gets immediate feedback instead of a
+    // round-trip + a generic error. The server still enforces it; this is
+    // just a UX shortcut.
+    if (!hasIdentity({ firstName, lastName, company })) {
+      toast.error('Add a first name, last name, or company before saving.');
+      return;
+    }
     start(async () => {
       const res = await fetch(`/api/contacts/${contact.id}`, {
         method: 'PATCH',

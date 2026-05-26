@@ -2,16 +2,20 @@ import { cn } from '@/lib/utils';
 
 /**
  * Theme categorical palette (chart-1..5). Full literal class strings so the
- * Tailwind scanner emits them. Tinted background + same-hue text + soft
- * border reads cleanly in both light and dark themes, and recolors with
- * whatever theme is active.
+ * Tailwind scanner emits them.
+ *
+ * **Text colour: `text-foreground`, NOT `text-chart-N`.** The earlier same-hue
+ * approach (text + bg both pulled from `chart-N`) read as ghost text on many
+ * themes — chart tokens are calibrated for fills, not for legible text on a
+ * tinted version of themselves. Using the regular foreground guarantees
+ * contrast, while the colored border + bg tint still encode the tag's identity.
  */
 const TAG_COLORS = [
-  'border-chart-1/30 bg-chart-1/15 text-chart-1',
-  'border-chart-2/30 bg-chart-2/15 text-chart-2',
-  'border-chart-3/30 bg-chart-3/15 text-chart-3',
-  'border-chart-4/30 bg-chart-4/15 text-chart-4',
-  'border-chart-5/30 bg-chart-5/15 text-chart-5',
+  'border-chart-1/50 bg-chart-1/20 text-foreground',
+  'border-chart-2/50 bg-chart-2/20 text-foreground',
+  'border-chart-3/50 bg-chart-3/20 text-foreground',
+  'border-chart-4/50 bg-chart-4/20 text-foreground',
+  'border-chart-5/50 bg-chart-5/20 text-foreground',
 ];
 
 /** Deterministic color class for a tag — the same tag always maps to the
