@@ -59,6 +59,9 @@ const KIND_META: Record<AiWorkerKind, { label: string; description: string }> = 
   },
 };
 
+// Note: this is a plain string[] (not a Record key set), so TS doesn't
+// enforce exhaustiveness. When a new kind lands in the enum, ADD IT HERE
+// or it'll be silently absent from the sidebar list.
 const KIND_ORDER: AiWorkerKind[] = [
   'tts',
   'stt',
@@ -66,6 +69,7 @@ const KIND_ORDER: AiWorkerKind[] = [
   'extractor',
   'summarizer',
   'reflector',
+  'embedding',
   'image_gen',
 ];
 
