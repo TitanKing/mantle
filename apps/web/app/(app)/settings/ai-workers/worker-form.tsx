@@ -41,6 +41,8 @@ import {
   audioTagsForGoogleTtsModel,
   audioTagsForXaiTtsModel,
   wrappingTagsForXaiTtsModel,
+  getProvider,
+  isProviderId,
   isProviderWired,
   providersForCapability,
   voicesForModel,
@@ -219,6 +221,18 @@ export function WorkerForm({ mode, kind, worker, keys, action, enabled, isDefaul
   const capability = CAPABILITY_FOR_KIND[kind]!;
   const eligibleProviders = providersForCapability(capability);
   const selectedProvider = eligibleProviders.find((p) => p.id === provider);
+
+  // Filter the api-key dropdown to keys whose provider can do this
+  // worker's capability — picking an Anthropic key for a TTS worker is
+  // nonsense and surfacing it in the picker just creates a mistake to
+  // make. Falls back to the full key list when the eligible-provider
+  // list is empty (defensive — shouldn't happen given §10 of the test
+  // suite locks every kind in).
+  const eligibleProviderIds = new Set(eligibleProviders.map((p) => p.id as string));
+  const eligibleKeys =
+    eligibleProviderIds.size > 0
+      ? keys.filter((k) => eligibleProviderIds.has(k.service))
+      : keys;
 
   // Reactive model catalogue. For tts/stt/chat-shaped kinds we hit
   // the adapter's discoverModels when the api_key is selected; for
@@ -469,25 +483,45 @@ export function WorkerForm({ mode, kind, worker, keys, action, enabled, isDefaul
             name="apiKeyId"
             value={apiKeyId}
             onChange={(e) => {
-              setApiKeyId(e.target.value);
-              void refreshDiscovery(e.target.value);
+              const newKeyId = e.target.value;
+              setApiKeyId(newKeyId);
+              // Auto-derive the provider from the picked key's service.
+              // Picking an OpenAI key while provider='anthropic' was the
+              // common cause of "discovery failed, key invalid" errors —
+              // a mismatch the form can fix for the operator. We only
+              // override if the key's service matches a provider that
+              // actually supports this kind's capability (defensive
+              // against a stale or hand-edited DB row).
+              const picked = newKeyId ? keys.find((k) => k.id === newKeyId) : null;
+              if (picked && isProviderId(picked.service)) {
+                const p = getProvider(picked.service);
+                if (p && p.capabilities.includes(capability)) {
+                  setProvider(picked.service);
+                  void refreshDiscovery(newKeyId, picked.service);
+                  return;
+                }
+              }
+              void refreshDiscovery(newKeyId);
             }}
             className="flex h-9 w-full rounded-md border border-input bg-transparent px-3 py-1 text-sm shadow-sm"
           >
             <option value="">— none —</option>
-            {keys.map((k) => (
+            {eligibleKeys.map((k) => (
               <option key={k.id} value={k.id}>
                 {k.service}/{k.label} ({k.masked})
               </option>
             ))}
           </select>
-          <p className="text-xs text-muted-foreground">
-            {kind === 'embedding'
-              ? 'Pick your OpenRouter key — embedding requests at runtime route through it. Discovery itself is keyless.'
-              : supportsDiscovery
-              ? 'Selecting a key queries OpenAI to show only models this key can use.'
-              : 'Pick a key whose service matches the provider.'}
-          </p>
+          <KeyValidityHint
+            kind={kind}
+            capability={capability}
+            apiKeyId={apiKeyId}
+            supportsDiscovery={supportsDiscovery}
+            discovery={discovery}
+            keysAvailable={keys.length > 0}
+            eligibleKeysAvailable={eligibleKeys.length > 0}
+            eligibleProviderLabels={eligibleProviders.map((p) => p.label)}
+          />
         </div>
 
         <div className="grid grid-cols-2 gap-4">
@@ -730,6 +764,123 @@ export function WorkerForm({ mode, kind, worker, keys, action, enabled, isDefaul
         </Button>
       </div>
     </form>
+  );
+}
+
+/**
+ * Live key-validity indicator under the api-key dropdown. Reads the same
+ * `discovery` state the model picker uses, but elevates the signal next
+ * to the input that caused it — so an operator who picks the wrong key
+ * sees the problem there, not buried under a model picker they'll never
+ * scroll to.
+ *
+ * Five states in priority order (first matching one renders):
+ *   1. no key picked → "no key" guidance
+ *   2. no eligible keys exist at all → "go add one for {capability}"
+ *   3. discovery in flight → "validating…"
+ *   4. discovery succeeded with empty available list → "key has no access"
+ *   5. discovery errored → "could not verify (error)"
+ *   6. discovery succeeded with N models → "✓ N models discovered"
+ *
+ * Embedding skips discovery (keyless catalog), so it has its own line.
+ */
+function KeyValidityHint({
+  kind,
+  capability,
+  apiKeyId,
+  supportsDiscovery,
+  discovery,
+  keysAvailable,
+  eligibleKeysAvailable,
+  eligibleProviderLabels,
+}: {
+  kind: AiWorkerKind;
+  capability: ProviderCapability;
+  apiKeyId: string;
+  supportsDiscovery: boolean;
+  discovery: {
+    available: ReadonlyArray<unknown>;
+    filtered: boolean;
+    error: string | null;
+    loading: boolean;
+  };
+  keysAvailable: boolean;
+  eligibleKeysAvailable: boolean;
+  eligibleProviderLabels: ReadonlyArray<string>;
+}) {
+  // Embedding's discovery is keyless — the key only matters at runtime.
+  if (kind === 'embedding') {
+    return (
+      <p className="text-xs text-muted-foreground">
+        Pick your OpenRouter key — embedding requests at runtime route through
+        it. Discovery itself is keyless.
+      </p>
+    );
+  }
+
+  if (keysAvailable && !eligibleKeysAvailable) {
+    return (
+      <p className="text-xs text-amber-600 dark:text-amber-400">
+        None of your saved keys can do <code>{capability}</code>. Add one for:{' '}
+        {eligibleProviderLabels.join(' · ')} at{' '}
+        <a href="/settings/keys" className="underline">
+          /settings/keys
+        </a>
+        .
+      </p>
+    );
+  }
+
+  if (!apiKeyId) {
+    return (
+      <p className="text-xs text-muted-foreground">
+        {supportsDiscovery
+          ? 'Picking a key auto-selects its provider and queries it to show only models this key can use.'
+          : 'Picking a key auto-selects its provider.'}
+      </p>
+    );
+  }
+
+  if (!supportsDiscovery) {
+    return (
+      <p className="text-xs text-muted-foreground">
+        Provider doesn't expose a model-list endpoint — type the model id by hand
+        below.
+      </p>
+    );
+  }
+
+  if (discovery.loading) {
+    return (
+      <p className="text-xs text-muted-foreground">Validating key against provider…</p>
+    );
+  }
+
+  if (discovery.filtered && discovery.available.length === 0) {
+    return (
+      <p className="text-xs text-destructive">
+        ⚠ This key has no access to any <code>{capability}</code> models. Check
+        the key's scope/project at the provider.
+      </p>
+    );
+  }
+
+  if (discovery.error) {
+    return (
+      <p className="text-xs text-amber-600 dark:text-amber-400">
+        ⚠ Couldn't verify key with provider ({discovery.error}). Showing the
+        provider's full static catalogue — model calls may still fail if the
+        key doesn't have access.
+      </p>
+    );
+  }
+
+  return (
+    <p className="text-xs text-emerald-700 dark:text-emerald-400">
+      ✓ Key valid · {discovery.available.length} model
+      {discovery.available.length === 1 ? '' : 's'} discovered for{' '}
+      <code>{capability}</code>.
+    </p>
   );
 }
 
