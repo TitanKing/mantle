@@ -826,6 +826,9 @@ importers:
       '@mantle/api-keys':
         specifier: workspace:*
         version: link:../api-keys
+      '@openrouter/sdk':
+        specifier: ^0.12.35
+        version: 0.12.35
     devDependencies:
       '@types/node':
         specifier: ^22.10.5

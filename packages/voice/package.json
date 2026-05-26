@@ -12,7 +12,8 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
-    "@mantle/api-keys": "workspace:*"
+    "@mantle/api-keys": "workspace:*",
+    "@openrouter/sdk": "^0.12.35"
   },
   "devDependencies": {
     "@types/node": "^22.10.5",

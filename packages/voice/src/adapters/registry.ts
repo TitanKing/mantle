@@ -186,15 +186,15 @@ export function isProviderWired(
     case 'image_gen':
       return IMAGE_GEN.has(providerId as ProviderId);
     case 'chat':
-      // Chat is wired if EITHER a chat adapter is registered for this
-      // provider, OR we're talking about openrouter/openai (the
-      // legacy direct-SDK path that the responder/extractor/etc. use
-      // today). New providers must register an adapter — that's how
-      // xAI Grok and Hugging Face become wired.
+      // Chat is wired if a chat adapter is registered for this
+      // provider. OpenRouter has its own adapter now (closes the
+      // pre-Phase-3 special case where OR was the only chat provider
+      // without an adapter file). The 'openai' carve-out stays because
+      // there's no direct openai-chat adapter — OpenAI chat is reached
+      // via OpenRouter today and probably forever (OR's OpenAI route
+      // is identical pricing + adds failover).
       return (
-        CHAT.has(providerId as ProviderId) ||
-        providerId === 'openrouter' ||
-        providerId === 'openai'
+        CHAT.has(providerId as ProviderId) || providerId === 'openai'
       );
     case 'embedding':
       // As of Stage 1 of the embedding adapter framework, every

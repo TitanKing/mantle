@@ -30,6 +30,7 @@ import { xaiChatAdapter } from './xai-chat';
 import { huggingfaceChatAdapter } from './huggingface-chat';
 import { anthropicChatAdapter } from './anthropic-chat';
 import { googleChatAdapter } from './google-chat';
+import { openrouterChatAdapter } from './openrouter-chat';
 import { googleTtsAdapter } from './google-tts';
 import { googleSttAdapter } from './google-stt';
 import { xaiTtsAdapter } from './xai-tts';
@@ -68,6 +69,7 @@ registerChatAdapter(xaiChatAdapter);
 registerChatAdapter(huggingfaceChatAdapter);
 registerChatAdapter(anthropicChatAdapter);
 registerChatAdapter(googleChatAdapter);
+registerChatAdapter(openrouterChatAdapter);
 registerVisionAdapter(openAiVisionAdapter);
 registerVisionAdapter(anthropicVisionAdapter);
 registerVisionAdapter(googleVisionAdapter);
@@ -122,6 +124,7 @@ export {
 } from './registry';
 
 export {
+  type ChatCacheControl,
   type ChatDispatcher,
   type ChatModelInfo,
   type ChatOptions,
@@ -169,6 +172,7 @@ export {
 } from './huggingface-chat';
 export { anthropicChatAdapter } from './anthropic-chat';
 export { googleChatAdapter } from './google-chat';
+export { openrouterChatAdapter } from './openrouter-chat';
 export { googleTtsAdapter } from './google-tts';
 export { xaiTtsAdapter } from './xai-tts';
 export { elevenLabsTtsAdapter } from './elevenlabs-tts';
@@ -207,6 +211,10 @@ export {
   ANTHROPIC_BASE_URL,
   ANTHROPIC_API_VERSION,
 } from '../catalogs/anthropic';
+export {
+  OPENROUTER_CHAT_MODELS,
+  OPENROUTER_BASE_URL,
+} from '../catalogs/openrouter';
 export {
   GOOGLE_CHAT_MODELS,
   GOOGLE_BASE_URL,

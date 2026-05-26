@@ -17,12 +17,14 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   HUGGINGFACE_CHAT_MODELS,
+  OPENROUTER_CHAT_MODELS,
   XAI_CHAT_MODELS,
   anthropicChatAdapter,
   getChatAdapter,
   huggingfaceChatAdapter,
   isProviderWired,
   listChatAdapters,
+  openrouterChatAdapter,
   xaiChatAdapter,
 } from './index';
 import { applyRoutingSuffix } from './huggingface-chat';
@@ -40,6 +42,13 @@ describe('chat adapter self-registration', () => {
     expect(a).not.toBeNull();
     expect(a?.adapterName).toBe('huggingface-chat');
     expect(a).toBe(huggingfaceChatAdapter);
+  });
+
+  it('registers openrouter-chat on import', () => {
+    const a = getChatAdapter('openrouter');
+    expect(a).not.toBeNull();
+    expect(a?.adapterName).toBe('openrouter-chat');
+    expect(a).toBe(openrouterChatAdapter);
   });
 
   it('lists at least two chat adapters', () => {
@@ -123,12 +132,20 @@ describe('isProviderWired for chat', () => {
     expect(isProviderWired('huggingface', 'chat')).toBe(true);
   });
 
-  it('still returns true for openrouter+chat (legacy direct-SDK path)', () => {
-    // OpenRouter chat doesn't go through the adapter registry; it's
-    // called inline via the OpenRouter SDK in the agent runtime.
-    // Treated as wired by convention so the UI doesn't show the
-    // amber warning for the workers that use OpenRouter today.
+  it('returns true for openrouter+chat (adapter registered, no longer the special case)', () => {
+    // OpenRouter chat now flows through the adapter registry like
+    // every other provider — see openrouter-chat.ts. The legacy
+    // direct-SDK carve-out in registry.ts went away with Pre-work B
+    // of the Phase 3 push.
     expect(isProviderWired('openrouter', 'chat')).toBe(true);
+  });
+
+  it('returns true for openai+chat (carve-out — OpenAI is reached via OpenRouter)', () => {
+    // No direct openai-chat adapter exists; OpenAI chat is reached
+    // through the OpenRouter aggregator. The carve-out keeps the
+    // provider eligible in the form dropdown for the workers whose
+    // service key happens to be 'openai' (i.e. an OR-via-OpenAI route).
+    expect(isProviderWired('openai', 'chat')).toBe(true);
   });
 
   it('returns false for unknown chat providers', () => {
@@ -255,6 +272,29 @@ describe('anthropic-chat cache_control translation', () => {
     expect(result.tokensOut).toBe(20);
     expect(result.cacheReadTokens).toBe(800);
     expect(result.cacheWriteTokens).toBe(50);
+  });
+});
+
+describe('openrouter catalog', () => {
+  it('includes anthropic/claude-sonnet-4.6 (responder default)', () => {
+    expect(
+      OPENROUTER_CHAT_MODELS.some((m) => m.id === 'anthropic/claude-sonnet-4.6'),
+    ).toBe(true);
+  });
+
+  it('includes a mix of headline providers (anthropic + openai + google + xai)', () => {
+    const ids = OPENROUTER_CHAT_MODELS.map((m) => m.id);
+    expect(ids.some((id) => id.startsWith('anthropic/'))).toBe(true);
+    expect(ids.some((id) => id.startsWith('openai/'))).toBe(true);
+    expect(ids.some((id) => id.startsWith('google/'))).toBe(true);
+    expect(ids.some((id) => id.startsWith('x-ai/'))).toBe(true);
+  });
+
+  it('every entry has label + description', () => {
+    for (const m of OPENROUTER_CHAT_MODELS) {
+      expect(m.label.length, `${m.id}.label`).toBeGreaterThan(0);
+      expect(m.description.length, `${m.id}.description`).toBeGreaterThan(10);
+    }
   });
 });
 
