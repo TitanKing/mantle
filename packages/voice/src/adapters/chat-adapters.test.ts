@@ -14,10 +14,11 @@
  *      the UI can render before discovery completes.
  */
 
-import { describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   HUGGINGFACE_CHAT_MODELS,
   XAI_CHAT_MODELS,
+  anthropicChatAdapter,
   getChatAdapter,
   huggingfaceChatAdapter,
   isProviderWired,
@@ -142,5 +143,146 @@ describe('staticCatalog hook', () => {
 
   it('huggingface adapter exposes its catalog through the hook', () => {
     expect(huggingfaceChatAdapter.staticCatalog?.()).toBe(HUGGINGFACE_CHAT_MODELS);
+  });
+});
+
+// ─── cache_control flow + usage round-trip ─────────────────────────────────
+//
+// These mock fetch and verify the body Anthropic actually sees + the
+// ChatResult round-trip carries cache_read / cache_write counts through.
+// Distinct from the integration tests in catch-all suites — these lock
+// down the translation logic that has the most provider-specific bite.
+
+function mockAnthropicFetch(body: Record<string, unknown>) {
+  return vi.fn(async () => ({
+    ok: true,
+    json: async () => body,
+  })) as unknown as typeof fetch;
+}
+
+describe('anthropic-chat cache_control translation', () => {
+  const realFetch = globalThis.fetch;
+  beforeEach(() => {
+    // Each test installs its own mock — the global swap here just
+    // ensures restoration even on test bailout.
+  });
+  afterEach(() => {
+    globalThis.fetch = realFetch;
+  });
+
+  it('keeps system as a plain string when no cacheControl is set', async () => {
+    const calls: Array<{ url: string; body: string }> = [];
+    globalThis.fetch = (async (url: string, init?: RequestInit) => {
+      calls.push({ url, body: String(init?.body ?? '') });
+      return { ok: true, json: async () => ({ content: [{ type: 'text', text: 'ok' }], model: 'claude-haiku-4-5', usage: {} }) };
+    }) as unknown as typeof fetch;
+    await anthropicChatAdapter.chat({
+      apiKey: 'sk-test',
+      model: 'claude-haiku-4-5',
+      messages: [
+        { role: 'system', content: 'you are saskia' },
+        { role: 'user', content: 'hi' },
+      ],
+    });
+    const sent = JSON.parse(calls[0]!.body);
+    expect(sent.system).toBe('you are saskia');
+  });
+
+  it('wraps system in a content-block array with cache_control when cacheControl.systemPrompt is set', async () => {
+    const calls: Array<{ body: string }> = [];
+    globalThis.fetch = (async (_url: string, init?: RequestInit) => {
+      calls.push({ body: String(init?.body ?? '') });
+      return { ok: true, json: async () => ({ content: [{ type: 'text', text: 'ok' }], model: 'claude-haiku-4-5', usage: {} }) };
+    }) as unknown as typeof fetch;
+    await anthropicChatAdapter.chat({
+      apiKey: 'sk-test',
+      model: 'claude-haiku-4-5',
+      messages: [
+        { role: 'system', content: 'you are saskia' },
+        { role: 'user', content: 'hi' },
+      ],
+      cacheControl: { systemPrompt: true },
+    });
+    const sent = JSON.parse(calls[0]!.body);
+    expect(sent.system).toEqual([
+      { type: 'text', text: 'you are saskia', cache_control: { type: 'ephemeral' } },
+    ]);
+  });
+
+  it('marks only the LAST user message when cacheControl.lastUserMessage is set', async () => {
+    const calls: Array<{ body: string }> = [];
+    globalThis.fetch = (async (_url: string, init?: RequestInit) => {
+      calls.push({ body: String(init?.body ?? '') });
+      return { ok: true, json: async () => ({ content: [{ type: 'text', text: 'ok' }], model: 'claude-haiku-4-5', usage: {} }) };
+    }) as unknown as typeof fetch;
+    await anthropicChatAdapter.chat({
+      apiKey: 'sk-test',
+      model: 'claude-haiku-4-5',
+      messages: [
+        { role: 'user', content: 'first' },
+        { role: 'assistant', content: 'reply' },
+        { role: 'user', content: 'second' },
+      ],
+      cacheControl: { lastUserMessage: true },
+    });
+    const sent = JSON.parse(calls[0]!.body);
+    // First user message stays a plain string; last user is wrapped.
+    expect(sent.messages[0]).toEqual({ role: 'user', content: 'first' });
+    expect(sent.messages[1]).toEqual({ role: 'assistant', content: 'reply' });
+    expect(sent.messages[2]).toEqual({
+      role: 'user',
+      content: [{ type: 'text', text: 'second', cache_control: { type: 'ephemeral' } }],
+    });
+  });
+
+  it('round-trips cache_read_input_tokens and cache_creation_input_tokens onto ChatResult', async () => {
+    globalThis.fetch = mockAnthropicFetch({
+      content: [{ type: 'text', text: 'hello' }],
+      model: 'claude-haiku-4-5',
+      usage: {
+        input_tokens: 100,
+        output_tokens: 20,
+        cache_read_input_tokens: 800,
+        cache_creation_input_tokens: 50,
+      },
+    });
+    const result = await anthropicChatAdapter.chat({
+      apiKey: 'sk-test',
+      model: 'claude-haiku-4-5',
+      messages: [{ role: 'user', content: 'hi' }],
+    });
+    expect(result.tokensIn).toBe(100);
+    expect(result.tokensOut).toBe(20);
+    expect(result.cacheReadTokens).toBe(800);
+    expect(result.cacheWriteTokens).toBe(50);
+  });
+});
+
+describe('xai-chat usage round-trip', () => {
+  const realFetch = globalThis.fetch;
+  afterEach(() => {
+    globalThis.fetch = realFetch;
+  });
+
+  it('surfaces prompt_tokens_details.cached_tokens as cacheReadTokens', async () => {
+    globalThis.fetch = (async () => ({
+      ok: true,
+      json: async () => ({
+        model: 'grok-4.3',
+        choices: [{ message: { role: 'assistant', content: 'hi' } }],
+        usage: {
+          prompt_tokens: 200,
+          completion_tokens: 10,
+          prompt_tokens_details: { cached_tokens: 150 },
+        },
+      }),
+    })) as unknown as typeof fetch;
+    const result = await xaiChatAdapter.chat({
+      apiKey: 'xai-test',
+      model: 'grok-4.3',
+      messages: [{ role: 'user', content: 'hi' }],
+    });
+    expect(result.cacheReadTokens).toBe(150);
+    expect(result.cacheWriteTokens).toBeUndefined();
   });
 });

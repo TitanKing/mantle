@@ -149,12 +149,61 @@ export interface ChatModelInfo {
 }
 
 /** Result of a chat completion. Mirrors the OpenAI shape since every
- *  adapter we're likely to write speaks that dialect. */
+ *  adapter we're likely to write speaks that dialect.
+ *
+ *  Cache + cost fields are optional because not every provider reports
+ *  them. The runtime treats `undefined` as "this provider doesn't tell
+ *  us" and falls back to the static price table for cost; cache fields
+ *  stay zero in the trace. Adapters MUST populate `tokensIn`/`tokensOut`
+ *  when the provider returns them (every chat API in the catalogue does)
+ *  so the trace's token + fallback-cost numbers stay accurate. */
 export interface ChatResult {
   text: string;
   model: string;
   tokensIn?: number;
   tokensOut?: number;
+  /** Tokens served from the provider's prompt cache, billed at the
+   *  reduced cache-read rate. Anthropic returns this as
+   *  `cache_read_input_tokens`; OpenAI as `prompt_tokens_details.cached_tokens`;
+   *  Google as `usageMetadata.cachedContentTokenCount`; OpenRouter
+   *  aliases all of the above as `cache_read_input_tokens` /
+   *  `cached_tokens`. The trace records this separately from
+   *  `tokensIn` so the cost dashboard can show the actual cache-read
+   *  savings on the responder path. */
+  cacheReadTokens?: number;
+  /** Tokens *written* into the provider's prompt cache, billed at the
+   *  cache-write rate (Anthropic charges ~1.25× input for these). Only
+   *  Anthropic surfaces this distinctly (`cache_creation_input_tokens`);
+   *  every other provider folds it into `tokensIn`. */
+  cacheWriteTokens?: number;
+  /** Provider-reported USD cost for the call, in dollars (not micro-USD).
+   *  Currently only OpenRouter populates this via `usage.cost` — and it
+   *  matters because OR rolls in vendor surcharges that the static price
+   *  table doesn't know about (e.g. Perplexity's per-search fee). Direct
+   *  providers return `undefined` here; the trace falls back to
+   *  `fallbackCostMicroUsd(model, ...)`. */
+  reportedCostUsd?: number;
+}
+
+/** Prompt-cache hints for the adapter. Anthropic and (less aggressively)
+ *  OpenAI bill cached input at a fraction of the fresh rate when the
+ *  caller marks cache breakpoints. The runtime tells the adapter where
+ *  the breakpoints should land via this struct; adapters that talk to
+ *  providers without prompt caching ignore the field entirely.
+ *
+ *  Two breakpoint kinds matter today:
+ *   - **systemPrompt** — mark the system block as cacheable. This is the
+ *     dominant cost-saving on the responder path: the persona + skills
+ *     block doesn't change turn-to-turn, so caching it pays back from
+ *     the second call onward.
+ *   - **lastUserMessage** — mark the most recent user message as a
+ *     cache write point. Useful for the tool-loop pattern where the
+ *     re-sent conversation history grows monotonically; marking the
+ *     prior turn's last user msg makes the next call read it back as
+ *     a cache hit. */
+export interface ChatCacheControl {
+  systemPrompt?: boolean;
+  lastUserMessage?: boolean;
 }
 
 export interface ChatOptions {
@@ -170,6 +219,9 @@ export interface ChatOptions {
   temperature?: number;
   maxTokens?: number;
   topP?: number;
+  /** Provider-neutral prompt-cache hints. See {@link ChatCacheControl}.
+   *  Adapters that don't talk to a cache-aware provider ignore this. */
+  cacheControl?: ChatCacheControl;
   /** Optional provider-specific overrides — adapter chooses what to honour.
    *  Used for things like xAI's `reasoning_effort` or HF's `:fastest`
    *  routing suffix. */

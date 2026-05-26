@@ -48,6 +48,10 @@ type HfChatResponse = {
   usage?: {
     prompt_tokens?: number;
     completion_tokens?: number;
+    /** Some HF sub-providers (Cerebras, Together) surface OpenAI-style
+     *  cached_tokens. The HF router itself doesn't standardise it, so
+     *  it may be undefined for any given route. */
+    prompt_tokens_details?: { cached_tokens?: number };
   };
 };
 
@@ -112,6 +116,8 @@ async function hfChat(opts: ChatOptions): Promise<ChatResult> {
     model: parsed.model || model,
     tokensIn: parsed.usage?.prompt_tokens,
     tokensOut: parsed.usage?.completion_tokens,
+    cacheReadTokens: parsed.usage?.prompt_tokens_details?.cached_tokens,
+    // HF doesn't expose a cache-write line item; leave cacheWriteTokens undefined.
   };
 }
 

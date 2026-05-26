@@ -34,6 +34,11 @@ type XaiChatResponse = {
   usage?: {
     prompt_tokens?: number;
     completion_tokens?: number;
+    /** xAI's automatic prompt caching surfaces hits via the OpenAI-
+     *  compatible `prompt_tokens_details.cached_tokens` field. No
+     *  cache_control markers needed — Grok applies caching server-side
+     *  based on prefix match. */
+    prompt_tokens_details?: { cached_tokens?: number };
   };
 };
 
@@ -78,6 +83,8 @@ async function xaiChat(opts: ChatOptions): Promise<ChatResult> {
     model: parsed.model || opts.model,
     tokensIn: parsed.usage?.prompt_tokens,
     tokensOut: parsed.usage?.completion_tokens,
+    cacheReadTokens: parsed.usage?.prompt_tokens_details?.cached_tokens,
+    // xAI has no cache-write line item — automatic caching is opaque.
   };
 }
 

@@ -35,10 +35,24 @@ import {
   ANTHROPIC_CHAT_MODELS,
 } from '../catalogs/anthropic';
 
+/** Anthropic content block. `string` content is the simple shape; the
+ *  array form is required when any block needs a `cache_control` marker
+ *  (since the cache marker hangs off the block, not the message). */
+type AnthropicTextBlock = {
+  type: 'text';
+  text: string;
+  cache_control?: { type: 'ephemeral' };
+};
+
 type AnthropicMessage = {
   role: 'user' | 'assistant';
-  content: string;
+  content: string | AnthropicTextBlock[];
 };
+
+/** The top-level `system` field accepts either a plain string OR an
+ *  array of text blocks. Block form is required when the system prompt
+ *  carries a cache_control marker. */
+type AnthropicSystemField = string | AnthropicTextBlock[];
 
 type AnthropicResponse = {
   id: string;
@@ -49,6 +63,15 @@ type AnthropicResponse = {
   usage?: {
     input_tokens?: number;
     output_tokens?: number;
+    /** Tokens served from the prompt cache, billed at ~10% of the
+     *  fresh-input rate. Present when cache_control breakpoints land
+     *  on a re-sent prefix. */
+    cache_read_input_tokens?: number;
+    /** Tokens written *into* the cache on this call, billed at ~1.25× of
+     *  the fresh-input rate. The first call after a cache_control marker
+     *  pays this; subsequent calls within the 5-minute TTL pay
+     *  cache_read instead. */
+    cache_creation_input_tokens?: number;
   };
 };
 
@@ -90,13 +113,41 @@ async function anthropicChat(opts: ChatOptions): Promise<ChatResult> {
 
   const { system, rest } = splitSystemAndMessages(opts.messages);
 
+  // Apply cache_control markers. Anthropic enforces a hard cap of 4
+  // breakpoints per request — we only ever set 2 (system + last user
+  // message) so we're well under, but worth knowing if this grows.
+  const cacheControl = opts.cacheControl;
+  const systemField: AnthropicSystemField | undefined = system
+    ? cacheControl?.systemPrompt
+      ? [{ type: 'text', text: system, cache_control: { type: 'ephemeral' } }]
+      : system
+    : undefined;
+  const messagesField: AnthropicMessage[] = rest.map((m, idx) => {
+    const isLastUser =
+      cacheControl?.lastUserMessage &&
+      m.role === 'user' &&
+      // Find the last user message in the array. We mark only that one.
+      idx === lastUserIndex(rest);
+    if (!isLastUser) return m;
+    return {
+      role: m.role,
+      content: [
+        {
+          type: 'text',
+          text: typeof m.content === 'string' ? m.content : '',
+          cache_control: { type: 'ephemeral' },
+        },
+      ],
+    };
+  });
+
   const body: Record<string, unknown> = {
     model: opts.model,
-    messages: rest,
+    messages: messagesField,
     // max_tokens is REQUIRED on the Messages API. Default to a sane
     // ceiling; callers override via opts.maxTokens.
     max_tokens: opts.maxTokens ?? 4096,
-    ...(system ? { system } : {}),
+    ...(systemField !== undefined ? { system: systemField } : {}),
     ...(typeof opts.temperature === 'number' ? { temperature: opts.temperature } : {}),
     ...(typeof opts.topP === 'number' ? { top_p: opts.topP } : {}),
     ...(opts.extra ?? {}),
@@ -128,7 +179,16 @@ async function anthropicChat(opts: ChatOptions): Promise<ChatResult> {
     model: parsed.model || opts.model,
     tokensIn: parsed.usage?.input_tokens,
     tokensOut: parsed.usage?.output_tokens,
+    cacheReadTokens: parsed.usage?.cache_read_input_tokens,
+    cacheWriteTokens: parsed.usage?.cache_creation_input_tokens,
   };
+}
+
+function lastUserIndex(messages: AnthropicMessage[]): number {
+  for (let i = messages.length - 1; i >= 0; i -= 1) {
+    if (messages[i]!.role === 'user') return i;
+  }
+  return -1;
 }
 
 async function anthropicDiscover(

@@ -42,6 +42,12 @@ type GeminiResponse = {
   usageMetadata?: {
     promptTokenCount?: number;
     candidatesTokenCount?: number;
+    /** Gemini 2.5+ models do implicit prompt caching automatically.
+     *  When the request's prefix matches a previous call's prefix
+     *  (within the 1-hour TTL), the cached portion is billed at ~25%
+     *  of the fresh-input rate and surfaces here. Explicit cache API
+     *  (cachedContents) would also populate this. */
+    cachedContentTokenCount?: number;
   };
   modelVersion?: string;
 };
@@ -131,6 +137,10 @@ async function googleChat(opts: ChatOptions): Promise<ChatResult> {
     model: parsed.modelVersion || opts.model,
     tokensIn: parsed.usageMetadata?.promptTokenCount,
     tokensOut: parsed.usageMetadata?.candidatesTokenCount,
+    cacheReadTokens: parsed.usageMetadata?.cachedContentTokenCount,
+    // Gemini has no cache-write line item — implicit caching is
+    // automatic and free to populate; explicit caching has its own
+    // pricing line we don't surface today.
   };
 }
 
