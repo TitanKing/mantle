@@ -26,8 +26,7 @@ import {
   parseDocumentBytes,
   transcodeImageForVision,
   INGESTABLE_EXTS,
-  TEXT_EXTS,
-  TIKA_EXTS,
+  parserRouteForExt,
 } from '@mantle/files';
 import { DEFAULT_VISION_DESCRIBE_PROMPT, getVisionAdapter } from '@mantle/voice';
 import { fallbackCostMicroUsd, recordStepUsage, step } from '@mantle/tracing';
@@ -189,13 +188,7 @@ export async function extractAttachmentForTurn(opts: {
       // parser tiers visible in /traces on conversational attachments — same
       // diagnostic value as the durable path: parser=tika+chars_out=0 means
       // "Tika is down" vs "doc really has no text" without spelunking logs.
-      const route =
-        ext === 'pdf' ? 'pdf-parse'
-        : ext === 'docx' ? 'mammoth'
-        : ext === 'xlsx' || ext === 'xls' ? 'sheetjs'
-        : TEXT_EXTS.has(ext) ? 'utf8'
-        : TIKA_EXTS.has(ext) ? 'tika'
-        : 'none';
+      const route = parserRouteForExt(ext);
       const raw = (
         await step(
           {

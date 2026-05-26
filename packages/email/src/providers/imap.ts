@@ -91,13 +91,29 @@ async function connect(account: EmailAccount): Promise<ImapFlow> {
   return client;
 }
 
+/**
+ * Canonicalise an RFC 5322 Message-ID header value for cross-folder dedup
+ * (the `(account_id, rfc_message_id)` partial unique index, migration 0045).
+ *
+ * IMAP envelopes typically return the Message-ID wrapped in angle brackets —
+ * `<abc123@gmail.com>` — but some servers strip them and others don't. We
+ * strip both forms unconditionally so the stored value is consistent across
+ * the long tail of IMAP server quirks. Returns `undefined` for empty / null
+ * / brackets-only input (no Message-ID we can dedup on).
+ */
+export function normalizeRfcMessageId(raw: string | null | undefined): string | undefined {
+  if (raw == null) return undefined;
+  const stripped = raw.replace(/^\s*<|>\s*$/g, '').trim();
+  return stripped.length > 0 ? stripped : undefined;
+}
+
 function encodeMsgId(folder: string, uidvalidity: number, uid: number): string {
   // folders can contain `:` (e.g. nested IMAP folders). Encode that.
   const safeFolder = folder.replace(/\\/g, '\\\\').replace(/:/g, '\\:');
   return `${safeFolder}:${uidvalidity}:${uid}`;
 }
 
-function decodeMsgId(providerMsgId: string): { folder: string; uidvalidity: number; uid: number } {
+export function decodeMsgId(providerMsgId: string): { folder: string; uidvalidity: number; uid: number } {
   // Split from the right so escaped colons in the folder are preserved.
   const m = providerMsgId.match(/^(.+):(\d+):(\d+)$/);
   if (!m) throw new Error(`bad IMAP providerMsgId: ${providerMsgId}`);
@@ -155,12 +171,9 @@ function normalizeHeader(
   const attachments = extractAttachmentRefs(msg.bodyStructure, providerMsgId);
 
   // Cross-folder dedup key. Envelope.messageId is the RFC 5322 Message-ID
-  // header (per RFC 3501 envelope); typically wrapped in angle brackets like
-  // `<abc123@gmail.com>`. Strip them so the stored value is canonical and
-  // matches what other tooling stores. Same value across every folder.
-  const rfcMessageId = env.messageId
-    ? env.messageId.replace(/^\s*<|>\s*$/g, '').trim() || undefined
-    : undefined;
+  // header (per RFC 3501 envelope); see normalizeRfcMessageId for the
+  // canonicalisation rules.
+  const rfcMessageId = normalizeRfcMessageId(env.messageId);
 
   // Merge IMAP system flags (\Seen, \Answered, \Flagged) AND Gmail labels
   // (\Inbox, \Sent, \Important, custom labels like "Family") when the server

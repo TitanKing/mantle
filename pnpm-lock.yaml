@@ -580,6 +580,12 @@ importers:
       '@types/sanitize-html':
         specifier: ^2.13.0
         version: 2.16.1
+      postgres:
+        specifier: ^3.4.9
+        version: 3.4.9
+      tsx:
+        specifier: ^4.21.0
+        version: 4.21.0
       typescript:
         specifier: ^5.7.2
         version: 5.9.3

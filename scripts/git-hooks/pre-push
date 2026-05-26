@@ -1,0 +1,32 @@
+#!/usr/bin/env bash
+# Pre-push gate: run the same typecheck + tests CI would, so a typecheck
+# regression or a broken test can't slip past `git push`. Catches the class
+# of "merged to main, then noticed" issues we hit during the May-2026 tika
+# rollout — TIKA_EXTS not re-exported from the barrel, etc.
+#
+# Activate once per clone:
+#
+#     git config core.hooksPath scripts/git-hooks
+#
+# (kept under scripts/ so it's versioned + survives fresh worktrees, unlike
+# the default ungrabable .git/hooks/ location.)
+#
+# Skip in an emergency: `git push --no-verify` (don't make a habit of it).
+
+set -euo pipefail
+
+# Resolve repo root regardless of where the hook fires from. core.hooksPath
+# is relative to the repo root, so this is robust.
+ROOT="$(git rev-parse --show-toplevel)"
+cd "$ROOT"
+
+echo "── pre-push: typecheck + tests ──────────────────────────────────────"
+
+if ! pnpm verify; then
+  echo
+  echo "✘ pre-push: pnpm verify failed — fix above before pushing."
+  echo "  (or push with --no-verify if you have a good reason)"
+  exit 1
+fi
+
+echo "✓ pre-push: clean"

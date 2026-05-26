@@ -53,7 +53,7 @@ import {
 } from '@mantle/db';
 import { getApiKeyById } from '@mantle/api-keys';
 import { embed } from '@mantle/embeddings';
-import { diskPathForFile, extOf, mimeForExt, parseDocumentBytes, INGESTABLE_EXTS, TEXT_EXTS, TIKA_EXTS } from '@mantle/files';
+import { diskPathForFile, extOf, mimeForExt, parseDocumentBytes, INGESTABLE_EXTS, parserRouteForExt } from '@mantle/files';
 import { currentTrace, recordSkippedTrace, startTrace, step } from '@mantle/tracing';
 import { captureLlmUsage, runVisionWorker } from '@mantle/agent-runtime';
 import { chunkDocText, mentionRefs } from '@mantle/content';
@@ -274,13 +274,7 @@ async function readNodeBodyRaw(node: typeof nodes.$inferSelect): Promise<string>
         // since it's an HTTP call with its own failure modes (service down,
         // timeout, unparseable bytes — all swallowed to '' by design); the
         // step makes Tika invisible→visible without changing behaviour.
-        const route =
-          ext === 'pdf' ? 'pdf-parse'
-          : ext === 'docx' ? 'mammoth'
-          : ext === 'xlsx' || ext === 'xls' ? 'sheetjs'
-          : TEXT_EXTS.has(ext) ? 'utf8'
-          : TIKA_EXTS.has(ext) ? 'tika'
-          : 'none';
+        const route = parserRouteForExt(ext);
         const text = await step(
           {
             name: 'parse_document',

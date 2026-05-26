@@ -11,7 +11,8 @@
     "./sync": "./src/sync.ts"
   },
   "scripts": {
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "backfill:rfc-msg-id": "tsx --env-file-if-exists=../../apps/web/.env.local src/backfill-rfc-message-id.ts"
   },
   "dependencies": {
     "@mantle/crypto": "workspace:*",
@@ -29,6 +30,8 @@
     "@types/node": "^22.10.5",
     "@types/nodemailer": "^6.4.17",
     "@types/sanitize-html": "^2.13.0",
+    "postgres": "^3.4.9",
+    "tsx": "^4.21.0",
     "typescript": "^5.7.2"
   }
 }

@@ -99,6 +99,22 @@ export const INGESTABLE_EXTS = new Set<string>([
   ...TIKA_EXTS,
 ]);
 
+/** Which parser tier handles a given file extension. Mirrors the dispatch
+ *  in {@link parseDocumentBytes} and is used by the `parse_document` trace
+ *  step's `parser` meta — pulled out as a pure helper so both call sites
+ *  (extractor + live conversational attachment) read from one source and
+ *  the routing is unit-testable. `none` = no parser will try this ext (the
+ *  caller will fall through to title fallback / `no_text_layer` skip). */
+export type ParserRoute = 'pdf-parse' | 'mammoth' | 'sheetjs' | 'utf8' | 'tika' | 'none';
+export function parserRouteForExt(ext: string): ParserRoute {
+  if (ext === 'pdf') return 'pdf-parse';
+  if (ext === 'docx') return 'mammoth';
+  if (ext === 'xlsx' || ext === 'xls') return 'sheetjs';
+  if (TEXT_EXTS.has(ext)) return 'utf8';
+  if (TIKA_EXTS.has(ext)) return 'tika';
+  return 'none';
+}
+
 /** Map an extension to a sensible MIME type. Falls back to octet-stream. */
 export function mimeForExt(ext: string): string {
   switch (ext) {

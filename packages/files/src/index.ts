@@ -9,6 +9,8 @@ export {
   TIKA_EXTS,
   INGESTABLE_EXTS,
   PREVIEWABLE_MARKDOWN_EXTS,
+  parserRouteForExt,
+  type ParserRoute,
 } from './slug';
 
 export { isHeic, transcodeImageForVision } from './transcode';

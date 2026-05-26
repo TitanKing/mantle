@@ -192,3 +192,49 @@ describe('extension sets', () => {
     expect([...PREVIEWABLE_MARKDOWN_EXTS].sort()).toEqual(['markdown', 'md']);
   });
 });
+
+import { parserRouteForExt, TIKA_EXTS } from './slug';
+
+describe('parserRouteForExt', () => {
+  it('routes PDFs to pdf-parse (tier 1: in-process)', () => {
+    expect(parserRouteForExt('pdf')).toBe('pdf-parse');
+  });
+
+  it('routes DOCX to mammoth (tier 1)', () => {
+    expect(parserRouteForExt('docx')).toBe('mammoth');
+  });
+
+  it('routes both xlsx and legacy xls to SheetJS (tier 1)', () => {
+    expect(parserRouteForExt('xlsx')).toBe('sheetjs');
+    expect(parserRouteForExt('xls')).toBe('sheetjs');
+  });
+
+  it('routes text-family extensions to utf8 (tier 1)', () => {
+    for (const ext of ['md', 'markdown', 'txt', 'json', 'yaml', 'yml', 'csv']) {
+      expect(parserRouteForExt(ext)).toBe('utf8');
+    }
+  });
+
+  it('routes every TIKA_EXTS extension to tika (tier 2)', () => {
+    // Whatever Tika handles today — ensures no entry sneaks in without a route.
+    for (const ext of TIKA_EXTS) {
+      expect(parserRouteForExt(ext)).toBe('tika');
+    }
+  });
+
+  it('routes specifically the formats we promised Tika would cover', () => {
+    // Belt-and-braces: the exact set from the file-ingestion.md changelog.
+    // If someone narrows TIKA_EXTS in the future, this fails loudly.
+    for (const ext of ['odt', 'ods', 'odp', 'pptx', 'ppt', 'doc', 'rtf', 'epub']) {
+      expect(parserRouteForExt(ext)).toBe('tika');
+    }
+  });
+
+  it('returns "none" for unknown / opaque-binary extensions', () => {
+    // Images and unknown types fall through; the extractor records
+    // skipped:no_text_layer rather than chasing them.
+    for (const ext of ['png', 'jpg', 'gif', 'mp3', 'mp4', 'zip', 'exe', '']) {
+      expect(parserRouteForExt(ext)).toBe('none');
+    }
+  });
+});
