@@ -243,7 +243,9 @@ export function EventsClient({
       {/* ── Right: create | detail | empty ───────────────────────── */}
       <div className="md:h-full md:min-h-0 md:overflow-y-auto md:scrollbar-thin">
         {sel?.mode === 'create' ? (
-          <div className="space-y-4 p-6">
+          // Width-lock matches the contacts form (mx-auto max-w-2xl) so the
+          // detail/form doesn't sprawl across wide screens.
+          <div className="mx-auto max-w-2xl space-y-4 p-6">
             <div className="flex items-center gap-2">
               <CalendarClock className="size-5 text-primary" aria-hidden />
               <h2 className="text-lg font-semibold">New event</h2>

@@ -273,14 +273,16 @@ function ContactForm({ contact }: { contact: ContactRow }) {
             Added {formatDateTime(contact.createdAt)}
           </p>
         </div>
+        {/* Match the events/notes/todos pattern: ghost + destructive text +
+            an explicit "Delete" label after the icon (icon-only was the
+            inconsistent bit). */}
         <Button
           variant="ghost"
           size="sm"
+          className="text-destructive hover:text-destructive"
           onClick={() => setConfirmDelete(true)}
-          title="Delete contact"
-          className="text-destructive hover:bg-destructive/10 hover:text-destructive"
         >
-          <Trash2 aria-hidden />
+          <Trash2 aria-hidden /> Delete
         </Button>
       </header>
 
@@ -382,9 +384,11 @@ function ContactForm({ contact }: { contact: ContactRow }) {
         <TagInput value={tags} onChange={setTags} />
       </div>
 
-      <div className="flex items-center gap-2">
+      {/* Footer row: divider on top, Save floats right — same shape as the
+          todo/event forms (`flex justify-end gap-2 border-t pt-3`). */}
+      <div className="flex justify-end gap-2 border-t border-border pt-3">
         <Button onClick={onSave} disabled={pending}>
-          {pending ? 'Saving…' : 'Save'}
+          {pending ? 'Saving…' : 'Save contact'}
         </Button>
       </div>
 

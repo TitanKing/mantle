@@ -228,7 +228,9 @@ export function EventDetail({
   const ics = buildIcsHref(meta);
 
   return (
-    <div className="space-y-5 p-6">
+    // Width-lock matches the contacts form (mx-auto max-w-2xl) so the detail
+    // doesn't sprawl across wide screens.
+    <div className="mx-auto max-w-2xl space-y-5 p-6">
       <div className="flex flex-col gap-5 sm:flex-row sm:items-center">
         <Countdown event={meta} now={now} />
 
