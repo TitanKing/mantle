@@ -463,17 +463,34 @@ export function AgentsClient({
     };
   }, []);
 
-  // Full OpenRouter catalog (~330+ models, with name + context + pricing +
-  // modality + created). Feeds the ModelSelect combobox; cached server-side
-  // (5-min TTL on /api/models, separate from the 6h model-context cache).
+  // Live model catalog for the form's currently-selected provider.
+  // OpenRouter returns ~330+ models with name + context + pricing +
+  // modality; direct providers return a slimmer shape (id + display
+  // name + context; pricing usually absent — the /models page explorer
+  // is the source of truth for cost data). The ModelSelect combobox
+  // handles missing pricing gracefully (sinks unpriced rows to the
+  // bottom, skips the price badge).
+  //
+  // Re-fetches whenever form.provider changes so switching the
+  // dropdown from OpenRouter to Anthropic-direct (etc.) lists the
+  // RIGHT slugs — pre-Phase-3d this was hard-coded to openrouter and
+  // operators ended up with cross-provider slugs that 404'd at first
+  // turn (anthropic/claude-haiku-4.5 vs the direct-Anthropic
+  // claude-haiku-4-5).
   const [catalog, setCatalog] = useState<ExplorerModel[]>([]);
   const [catalogState, setCatalogState] = useState<{ loading: boolean; error: string | null }>({
     loading: true,
     error: null,
   });
   useEffect(() => {
+    const provider = form.provider || 'openrouter';
     let cancelled = false;
-    fetch('/api/models?provider=openrouter')
+    // Surface the loading state immediately so the dropdown shows a
+    // spinner during the swap instead of a stale catalog from the
+    // previous provider.
+    setCatalogState({ loading: true, error: null });
+    setCatalog([]);
+    fetch(`/api/models?provider=${encodeURIComponent(provider)}`)
       .then((r) => (r.ok ? r.json() : null))
       .then((d) => {
         if (cancelled) return;
@@ -494,7 +511,7 @@ export function AgentsClient({
     return () => {
       cancelled = true;
     };
-  }, []);
+  }, [form.provider]);
 
   const openCreate = () => {
     setForm(emptyForm());
@@ -963,6 +980,29 @@ export function AgentsClient({
                   required
                 />
                 <ContextWindowHint model={form.model} limits={contextLimits} />
+                {(() => {
+                  // Subtle hint when the typed slug doesn't appear in the
+                  // current provider's catalog AND discovery has settled.
+                  // Catches the "switched provider mid-edit and forgot the
+                  // slug shape differs" case (OR's `anthropic/claude-haiku-
+                  // 4.5` vs direct Anthropic's `claude-haiku-4-5`). Custom
+                  // slugs are still allowed — the save commits whatever's
+                  // typed — so this is informational, not blocking.
+                  if (catalogState.loading) return null;
+                  if (!form.model.trim()) return null;
+                  if (catalog.some((m) => m.id === form.model)) return null;
+                  return (
+                    <p className="text-xs text-amber-600 dark:text-amber-400">
+                      <code>{form.model}</code> isn&apos;t in{' '}
+                      <code>{form.provider}</code>&apos;s catalog. Save will
+                      succeed but the call will fail if the slug is wrong —
+                      direct providers use bare ids (e.g.{' '}
+                      <code>claude-haiku-4-5</code>) where OpenRouter uses
+                      prefixed slugs (e.g.{' '}
+                      <code>anthropic/claude-haiku-4.5</code>).
+                    </p>
+                  );
+                })()}
               </div>
               <div className="space-y-1.5">
                 <Label htmlFor="apiKey">API key</Label>
