@@ -88,17 +88,18 @@ describe('isProviderWired', () => {
   });
 
   it('treats openrouter + openai as chat-wired by convention', () => {
-    // Chat doesn't route through the adapter registry today — agents
-    // call the OpenRouter SDK directly. We hardcode chat-wired status
-    // for the two providers we use; future providers stay un-wired
-    // until their dispatch lands.
+    // Post-Phase-3, every chat provider routes through the adapter
+    // registry. openrouter has a real openrouter-chat adapter;
+    // openai stays a registry carve-out because OpenAI chat is
+    // reached via the OpenRouter aggregator (no direct openai-chat
+    // adapter today — see registry.ts isProviderWired for the
+    // openai carve-out reasoning).
     expect(isProviderWired('openrouter', 'chat')).toBe(true);
     expect(isProviderWired('openai', 'chat')).toBe(true);
-    // Anthropic, xai, google, huggingface are NOW wired (see new-
-    // providers.test.ts and chat-adapters.test.ts). Pick a provider
-    // we know we'll keep un-wired for the foreseeable future to
-    // exercise the "not registered" branch.
-    expect(isProviderWired('deepseek', 'chat')).toBe(false);
+    // To exercise the "not wired" branch, use a provider whose
+    // capabilities[] in providers.ts doesn't include 'chat' at all.
+    // Deepgram is the canonical example — STT-only, no chat planned.
+    expect(isProviderWired('deepgram', 'chat')).toBe(false);
   });
 });
 

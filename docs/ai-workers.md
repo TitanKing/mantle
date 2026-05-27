@@ -189,6 +189,7 @@ in the UI dropdown.
 | Hugging Face | ✅ huggingface-chat | — | — | — | — | ✅ huggingface-image (FLUX-1, SDXL, SD 3.5) |
 | Anthropic (direct) | ✅ anthropic-chat¹ | — *(provider defers to Voyage AI)* | — | — | ✅ anthropic-vision | — |
 | Google (Gemini) | ✅ google-chat | ✅ google-embedding | ✅ google-tts | ✅ google-stt | ✅ google-vision | ✅ google-image (Imagen 3 / 4) |
+| DeepSeek | ✅ deepseek-chat | — | — | — | — | — |
 | Mistral | — | ✅ mistral-embedding | — | — | — | — |
 | Cohere | — | ✅ cohere-embedding | — | — | — | — |
 | ElevenLabs | — | — | ✅ elevenlabs-tts | ✅ elevenlabs-stt (Scribe v1) | — | — |

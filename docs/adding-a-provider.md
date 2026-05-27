@@ -275,6 +275,10 @@ The last bullet is the **only verification you can't do at the unit-test level**
 
 7. **Multi-block system content is the audit-#2 silent-drop pattern**. Same shape — `buildChatMessages` emits `[{type:'text', text:persona, cacheControl}, {type:'text', text:digest, cacheControl}]` for cache-aware responders. If your adapter flattens with `String(m.content)` you lose both blocks. Handle the array case via `'\n\n'.join` at minimum.
 
+8. **Provider cache-field naming varies wildly.** OpenAI-compat says `usage.prompt_tokens_details.cached_tokens`. Anthropic uses `usage.cache_read_input_tokens` + `usage.cache_creation_input_tokens`. Google uses `usageMetadata.cachedContentTokenCount`. **DeepSeek uses top-level `usage.prompt_cache_hit_tokens` + `usage.prompt_cache_miss_tokens`** (NOT the nested OpenAI-compat shape, even though everything else is OpenAI-compatible). Always check your provider's docs for the exact cache field shape before assuming the OpenAI-compat helper handles it — `openai-compat.ts` only handles messages + tool calls, not the usage envelope. If the cache shape is non-standard, extract it in the adapter's own `chat()` response handling and add a regression test (see [`deepseek-chat.test.ts`](../packages/voice/src/adapters/deepseek-chat.test.ts) for the lock-down pattern).
+
+9. **Don't use a real provider id as a "not yet wired" test fixture.** [`adapters.test.ts`](../packages/voice/src/adapters/adapters.test.ts) needs to exercise the `isProviderWired() === false` branch. Use a provider whose `capabilities[]` in `providers.ts` doesn't include the capability you're testing — `deepgram` (STT-only) or `assemblyai` (STT-only) are safe permanent picks for "not chat-wired". Don't pick a provider that might genuinely get a chat adapter later; the test silently passes today and fails the moment someone wires it.
+
 ---
 
 ## When you're done

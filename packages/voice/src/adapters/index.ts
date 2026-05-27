@@ -31,6 +31,7 @@ import { huggingfaceChatAdapter } from './huggingface-chat';
 import { anthropicChatAdapter } from './anthropic-chat';
 import { googleChatAdapter } from './google-chat';
 import { openrouterChatAdapter } from './openrouter-chat';
+import { deepseekChatAdapter } from './deepseek-chat';
 import { googleTtsAdapter } from './google-tts';
 import { googleSttAdapter } from './google-stt';
 import { xaiTtsAdapter } from './xai-tts';
@@ -70,6 +71,7 @@ registerChatAdapter(huggingfaceChatAdapter);
 registerChatAdapter(anthropicChatAdapter);
 registerChatAdapter(googleChatAdapter);
 registerChatAdapter(openrouterChatAdapter);
+registerChatAdapter(deepseekChatAdapter);
 registerVisionAdapter(openAiVisionAdapter);
 registerVisionAdapter(anthropicVisionAdapter);
 registerVisionAdapter(googleVisionAdapter);
@@ -180,6 +182,7 @@ export {
 export { anthropicChatAdapter } from './anthropic-chat';
 export { googleChatAdapter } from './google-chat';
 export { openrouterChatAdapter } from './openrouter-chat';
+export { deepseekChatAdapter } from './deepseek-chat';
 export { googleTtsAdapter } from './google-tts';
 export { xaiTtsAdapter } from './xai-tts';
 export { elevenLabsTtsAdapter } from './elevenlabs-tts';
@@ -222,6 +225,10 @@ export {
   OPENROUTER_CHAT_MODELS,
   OPENROUTER_BASE_URL,
 } from '../catalogs/openrouter';
+export {
+  DEEPSEEK_CHAT_MODELS,
+  DEEPSEEK_BASE_URL,
+} from '../catalogs/deepseek';
 export {
   GOOGLE_CHAT_MODELS,
   GOOGLE_BASE_URL,

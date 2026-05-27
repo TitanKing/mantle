@@ -16,10 +16,12 @@
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
+  DEEPSEEK_CHAT_MODELS,
   HUGGINGFACE_CHAT_MODELS,
   OPENROUTER_CHAT_MODELS,
   XAI_CHAT_MODELS,
   anthropicChatAdapter,
+  deepseekChatAdapter,
   getChatAdapter,
   huggingfaceChatAdapter,
   isProviderWired,
@@ -49,6 +51,13 @@ describe('chat adapter self-registration', () => {
     expect(a).not.toBeNull();
     expect(a?.adapterName).toBe('openrouter-chat');
     expect(a).toBe(openrouterChatAdapter);
+  });
+
+  it('registers deepseek-chat on import', () => {
+    const a = getChatAdapter('deepseek');
+    expect(a).not.toBeNull();
+    expect(a?.adapterName).toBe('deepseek-chat');
+    expect(a).toBe(deepseekChatAdapter);
   });
 
   it('lists at least two chat adapters', () => {
@@ -272,6 +281,27 @@ describe('anthropic-chat cache_control translation', () => {
     expect(result.tokensOut).toBe(20);
     expect(result.cacheReadTokens).toBe(800);
     expect(result.cacheWriteTokens).toBe(50);
+  });
+});
+
+describe('deepseek catalog', () => {
+  it('includes the V4 generation (current default)', () => {
+    const ids = DEEPSEEK_CHAT_MODELS.map((m) => m.id);
+    expect(ids).toContain('deepseek-v4-pro');
+    expect(ids).toContain('deepseek-v4-flash');
+  });
+
+  it('keeps the legacy aliases until their 2026-07-24 deprecation', () => {
+    const ids = DEEPSEEK_CHAT_MODELS.map((m) => m.id);
+    expect(ids).toContain('deepseek-chat');
+    expect(ids).toContain('deepseek-reasoner');
+  });
+
+  it('every entry has label + description', () => {
+    for (const m of DEEPSEEK_CHAT_MODELS) {
+      expect(m.label.length, `${m.id}.label`).toBeGreaterThan(0);
+      expect(m.description.length, `${m.id}.description`).toBeGreaterThan(10);
+    }
   });
 });
 
