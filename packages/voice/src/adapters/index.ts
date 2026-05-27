@@ -123,6 +123,7 @@ export {
   getEmbeddingAdapter,
   listEmbeddingAdapters,
   isProviderWired,
+  wiredCapabilitiesFor,
 } from './registry';
 
 export {

@@ -12,7 +12,7 @@
  * stays honest about which providers can actually be called.
  */
 
-import type { ProviderId } from '../providers';
+import type { Provider, ProviderCapability, ProviderId } from '../providers';
 import type {
   ChatDispatcher,
   EmbeddingDispatcher,
@@ -204,4 +204,30 @@ export function isProviderWired(
     default:
       return false;
   }
+}
+
+/**
+ * For each capability the provider's catalog DECLARES, return whether
+ * an adapter is registered for it. Drives the api-keys form's
+ * per-provider wired-status summary so operators see exactly what a
+ * key for this provider will be usable for (vs. the binary
+ * "any-capability-wired" check which misclassifies partially-wired
+ * providers like Mistral/Cohere — both declare chat but only wire
+ * embedding).
+ *
+ * Returns wired + unwired arrays preserving the catalog's declared
+ * order. UI typically renders wired ones first (the usable
+ * capabilities) and unwired ones separately as "supported but not
+ * dispatched by Mantle yet."
+ */
+export function wiredCapabilitiesFor(
+  provider: Provider,
+): { wired: ProviderCapability[]; unwired: ProviderCapability[] } {
+  const wired: ProviderCapability[] = [];
+  const unwired: ProviderCapability[] = [];
+  for (const cap of provider.capabilities) {
+    if (isProviderWired(provider.id, cap)) wired.push(cap);
+    else unwired.push(cap);
+  }
+  return { wired, unwired };
 }

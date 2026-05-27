@@ -27,7 +27,7 @@ import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { useToast } from '@/components/ui/toast';
 import { cn } from '@/lib/utils';
-import { SUPPORTED_PROVIDERS, isProviderWired } from '@mantle/voice';
+import { SUPPORTED_PROVIDERS, wiredCapabilitiesFor } from '@mantle/voice';
 
 type KeyRow = {
   id: string;
@@ -38,12 +38,12 @@ type KeyRow = {
   updatedAt: string;
 };
 
-/** Whether a provider has at least one dispatch path wired. */
-function providerHasAnyAdapter(providerId: string, capabilities: readonly string[]): boolean {
-  return capabilities.some((c) =>
-    isProviderWired(providerId, c as Parameters<typeof isProviderWired>[1]),
-  );
-}
+// Note: per-capability wired/unwired status comes from
+// `wiredCapabilitiesFor(provider)` (see @mantle/voice/adapters/registry).
+// The dropdown surfaces this inline so operators see exactly what their
+// key will be usable for — pre-fix, the dropdown only flagged providers
+// with zero wired capabilities, so partially-wired providers (Mistral +
+// Cohere — chat declared but only embedding wired) looked fully working.
 
 type Selection = { mode: 'create' } | { mode: 'view'; id: string } | null;
 
@@ -223,22 +223,65 @@ export function KeysClient({ initialKeys }: { initialKeys: KeyRow[] }) {
                     required
                     className="flex h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm"
                   >
-                    {SUPPORTED_PROVIDERS.map((p) => (
-                      <option key={p.id} value={p.id}>
-                        {p.label}
-                        {p.isAggregator ? ' (aggregator)' : ''}
-                        {!providerHasAnyAdapter(p.id, p.capabilities) ? ' — not yet wired' : ''}
-                      </option>
-                    ))}
+                    {SUPPORTED_PROVIDERS.map((p) => {
+                      const { wired } = wiredCapabilitiesFor(p);
+                      // Inline summary of what this provider's key can
+                      // actually be used for. Empty wired list → the
+                      // provider is catalogued but no adapter is
+                      // registered (rare; means a planned integration
+                      // hasn't landed). Partial list → operator sees
+                      // upfront that this provider's chat/whatever
+                      // isn't wired yet, even if the embedding is.
+                      const suffix =
+                        wired.length === 0
+                          ? ' — not yet wired'
+                          : ` · ${wired.join(' · ')}`;
+                      return (
+                        <option key={p.id} value={p.id}>
+                          {p.label}
+                          {p.isAggregator ? ' (aggregator)' : ''}
+                          {suffix}
+                        </option>
+                      );
+                    })}
                   </select>
-                  {provider && (
-                    <p className="text-xs text-muted-foreground">
-                      {provider.description}{' '}
-                      <a href={provider.signupUrl} target="_blank" rel="noreferrer" className="underline">
-                        Get a key →
-                      </a>
-                    </p>
-                  )}
+                  {provider && (() => {
+                    const { wired, unwired } = wiredCapabilitiesFor(provider);
+                    return (
+                      <>
+                        <p className="text-xs text-muted-foreground">
+                          {provider.description}{' '}
+                          <a
+                            href={provider.signupUrl}
+                            target="_blank"
+                            rel="noreferrer"
+                            className="underline"
+                          >
+                            Get a key →
+                          </a>
+                        </p>
+                        {wired.length > 0 && (
+                          <p className="text-xs text-muted-foreground">
+                            <span className="font-medium">Use for:</span>{' '}
+                            {wired.join(', ')}
+                            {wired.length > 1 ? ' workers.' : ' workers.'}
+                          </p>
+                        )}
+                        {unwired.length > 0 && (
+                          <p className="text-xs text-amber-600 dark:text-amber-400">
+                            <span className="font-medium">
+                              Also supports
+                            </span>{' '}
+                            {unwired.join(', ')}, but Mantle doesn&apos;t
+                            dispatch through this provider for{' '}
+                            {unwired.length > 1 ? 'those capabilities' : 'that'}{' '}
+                            yet — a key still works for the wired
+                            capabilities above.
+                          </p>
+                        )}
+                      </>
+                    );
+                  })()}
                 </div>
                 <div className="space-y-1.5">
                   <Label htmlFor="label">Label</Label>

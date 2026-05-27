@@ -14,6 +14,7 @@
  */
 
 import { describe, expect, it } from 'vitest';
+import { SUPPORTED_PROVIDERS, getProvider } from '../providers';
 import {
   getSttAdapter,
   getTtsAdapter,
@@ -23,6 +24,7 @@ import {
   openAiSttAdapter,
   openAiTtsAdapter,
   registerTtsAdapter,
+  wiredCapabilitiesFor,
   type TtsDispatcher,
 } from './index';
 
@@ -87,6 +89,17 @@ describe('isProviderWired', () => {
     expect(isProviderWired('made-up-provider', 'tts')).toBe(false);
   });
 
+  it('returns false for declared-but-not-registered capability (the Mistral/Cohere chat case)', () => {
+    // Both providers' catalog entries claim 'chat' capability, but
+    // neither has a chat adapter registered today (only embedding
+    // is wired). This is exactly the partial-wired pattern the
+    // api-keys form's wiredCapabilitiesFor helper exists to surface.
+    expect(isProviderWired('mistral', 'chat')).toBe(false);
+    expect(isProviderWired('mistral', 'embedding')).toBe(true);
+    expect(isProviderWired('cohere', 'chat')).toBe(false);
+    expect(isProviderWired('cohere', 'embedding')).toBe(true);
+  });
+
   it('treats openrouter + openai as chat-wired by convention', () => {
     // Post-Phase-3, every chat provider routes through the adapter
     // registry. openrouter has a real openrouter-chat adapter;
@@ -127,5 +140,53 @@ describe('adapter unknown lookup', () => {
   it('returns null (not undefined, not throw) for unknown providers', () => {
     expect(getTtsAdapter('not-a-provider')).toBeNull();
     expect(getSttAdapter('not-a-provider')).toBeNull();
+  });
+});
+
+describe('wiredCapabilitiesFor', () => {
+  it('splits Mistral capabilities into wired=[embedding], unwired=[chat]', () => {
+    const mistral = getProvider('mistral')!;
+    const { wired, unwired } = wiredCapabilitiesFor(mistral);
+    expect(wired).toEqual(['embedding']);
+    expect(unwired).toEqual(['chat']);
+  });
+
+  it('splits Cohere the same way (chat declared but not wired)', () => {
+    const cohere = getProvider('cohere')!;
+    const { wired, unwired } = wiredCapabilitiesFor(cohere);
+    expect(wired).toEqual(['embedding']);
+    expect(unwired).toEqual(['chat']);
+  });
+
+  it('returns all capabilities as wired for a fully-implemented provider', () => {
+    // Deepgram declares only stt and has the adapter — nothing unwired.
+    const deepgram = getProvider('deepgram')!;
+    const { wired, unwired } = wiredCapabilitiesFor(deepgram);
+    expect(wired).toEqual(['stt']);
+    expect(unwired).toEqual([]);
+  });
+
+  it('preserves the catalog declaration order', () => {
+    // OpenAI's catalog lists ['chat', 'embedding', 'tts', 'stt', 'vision', 'image_gen']
+    // — and every one is wired (chat via OR carve-out). Order in the
+    // result must match what providers.ts declares so the UI renders
+    // a stable list across renders.
+    const openai = getProvider('openai')!;
+    const { wired } = wiredCapabilitiesFor(openai);
+    expect(wired).toEqual([...openai.capabilities]);
+  });
+
+  it('every provider in SUPPORTED_PROVIDERS has at least one wired capability', () => {
+    // Sanity check on the catalog: a fully-unwired provider would show
+    // as "— not yet wired" in the api-keys form, which is a placeholder
+    // state we shouldn't ship to production. If this test ever fails,
+    // either ship the adapter or pull the provider from the catalog.
+    for (const p of SUPPORTED_PROVIDERS) {
+      const { wired } = wiredCapabilitiesFor(p);
+      expect(
+        wired.length,
+        `provider '${p.id}' is catalogued but has no registered adapter`,
+      ).toBeGreaterThan(0);
+    }
   });
 });
